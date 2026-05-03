@@ -1,481 +1,449 @@
 import asyncio
-import logging
-from typing import Any, Dict, List, Optional, Protocol, Tuple, Union
+import json
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    NamedTuple,
+    Optional,
+    Protocol,
+    Tuple,
+    Union,
+    runtime_checkable,
+)
 
-import numpy as np
-from pydantic import BaseModel, Field, PrivateAttr, ValidationError, model_validator
+from pydantic import BaseModel, Field, ValidationError
 
-# Assume these core Vishustra components and interfaces exist in the framework.
-# They are included here as minimal definitions for context.
+# --- Vishustra Core Component Protocols ---
+# These protocols define the expected interfaces for Vishustra's internal
+# embedding and LLM clients, ensuring modularity and easy integration.
 
-# --- Vishustra Core Base Components (e.g., from vishustra.core.base) ---
-class VishustraComponent:
-    """Base class for all Vishustra components, providing common utilities."""
-    def __init__(self, component_id: Optional[str] = None, **kwargs: Any):
-        self.component_id = component_id or self.__class__.__name__
-        self._logger = logging.getLogger(f"{self.__class__.__name__}.{self.component_id}")
-        self._logger.debug(f"Initialized {self.__class__.__name__} with ID: {self.component_id}")
+@runtime_checkable
+class EmbeddingClient(Protocol):
+    """Protocol for Vishustra's embedding client."""
+    async def embed(self, texts: Union[str, List[str]]) -> List[List[float]]:
+        """
+        Embeds a list of texts into vector representations.
 
-# --- Vishustra Embedding Interfaces (e.g., from vishustra.embeddings.base) ---
-class Embeddings(BaseModel):
+        Args:
+            texts: A single string or a list of strings to embed.
+
+        Returns:
+            A list of embedding vectors, where each vector is a list of floats.
+        """
+        ...
+
+@runtime_checkable
+class LLMClient(Protocol):
+    """Protocol for Vishustra's LLM client."""
+    async def generate(
+        self,
+        prompt: str,
+        temperature: float = 0.0,
+        max_tokens: int = 50,
+        json_mode: bool = False,
+        stop_sequences: Optional[List[str]] = None,
+    ) -> str:
+        """
+        Generates text based on a given prompt.
+
+        Args:
+            prompt: The text prompt to send to the LLM.
+            temperature: Controls the randomness of the output (0.0 for deterministic).
+            max_tokens: The maximum number of tokens to generate.
+            json_mode: If True, instructs the LLM to attempt to return valid JSON.
+            stop_sequences: A list of sequences that will stop generation if encountered.
+
+        Returns:
+            The generated text response from the LLM.
+        """
+        ...
+
+@runtime_checkable
+class VishustraComponent(Protocol):
     """
-    Represents embedding vectors.
-
-    Attributes:
-        data: A numpy array where each row is an embedding vector.
-              Expected shape (N, D) where N is the number of texts embedded,
-              and D is the embedding dimension.
-        model_name: Optional name of the embedding model that generated these.
+    Base protocol for any Vishustra-specific component (e.g., Chain, Agent, Tool)
+    that can be invoked and potentially routed to.
     """
-    data: np.ndarray = Field(..., description="Numpy array representing the embedding vectors.")
-    model_name: Optional[str] = Field(None, description="Name of the embedding model used.")
+    async def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        """
+        Invokes the Vishustra component.
 
-    class Config:
-        arbitrary_types_allowed = True
-        json_encoders = {
-            np.ndarray: lambda v: v.tolist()  # For JSON serialization if needed
-        }
-
-class EmbeddingModel(Protocol):
-    """Protocol for synchronous embedding models."""
-    def embed_documents(self, texts: List[str]) -> Embeddings:
-        """Embeds a list of documents/texts."""
-        ...
-    def embed_query(self, text: str) -> Embeddings:
-        """Embeds a single query string."""
+        Returns:
+            The result of the component's execution.
+        """
         ...
 
-class AsyncEmbeddingModel(Protocol):
-    """Protocol for asynchronous embedding models."""
-    async def aembed_documents(self, texts: List[str]) -> Embeddings:
-        """Asynchronously embeds a list of documents/texts."""
-        ...
-    async def aembed_query(self, text: str) -> Embeddings:
-        """Asynchronously embeds a single query string."""
-        ...
-
-_logger = logging.getLogger(__name__)
+# --- Core Semantic Router Components ---
 
 class Route(BaseModel):
     """
-    Represents a distinct processing route or chain within Vishustra.
-    Each route is defined by a name, a description, and example queries
-    that should semantically map to this route.
-    """
-    name: str = Field(..., description="Unique identifier for the route.")
-    description: str = Field(..., description="A brief description of what this route handles or represents.")
-    examples: List[str] = Field(
-        default_factory=list,
-        description="Example queries or prompts that should semantically map to this route. "
-                    "These examples are used to compute the route's semantic embedding."
-    )
-    metadata: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Arbitrary key-value metadata associated with this route. "
-                    "Can be used to store target chain IDs, function names, etc."
-    )
+    Defines a specific routing destination within the Vishustra framework.
 
-    @model_validator(mode='after')
-    def validate_examples_exist(self) -> 'Route':
-        """Ensures that routes have examples, or logs a warning if they don't."""
-        if not self.examples:
-            _logger.warning(
-                f"Route '{self.name}' has no examples. "
-                "It will not be effectively routable by the SemanticRouter."
-            )
-        return self
-
-class SemanticRouterConfig(BaseModel):
+    Each route encapsulates a target component (e.g., a chain, an agent, a tool)
+    and metadata describing its purpose, allowing the SemanticRouter to
+    intelligently direct user queries.
     """
-    Configuration model for the SemanticRouter component.
-    """
-    default_similarity_threshold: float = Field(
-        0.75,
-        ge=0.0,
-        le=1.0,
-        description="Cosine similarity threshold. Routes with a similarity score below "
-                    "this value will not be considered a match, resulting in an 'unmatched' state."
+    name: str = Field(..., description="A unique identifier for this route (e.g., 'weather_tool', 'search_chain').")
+    description: str = Field(
+        ...,
+        description="A detailed natural language description of what this route does "
+                    "and when it should be used. Crucial for LLM-based routing "
+                    "and often for embedding similarity."
     )
-    embedding_batch_size: int = Field(
-        32,
-        gt=0,
-        description="Number of texts to embed in a single batch. Larger batches can improve "
-                    "throughput for embedding models that support it, but may increase memory usage."
+    target: Union[Callable[..., Any], VishustraComponent] = Field(
+        ...,
+        description="The callable Python object (e.g., a standard function, a Vishustra Chain, "
+                    "or an Agent instance) that this route directs to. This will be invoked "
+                    "with the query and any additional kwargs."
+    )
+    embedding_input: Optional[str] = Field(
+        None,
+        description="An optional, concise string representation for embedding purposes. "
+                    "If not provided, the 'description' will be used. "
+                    "Useful when the description is verbose but a shorter phrase "
+                    "better captures the core intent for rapid semantic similarity matching."
     )
 
-class SemanticRouter(VishustraComponent):
+    class Config:
+        """Pydantic configuration for handling arbitrary types like callables."""
+        arbitrary_types_allowed = True
+
+class EmbeddedRoute(NamedTuple):
+    """Internal representation of a route with its pre-computed embedding."""
+    route: Route
+    embedding: List[float]
+
+# --- Custom Exceptions for SemanticRouter ---
+
+class SemanticRouterError(Exception):
+    """Base exception for SemanticRouter related errors."""
+    pass
+
+class NoRouteFoundError(SemanticRouterError):
+    """Raised when the router cannot determine a suitable route for a query."""
+    pass
+
+class LLMRoutingError(SemanticRouterError):
+    """Raised when the decision LLM fails to provide a valid or parseable routing decision."""
+    pass
+
+class SemanticRouter:
     """
-    A sophisticated semantic router that directs incoming queries to the most
-    semantically relevant predefined 'route' within the Vishustra framework.
+    An advanced routing mechanism for Vishustra, capable of intelligently directing
+    user queries to appropriate backend components (chains, agents, tools) based on
+    semantic understanding.
 
-    This component leverages an embedding model to vectorize user queries and
-    compares them against pre-computed aggregate embeddings of example queries
-    for each registered route. The route with the highest cosine similarity
-    score above a configured threshold is selected.
+    It employs a hybrid routing strategy:
+    1.  **Embedding-based similarity**: For quick, confidence-driven matches based
+        on the semantic similarity between the user query and pre-defined route
+        representations (descriptions or `embedding_input`).
+    2.  **LLM-based decision-making**: For complex, nuanced queries or when
+        embedding similarity is ambiguous (below a configurable threshold),
+        leveraging a powerful LLM to choose the best route based on detailed
+        route descriptions.
 
-    Supports both synchronous and asynchronous embedding models and operations.
+    This hybrid approach balances performance (fast embedding lookups) with
+    flexibility and accuracy (LLM's understanding of complex intent).
     """
 
-    _routes: Dict[str, Route] = PrivateAttr(default_factory=dict)
-    # Stores the aggregate embedding for each route's examples. Key: route_name.
-    _route_embeddings: Dict[str, Embeddings] = PrivateAttr(default_factory=dict)
+    DEFAULT_SIMILARITY_THRESHOLD: float = 0.75
+    DEFAULT_LLM_TEMPERATURE: float = 0.0
+    DEFAULT_LLM_MAX_TOKENS: int = 200 # Sufficient for a JSON response with route name
 
     def __init__(
         self,
-        embedding_model: Union[EmbeddingModel, AsyncEmbeddingModel],
-        routes: Optional[List[Route]] = None,
-        config: Optional[SemanticRouterConfig] = None,
-        **kwargs: Any
+        routes: List[Route],
+        embedding_model: EmbeddingClient,
+        decision_llm: LLMClient,
+        similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
+        llm_temperature: float = DEFAULT_LLM_TEMPERATURE,
+        llm_max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
     ):
         """
-        Initializes the SemanticRouter.
+        Initializes the SemanticRouter with a set of routes and necessary clients.
 
         Args:
-            embedding_model: An instance of an embedding model (sync or async)
-                             conforming to Vishustra's `EmbeddingModel` or
-                             `AsyncEmbeddingModel` protocols.
-            routes: An optional list of initial `Route` objects to register upon initialization.
-            config: Optional `SemanticRouterConfig` for customizing router behavior.
-            **kwargs: Arbitrary keyword arguments passed to the base `VishustraComponent`.
+            routes: A list of `Route` objects defining all possible destinations.
+                    These routes will be analyzed for semantic matching.
+            embedding_model: An instance of Vishustra's `EmbeddingClient` for
+                             converting text into vector representations for
+                             semantic similarity computations.
+            decision_llm: An instance of Vishustra's `LLMClient` used for
+                          LLM-driven routing decisions when embedding similarity
+                          is insufficient or for complex disambiguation.
+            similarity_threshold: A float between 0.0 and 1.0. If the cosine
+                                  similarity between the query and the best
+                                  embedding-matched route is below this,
+                                  the LLM will be consulted for a decision.
+            llm_temperature: The temperature setting for the decision LLM. Lower
+                             values (e.g., 0.0) make the output more deterministic.
+            llm_max_tokens: The maximum number of tokens the decision LLM is
+                            allowed to generate for its routing response.
 
         Raises:
-            TypeError: If `embedding_model` does not conform to the expected types.
+            ValueError: If an empty list of routes is provided.
         """
-        super().__init__(**kwargs)
-        if not isinstance(embedding_model, (EmbeddingModel, AsyncEmbeddingModel)):
-            raise TypeError(
-                "embedding_model must be an instance conforming to "
-                "vishustra.embeddings.base.EmbeddingModel or AsyncEmbeddingModel."
-            )
+        if not routes:
+            raise ValueError("SemanticRouter must be initialized with at least one route.")
 
-        self._embedding_model = embedding_model
-        self.config = config or SemanticRouterConfig()
-        self._is_async_embedding_model = isinstance(self._embedding_model, AsyncEmbeddingModel)
-        self._logger.info(
-            f"SemanticRouter initialized with {'async' if self._is_async_embedding_model else 'sync'} "
-            f"embedding model. Default threshold: {self.config.default_similarity_threshold}"
-        )
+        self.routes = routes
+        self.embedding_model = embedding_model
+        self.decision_llm = decision_llm
+        self.similarity_threshold = similarity_threshold
+        self.llm_temperature = llm_temperature
+        self.llm_max_tokens = llm_max_tokens
 
-        if routes:
-            if self._is_async_embedding_model:
-                # If the embedding model is async, we need to run add_routes in an async context.
-                # Since __init__ is sync, we can't directly await.
-                # For initial setup, we might force sync embedding if the model provides it,
-                # or require async init if many routes.
-                # For simplicity here, we'll log a warning and recommend async setup for many routes.
-                self._logger.warning(
-                    "Attempting to add initial routes synchronously with an async embedding model. "
-                    "Consider using `aadd_routes` after initialization for full async benefits, "
-                    "or ensuring your async model has a synchronous fallback for initial setup."
-                )
-                # Fallback to sync for initialization if the async model supports it (not strictly covered by protocol)
-                # or just process them with individual async calls if within an event loop
-                # For this specific __init__, we need a sync way. Let's assume a limited set or defer.
-                # Better approach: make init `async` or provide a `setup` method.
-                # For current context, we use the `add_route` which handles its own sync/async logic.
-                asyncio.run(self.aadd_routes(routes))
-            else:
-                self.add_routes(routes)
+        self._embedded_routes: List[EmbeddedRoute] = []
+        # A quick lookup map for routes by name, useful after LLM decision
+        self._route_name_map: Dict[str, Route] = {route.name: route for route in routes}
 
-    def _embed_texts_sync(self, texts: List[str]) -> Embeddings:
-        """Synchronously embeds a list of texts using the configured embedding model."""
-        if self._is_async_embedding_model:
-            raise RuntimeError(
-                "Attempted to call synchronous embedding on an `AsyncEmbeddingModel`. "
-                "Use `_embed_texts_async` instead."
-            )
-        return self._embedding_model.embed_documents(texts)
-
-    async def _embed_texts_async(self, texts: List[str]) -> Embeddings:
-        """Asynchronously embeds a list of texts using the configured embedding model."""
-        if not self._is_async_embedding_model:
-            raise RuntimeError(
-                "Attempted to call asynchronous embedding on a `EmbeddingModel` (synchronous). "
-                "Use `_embed_texts_sync` instead."
-            )
-        return await self._embedding_model.aembed_documents(texts)
-
-    def _compute_route_embeddings(self, route: Route) -> Optional[Embeddings]:
+    async def _precompute_route_embeddings(self) -> None:
         """
-        Synchronously computes the aggregate embedding for a single route's examples.
-        If the route has no examples, returns None.
-        The aggregate embedding is typically the mean of all example embeddings.
+        Asynchronously pre-computes embeddings for all routes.
+        This method should typically be called once after router initialization
+        to prepare for efficient embedding-based routing.
         """
-        if not route.examples:
-            return None
-
-        self._logger.debug(f"Computing embeddings for route '{route.name}' with {len(route.examples)} examples.")
-        all_example_embeddings = []
-        for i in range(0, len(route.examples), self.config.embedding_batch_size):
-            batch = route.examples[i : i + self.config.embedding_batch_size]
-            try:
-                batch_embeddings = self._embed_texts_sync(batch)
-                all_example_embeddings.append(batch_embeddings.data)
-            except Exception as e:
-                self._logger.error(f"Failed to embed batch for route '{route.name}': {e}", exc_info=True)
-                raise  # Re-raise to indicate a critical failure
-
-        if not all_example_embeddings:
-            return None
-
-        # Aggregate by taking the mean of all example embeddings for a single route vector
-        aggregated_embedding = np.mean(np.vstack(all_example_embeddings), axis=0)
-        return Embeddings(data=aggregated_embedding.reshape(1, -1), model_name=self._embedding_model.model_name if hasattr(self._embedding_model, 'model_name') else None)
-
-    async def _acompute_route_embeddings(self, route: Route) -> Optional[Embeddings]:
-        """
-        Asynchronously computes the aggregate embedding for a single route's examples.
-        If the route has no examples, returns None.
-        """
-        if not route.examples:
-            return None
-
-        self._logger.debug(f"Asynchronously computing embeddings for route '{route.name}' with {len(route.examples)} examples.")
-        all_example_embeddings = []
-        for i in range(0, len(route.examples), self.config.embedding_batch_size):
-            batch = route.examples[i : i + self.config.embedding_batch_size]
-            try:
-                batch_embeddings = await self._embed_texts_async(batch)
-                all_example_embeddings.append(batch_embeddings.data)
-            except Exception as e:
-                self._logger.error(f"Failed to async embed batch for route '{route.name}': {e}", exc_info=True)
-                raise
-
-        if not all_example_embeddings:
-            return None
-
-        aggregated_embedding = np.mean(np.vstack(all_example_embeddings), axis=0)
-        return Embeddings(data=aggregated_embedding.reshape(1, -1), model_name=self._embedding_model.model_name if hasattr(self._embedding_model, 'model_name') else None)
-
-    def add_route(self, route: Route) -> None:
-        """
-        Synchronously adds a single route to the router.
-        The route's example embeddings are computed and stored.
-        If a route with the same name exists, it will be overwritten.
-        """
-        if self._is_async_embedding_model:
-            raise RuntimeError(
-                "Cannot add route synchronously with an asynchronous embedding model. "
-                "Use `aadd_route` instead or ensure synchronous setup."
-            )
-
-        if route.name in self._routes:
-            self._logger.warning(f"Route '{route.name}' already exists. Overwriting existing route.")
-
-        self._routes[route.name] = route
-        route_embeds = self._compute_route_embeddings(route)
-        if route_embeds is not None:
-            self._route_embeddings[route.name] = route_embeds
-            self._logger.info(f"Route '{route.name}' added successfully.")
-        else:
-            self._route_embeddings.pop(route.name, None) # Ensure no stale entries
-            self._logger.warning(f"Route '{route.name}' added, but has no examples/embeddings computed.")
-
-    async def aadd_route(self, route: Route) -> None:
-        """
-        Asynchronously adds a single route to the router.
-        The route's example embeddings are computed and stored.
-        If a route with the same name exists, it will be overwritten.
-        """
-        if not self._is_async_embedding_model:
-            raise RuntimeError(
-                "Cannot add route asynchronously with a synchronous embedding model. "
-                "Use `add_route` instead."
-            )
-
-        if route.name in self._routes:
-            self._logger.warning(f"Route '{route.name}' already exists. Overwriting existing route.")
-
-        self._routes[route.name] = route
-        route_embeds = await self._acompute_route_embeddings(route)
-        if route_embeds is not None:
-            self._route_embeddings[route.name] = route_embeds
-            self._logger.info(f"Async route '{route.name}' added successfully.")
-        else:
-            self._route_embeddings.pop(route.name, None)
-            self._logger.warning(f"Async route '{route.name}' added, but has no examples/embeddings computed.")
-
-    def add_routes(self, routes: List[Route]) -> None:
-        """
-        Synchronously adds multiple routes to the router.
-        """
-        for route in routes:
-            self.add_route(route)
-        self._logger.info(f"Added {len(routes)} routes synchronously.")
-
-    async def aadd_routes(self, routes: List[Route]) -> None:
-        """
-        Asynchronously adds multiple routes to the router.
-        This method uses `asyncio.gather` for concurrent processing of routes.
-        """
-        await asyncio.gather(*[self.aadd_route(route) for route in routes])
-        self._logger.info(f"Added {len(routes)} routes asynchronously.")
-
-    def remove_route(self, route_name: str) -> None:
-        """
-        Removes a route by its name.
-        """
-        if route_name not in self._routes:
-            self._logger.warning(f"Route '{route_name}' not found. No action taken.")
+        texts_to_embed = [
+            route.embedding_input if route.embedding_input else route.description
+            for route in self.routes
+        ]
+        # Handle cases where texts_to_embed might be empty, though `routes` check
+        # in __init__ makes this less likely for the initial call.
+        if not texts_to_embed:
+            self._embedded_routes = []
             return
 
-        del self._routes[route_name]
-        self._route_embeddings.pop(route_name, None)
-        self._logger.info(f"Route '{route_name}' and its embeddings removed.")
+        embeddings = await self.embedding_model.embed(texts_to_embed)
 
-    def _calculate_cosine_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
+        self._embedded_routes = [
+            EmbeddedRoute(route=self.routes[i], embedding=embeddings[i])
+            for i in range(len(self.routes))
+        ]
+
+    def _cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
         """
-        Calculates cosine similarity between two 1D numpy arrays (vectors).
-        Assumes vectors are already normalized for efficiency, or normalizes them.
-        """
-        # Ensure vectors are 1D
-        vec1 = vec1.flatten()
-        vec2 = vec2.flatten()
-
-        dot_product = np.dot(vec1, vec2)
-        norm_vec1 = np.linalg.norm(vec1)
-        norm_vec2 = np.linalg.norm(vec2)
-
-        if norm_vec1 == 0 or norm_vec2 == 0:
-            return 0.0 # Handle cases where a vector is zero (no information)
-
-        return dot_product / (norm_vec1 * norm_vec2)
-
-    def route(self, query: str, threshold: Optional[float] = None) -> Optional[Tuple[Route, float]]:
-        """
-        Routes a given query to the most suitable route synchronously.
+        Calculates the cosine similarity between two given vectors.
 
         Args:
-            query: The incoming user query or prompt string.
-            threshold: An optional override for the default similarity threshold defined in config.
+            vec1: The first vector.
+            vec2: The second vector.
 
         Returns:
-            A tuple containing the best matching `Route` object and its cosine similarity score,
-            or `None` if no route meets the similarity threshold or no routes are registered.
-
-        Raises:
-            RuntimeError: If the router is configured with an `AsyncEmbeddingModel`.
-            Exception: For failures during query embedding.
+            The cosine similarity score (between -1.0 and 1.0).
+            Returns 0.0 if either vector is empty or a zero vector.
         """
-        if not self._routes:
-            self._logger.warning("No routes registered in the router. Cannot route query.")
-            return None
-        if self._is_async_embedding_model:
-            raise RuntimeError(
-                "Cannot use synchronous `route()` method with an `AsyncEmbeddingModel`. "
-                "Use `aroute()` instead."
-            )
+        if not vec1 or not vec2 or len(vec1) != len(vec2):
+            return 0.0
 
-        _threshold = threshold if threshold is not None else self.config.default_similarity_threshold
+        dot_product = sum(a * b for a, b in zip(vec1, vec2))
+        magnitude_vec1 = sum(a * a for a in vec1) ** 0.5
+        magnitude_vec2 = sum(b * b for b in vec2) ** 0.5
 
-        try:
-            # Assuming embed_query returns Embeddings object with a single vector in data
-            query_embedding_obj = self._embedding_model.embed_query(query)
-            query_embedding = query_embedding_obj.data.flatten()
-        except Exception as e:
-            self._logger.error(f"Failed to embed query '{query[:100]}...': {e}", exc_info=True)
-            return None
+        if magnitude_vec1 == 0 or magnitude_vec2 == 0:
+            return 0.0
 
-        best_route: Optional[Route] = None
-        highest_similarity: float = -1.0
+        return dot_product / (magnitude_vec1 * magnitude_vec2)
 
-        for route_name, route_embed_obj in self._route_embeddings.items():
-            route_embedding = route_embed_obj.data.flatten()
-            similarity = self._calculate_cosine_similarity(query_embedding, route_embedding)
-
-            self._logger.debug(
-                f"Query '{query[:50]}...' vs Route '{route_name}': Similarity = {similarity:.4f}"
-            )
-
-            if similarity > highest_similarity:
-                highest_similarity = similarity
-                best_route = self._routes[route_name] # Retrieve original Route object
-
-        if best_route and highest_similarity >= _threshold:
-            self._logger.info(
-                f"Query '{query[:50]}...' routed to '{best_route.name}' "
-                f"with similarity {highest_similarity:.4f} (Threshold: {_threshold:.2f})"
-            )
-            return best_route, highest_similarity
-        else:
-            self._logger.info(
-                f"No route found above threshold {_threshold:.2f} for query '{query[:50]}...' "
-                f"(Best match: {best_route.name if best_route else 'N/A'}, Similarity: {highest_similarity:.4f})"
-            )
-            return None
-
-    async def aroute(self, query: str, threshold: Optional[float] = None) -> Optional[Tuple[Route, float]]:
+    async def _get_embedding_match(self, query_embedding: List[float]) -> Tuple[Optional[Route], float]:
         """
-        Asynchronously routes a given query to the most suitable route.
+        Finds the best matching route based on cosine similarity with the query embedding.
 
         Args:
-            query: The incoming user query or prompt string.
-            threshold: An optional override for the default similarity threshold defined in config.
+            query_embedding: The embedding vector of the input query.
 
         Returns:
-            A tuple containing the best matching `Route` object and its cosine similarity score,
-            or `None` if no route meets the similarity threshold or no routes are registered.
-
-        Raises:
-            RuntimeError: If the router is configured with a synchronous `EmbeddingModel`.
-            Exception: For failures during query embedding.
+            A tuple containing the best `Route` object and its cosine similarity score.
+            Returns (None, 0.0) if no routes are available or no good match is found.
         """
-        if not self._routes:
-            self._logger.warning("No routes registered in the router. Cannot route query.")
-            return None
-        if not self._is_async_embedding_model:
-            raise RuntimeError(
-                "Cannot use asynchronous `aroute()` method with a synchronous `EmbeddingModel`. "
-                "Use `route()` instead."
-            )
+        # Ensure embeddings are precomputed. If not, trigger precomputation once.
+        if not self._embedded_routes:
+            await self._precompute_route_embeddings()
 
-        _threshold = threshold if threshold is not None else self.config.default_similarity_threshold
+        if not self._embedded_routes or not query_embedding:
+            return None, 0.0
 
-        try:
-            query_embedding_obj = await self._embedding_model.aembed_query(query)
-            query_embedding = query_embedding_obj.data.flatten()
-        except Exception as e:
-            self._logger.error(f"Failed to async embed query '{query[:100]}...': {e}", exc_info=True)
-            return None
+        best_match: Optional[Route] = None
+        highest_similarity: float = 0.0
 
-        best_route: Optional[Route] = None
-        highest_similarity: float = -1.0
-
-        # Note: If the number of routes becomes extremely large, one might consider a
-        # vector database for efficient similarity search instead of in-memory iteration.
-        for route_name, route_embed_obj in self._route_embeddings.items():
-            route_embedding = route_embed_obj.data.flatten()
-            similarity = self._calculate_cosine_similarity(query_embedding, route_embedding)
-
-            self._logger.debug(
-                f"Async Query '{query[:50]}...' vs Route '{route_name}': Similarity = {similarity:.4f}"
-            )
-
+        for embedded_route in self._embedded_routes:
+            similarity = self._cosine_similarity(query_embedding, embedded_route.embedding)
             if similarity > highest_similarity:
                 highest_similarity = similarity
-                best_route = self._routes[route_name]
+                best_match = embedded_route.route
 
-        if best_route and highest_similarity >= _threshold:
-            self._logger.info(
-                f"Async query '{query[:50]}...' routed to '{best_route.name}' "
-                f"with similarity {highest_similarity:.4f} (Threshold: {_threshold:.2f})"
+        return best_match, highest_similarity
+
+    def _generate_llm_routing_prompt(self, query: str) -> str:
+        """
+        Generates a detailed prompt for the LLM to make an explicit routing decision.
+        The prompt instructs the LLM to select a route name and return it in JSON format.
+        """
+        route_descriptions = []
+        for route in self.routes:
+            route_descriptions.append(
+                f"- Name: '{route.name}'\n"
+                f"  Description: {route.description}\n"
             )
-            return best_route, highest_similarity
+
+        prompt = (
+            "You are an expert routing system for a large language model orchestration framework. "
+            "Your task is to analyze a user's query and determine the SINGLE most appropriate "
+            "backend component (route) to handle it. "
+            "Below is the user's query and a list of available routes, each with a unique name and a detailed description. "
+            "Carefully read the query and the descriptions of all routes. "
+            "Respond ONLY with a JSON object containing a single key 'chosen_route' "
+            "whose value is the 'name' of the best matching route. "
+            "If no route perfectly matches, choose the one that is most conceptually relevant based on its description. "
+            "Do NOT include any other text, explanations, or markdown outside the JSON object.\n\n"
+            "--- Available Routes ---\n"
+            f"{''.join(route_descriptions)}\n"
+            "--- User Query ---\n"
+            f"Query: \"{query}\"\n\n"
+            "--- Your Decision (JSON ONLY) ---\n"
+            "```json\n"
+            "{ \"chosen_route\": \"<ROUTE_NAME_HERE>\" }\n"
+            "```"
+        )
+        return prompt
+
+    async def _get_llm_decision(self, query: str) -> Route:
+        """
+        Consults the decision LLM to determine the best route when embedding
+        similarity is not confident enough.
+
+        Args:
+            query: The user's input query string.
+
+        Returns:
+            The `Route` object chosen by the LLM.
+
+        Raises:
+            LLMRoutingError: If the LLM fails to provide a valid or parseable decision,
+                             or if there's an issue during LLM interaction.
+            NoRouteFoundError: If the LLM's chosen route name does not correspond
+                               to any of the configured routes.
+        """
+        prompt = self._generate_llm_routing_prompt(query)
+        llm_response_text = "" # Initialize for error reporting
+
+        try:
+            llm_response_text = await self.decision_llm.generate(
+                prompt=prompt,
+                temperature=self.llm_temperature,
+                max_tokens=self.llm_max_tokens,
+                json_mode=True # Leverage LLMClient's JSON enforcement
+            )
+
+            # Defensive parsing, even if json_mode is active, due to LLM potential failures
+            response_json = json.loads(llm_response_text)
+            chosen_route_name = response_json.get("chosen_route")
+
+            if not chosen_route_name or not isinstance(chosen_route_name, str):
+                raise LLMRoutingError(
+                    f"LLM response malformed or missing 'chosen_route' key. "
+                    f"Raw response: '{llm_response_text}'"
+                )
+
+            chosen_route = self._route_name_map.get(chosen_route_name)
+            if not chosen_route:
+                raise NoRouteFoundError(
+                    f"LLM chose route '{chosen_route_name}' which does not exist in "
+                    f"the available routes: {list(self._route_name_map.keys())}"
+                )
+            return chosen_route
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+            raise LLMRoutingError(
+                f"Failed to parse LLM routing decision JSON. Error: {e}. "
+                f"Raw response: '{llm_response_text}'"
+            ) from e
+        except Exception as e:
+            raise LLMRoutingError(
+                f"An unexpected error occurred during LLM routing decision: {e}. "
+                f"Raw response: '{llm_response_text}'"
+            ) from e
+
+
+    async def route(self, query: str, **kwargs: Any) -> Any:
+        """
+        Routes the input query to the most appropriate component and invokes it.
+
+        This method first attempts to route based on embedding similarity between
+        the query and available routes. If a confident match is not found
+        (i.e., similarity is below `self.similarity_threshold`), it defers
+        to the decision LLM for a more nuanced and context-aware choice.
+        Finally, it executes the `target` callable of the chosen route, passing
+        the original `query` and any additional keyword arguments.
+
+        Args:
+            query: The user's input query string that needs to be routed.
+            **kwargs: Additional keyword arguments to pass directly to the
+                      `target` callable of the chosen route.
+
+        Returns:
+            The result of invoking the chosen target component. The type of this
+            result depends entirely on the `target`'s return type.
+
+        Raises:
+            NoRouteFoundError: If no suitable route can be determined by either
+                               embedding matching or the LLM.
+            LLMRoutingError: If the LLM encounters an error or returns an
+                             unparseable or invalid decision during its routing attempt.
+            RuntimeError: If the chosen target component raises an exception during
+                          its execution. The original exception is wrapped.
+            ValueError: If the query is empty.
+        """
+        if not query:
+            raise ValueError("Input query cannot be empty for routing.")
+
+        # Ensure embeddings are ready; if not, precompute on first use.
+        if not self._embedded_routes:
+            await self._precompute_route_embeddings()
+
+        if not self._embedded_routes:
+            raise NoRouteFoundError("No routes configured or embeddings could not be computed.")
+
+        # 1. Attempt embedding-based routing for quick, high-confidence matches
+        query_embedding_list = await self.embedding_model.embed([query])
+        query_embedding = query_embedding_list[0] if query_embedding_list else []
+
+        best_embedding_route, similarity = await self._get_embedding_match(query_embedding)
+
+        chosen_route: Optional[Route] = None
+        if best_embedding_route and similarity >= self.similarity_threshold:
+            chosen_route = best_embedding_route
         else:
-            self._logger.info(
-                f"No async route found above threshold {_threshold:.2f} for query '{query[:50]}...' "
-                f"(Best match: {best_route.name if best_route else 'N/A'}, Similarity: {highest_similarity:.4f})"
+            # 2. Fallback to LLM-based routing for complex or ambiguous queries
+            # This is more computationally intensive but offers greater flexibility.
+            try:
+                chosen_route = await self._get_llm_decision(query)
+            except (LLMRoutingError, NoRouteFoundError) as e:
+                # Re-raise specific routing errors for clarity
+                raise e
+            except Exception as e:
+                # Catch any other unexpected errors during LLM decision process
+                raise LLMRoutingError(
+                    f"An unexpected error occurred while consulting the decision LLM: {e}"
+                ) from e
+
+        if not chosen_route:
+            raise NoRouteFoundError(f"No suitable route could be determined for query: '{query}'")
+
+        # 3. Invoke the target of the chosen route
+        try:
+            # Determine if the target is an async callable or a regular one
+            is_async_callable = asyncio.iscoroutinefunction(chosen_route.target) or (
+                isinstance(chosen_route.target, VishustraComponent) and asyncio.iscoroutinefunction(chosen_route.target.__call__)
             )
-            return None
 
-    def get_routes(self) -> List[Route]:
-        """Returns a list of all currently registered `Route` objects."""
-        return list(self._routes.values())
-
-    def get_route_by_name(self, name: str) -> Optional[Route]:
-        """Returns a `Route` object by its unique name, or `None` if not found."""
-        return self._routes.get(name)
-
-    def get_registered_route_names(self) -> List[str]:
-        """Returns a list of names for all registered routes."""
-        return list(self._routes.keys())
+            if is_async_callable:
+                return await chosen_route.target(query=query, **kwargs)
+            else:
+                return chosen_route.target(query=query, **kwargs)
+        except Exception as e:
+            # Wrap any exceptions raised by the target component for better debugging context
+            raise RuntimeError(
+                f"Error executing target of route '{chosen_route.name}' "
+                f"for query '{query}': {e}"
+            ) from e
