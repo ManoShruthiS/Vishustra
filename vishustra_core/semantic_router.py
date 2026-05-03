@@ -1,565 +1,551 @@
-import json
+import abc
+import asyncio
 import logging
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import (
+    List,
+    Dict,
+    Any,
+    Optional,
+    Awaitable,
+    Tuple,
+    TypeVar,
+    Generic,
+)
+from uuid import uuid4
 
+from pydantic import BaseModel, Field, PrivateAttr, ValidationError
+
+# Initialize logging for the module
 logger = logging.getLogger(__name__)
 
-@dataclass(frozen=True)
-class Route:
+
+# --- Core Interfaces (Abstract Base Classes) ---
+
+class EmbeddingModel(abc.ABC):
     """
-    Represents a specific routing destination or functional pipeline within the Vishustra framework.
+    Abstract Base Class for an embedding model.
 
-    Routes define logical paths or functionalities an incoming LLM request
-    might be directed to. Each route has a unique name, a descriptive text
-    to aid routing decisions (especially for LLM-based strategies), and
-    optional keywords or metadata for specific strategy implementations.
-
-    Attributes:
-        name (str): A unique identifier for the route (e.g., "qa_pipeline", "code_generation").
-        description (str): A detailed description of what this route handles.
-                           This is crucial for LLM-based routing strategies as it informs
-                           the LLM's decision-making process.
-        keywords (Optional[List[str]]): A list of keywords associated with this route.
-                                        Useful for keyword-based routing strategies.
-                                        Keywords are stored in lowercase for consistent matching.
-        metadata (Optional[Dict[str, Any]]): Any additional arbitrary data associated
-                                             with this route, e.g., configuration parameters,
-                                             target function pointers, API endpoints, etc.
+    This interface defines the contract for any embedding model used within Vishustra.
+    Implementations must provide asynchronous methods for embedding text.
     """
-    name: str
-    description: str
-    keywords: Optional[List[str]] = None
-    metadata: Optional[Dict[str, Any]] = None
 
-    def __post_init__(self):
+    @abc.abstractmethod
+    async def embed(self, texts: List[str]) -> List[List[float]]:
         """
-        Performs validation and normalization after object initialization.
-        Ensures name and description are not empty and keywords are lowercased.
-        """
-        if not self.name:
-            raise ValueError("Route name cannot be empty.")
-        if not self.description:
-            raise ValueError("Route description cannot be empty.")
-        # Ensure keywords are lowercase for consistent matching across strategies
-        if self.keywords is not None:
-            object.__setattr__(self, 'keywords', [kw.lower() for kw in self.keywords])
-
-class RoutingStrategy(ABC):
-    """
-    Abstract Base Class for all routing strategies.
-
-    A routing strategy defines the core logic for how an input text is analyzed
-    and matched against a set of available routes. Concrete implementations
-    must override the `route` method to provide their specific routing mechanism.
-    """
-
-    @abstractmethod
-    def route(self, input_text: str, routes: List[Route]) -> Optional[Route]:
-        """
-        Determines the most appropriate route for a given input text.
-
-        This method encapsulates the decision-making process of the strategy.
+        Asynchronously embeds a list of texts into vector representations.
 
         Args:
-            input_text (str): The incoming text to be routed. This is typically a user query.
-            routes (List[Route]): A list of available `Route` objects to choose from.
-                                  The strategy will evaluate the input against these routes.
+            texts: A list of strings to embed.
 
         Returns:
-            Optional[Route]: The chosen `Route` object if a suitable match is found
-                             by the strategy, or None if no appropriate route can be
-                             determined.
+            A list of embedding vectors, where each vector is a list of floats.
         """
-        pass
+        raise NotImplementedError
 
-class KeywordRoutingStrategy(RoutingStrategy):
-    """
-    A simple and efficient routing strategy that matches input text against
-    predefined keywords associated with each route.
-
-    This strategy performs a case-insensitive check to see if any of a route's
-    keywords are present within the input text. If multiple routes contain
-    matching keywords, the first one encountered in the provided `routes` list
-    that contains *any* matching keyword will be returned. This implies an
-    ordering preference.
-    """
-
-    def route(self, input_text: str, routes: List[Route]) -> Optional[Route]:
+    @property
+    @abc.abstractmethod
+    def dimension(self) -> int:
         """
-        Routes the input text based on keyword matching.
+        The dimension of the embedding vectors produced by this model.
+        """
+        raise NotImplementedError
 
-        The strategy iterates through the provided routes. For each route, it checks
-        if any of its associated keywords are present in the (lowercased) input text.
-        The first route to have a matching keyword is selected.
+
+class VectorStoreResult(BaseModel):
+    """
+    Represents a single result from a vector store search.
+    """
+    id: str = Field(description="Unique identifier for the stored vector.")
+    vector: List[float] = Field(description="The embedding vector itself.")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Arbitrary metadata associated with the vector.")
+    score: float = Field(description="Similarity score of this result relative to the query.")
+
+
+class VectorStore(abc.ABC):
+    """
+    Abstract Base Class for a vector store.
+
+    This interface defines the contract for any vector database used within Vishustra
+    to store and retrieve embeddings.
+    """
+
+    @abc.abstractmethod
+    async def add(
+        self,
+        vectors: List[List[float]],
+        metadatas: Optional[List[Dict[str, Any]]] = None,
+        ids: Optional[List[str]] = None,
+    ) -> List[str]:
+        """
+        Asynchronously adds vectors to the vector store.
 
         Args:
-            input_text (str): The incoming text to be routed.
-            routes (List[Route]): A list of available `Route` objects.
+            vectors: A list of embedding vectors to add.
+            metadatas: Optional. A list of dictionaries, where each dictionary
+                       contains metadata corresponding to a vector.
+            ids: Optional. A list of unique identifiers for the vectors. If not
+                 provided, the vector store should generate them.
 
         Returns:
-            Optional[Route]: The first `Route` found where one of its keywords
-                             is present in the input text (case-insensitive),
-                             or None if no match is found across any route.
+            A list of IDs for the added vectors.
         """
-        input_text_lower = input_text.lower()
-        for route in routes:
-            if route.keywords:
-                for keyword in route.keywords:
-                    if keyword in input_text_lower:
-                        logger.debug(
-                            f"Keyword '{keyword}' matched for route '{route.name}' "
-                            f"with input: '{input_text[:50]}...'"
-                        )
-                        return route
-        logger.debug(f"No keyword route found for input: '{input_text[:50]}...'")
-        return None
+        raise NotImplementedError
 
-# --- LLM Interface for LLMRoutingStrategy ---
-class BaseLLM(ABC):
-    """
-    Abstract Base Class for an LLM interface.
-
-    This interface defines the fundamental method required for an LLM
-    to be integrated with the `LLMRoutingStrategy`. Implementations should
-    handle sending prompts to an actual LLM service (e.g., OpenAI, Anthropic,
-    local models) and returning its raw text response.
-    """
-    @abstractmethod
-    def generate(self, prompt: str, **kwargs) -> str:
+    @abc.abstractmethod
+    async def search(
+        self, query_vector: List[float], top_k: int
+    ) -> List[VectorStoreResult]:
         """
-        Sends a text prompt to the LLM and returns its generated text response.
+        Asynchronously searches the vector store for the most similar vectors to a query.
 
         Args:
-            prompt (str): The text prompt to send to the LLM. This will typically
-                          be a carefully crafted prompt instructing the LLM on
-                          the routing task.
-            **kwargs: Additional parameters specific to the LLM implementation
-                      (e.g., `temperature`, `max_tokens`, `stop_sequences`,
-                      model name, API keys).
+            query_vector: The embedding vector of the query.
+            top_k: The number of top similar results to return.
 
         Returns:
-            str: The raw text response from the LLM. This response is then
-                 parsed by the `LLMRoutingStrategy`.
+            A list of `VectorStoreResult` objects, sorted by similarity score in
+            descending order.
         """
-        pass
+        raise NotImplementedError
 
-class MockLLM(BaseLLM):
-    """
-    A mock LLM implementation primarily for testing or demonstration purposes.
-
-    It simulates an LLM response based on predefined rules or a simplistic
-    keyword-based selection from the prompt content, rather than actual
-    intelligent generation. This allows for testing `LLMRoutingStrategy`
-    without requiring a live LLM connection.
-    """
-    def generate(self, prompt: str, **kwargs) -> str:
+    @abc.abstractmethod
+    async def delete(self, ids: List[str]) -> None:
         """
-        Simulates an LLM response by attempting to parse route options
-        from the prompt and returning a "chosen_route_name" if a relevant
-        keyword or phrase is found in the simulated user query.
-
-        This is a basic heuristic for demonstration and not indicative of
-        a real LLM's capabilities.
-        """
-        logger.info(f"MockLLM received prompt:\n{prompt[:300]}...")
-
-        # Basic simulation for router's expected JSON output
-        # Look for a specific pattern to find routes and the user query
-        route_definitions_start_idx = prompt.find("Available Routes:")
-        query_start_idx = prompt.find("User Query:")
-
-        if route_definitions_start_idx != -1 and query_start_idx != -1:
-            route_info_str = prompt[route_definitions_start_idx:query_start_idx]
-            user_query = prompt[query_start_idx:].lower()
-
-            # Attempt to extract route names and descriptions from the prompt string
-            possible_routes_info = []
-            for line in route_info_str.split('\n'):
-                if "- Name:" in line:
-                    try:
-                        name = line.split("Name:")[1].split("Description:")[0].strip()
-                        desc = line.split("Description:")[1].strip()
-                        possible_routes_info.append({"name": name, "description": desc})
-                    except IndexError:
-                        logger.warning(f"MockLLM failed to parse route info line: {line}")
-                        continue
-
-            for route_data in possible_routes_info:
-                # Very basic matching: check if route description or name is in the user query
-                if route_data['description'].lower() in user_query or \
-                   f"route {route_data['name'].lower()}" in user_query: # simulate direct mention
-                    logger.debug(f"MockLLM choosing route '{route_data['name']}' based on prompt content.")
-                    return json.dumps({"chosen_route_name": route_data['name']})
-
-        logger.warning(
-            "MockLLM could not determine a specific route from prompt content. "
-            "Returning 'None' as chosen route."
-        )
-        return json.dumps({"chosen_route_name": "None"}) # Simulate no match or default fallback
-
-class LLMRoutingStrategy(RoutingStrategy):
-    """
-    A sophisticated routing strategy that leverages a Large Language Model (LLM)
-    to determine the most suitable route for an input text.
-
-    This strategy constructs a descriptive prompt for the LLM, detailing all
-    available routes (names and descriptions), and asks the LLM to select
-    the best match. It expects the LLM to return a structured response
-    (e.g., JSON) indicating the chosen route's name.
-    """
-    def __init__(self, llm: BaseLLM, prompt_template: Optional[str] = None):
-        """
-        Initializes the LLMRoutingStrategy.
+        Asynchronously deletes vectors from the vector store by their IDs.
 
         Args:
-            llm (BaseLLM): An instance of an LLM client conforming to the `BaseLLM` interface.
-            prompt_template (Optional[str]): A custom Jinja-style prompt template string.
-                                             If None, a default template is used.
-                                             The template must accept two variables:
-                                             `routes_info` (str: formatted list of routes)
-                                             and `input_text` (str: the user's query).
-        Raises:
-            TypeError: If the provided `llm` is not an instance of `BaseLLM`.
+            ids: A list of IDs of vectors to delete.
         """
-        if not isinstance(llm, BaseLLM):
-            raise TypeError(f"llm must be an instance of BaseLLM, got {type(llm).__name__}.")
-        self.llm = llm
-        self.prompt_template = prompt_template or self._default_prompt_template()
-        logger.debug(f"LLMRoutingStrategy initialized with LLM: {type(llm).__name__}")
+        raise NotImplementedError
 
-    def _default_prompt_template(self) -> str:
-        """
-        Provides a default prompt template for LLM routing.
-        This template guides the LLM to act as a router and output JSON.
-        """
+# --- Data Models for Routing ---
+
+class Route(BaseModel):
+    """
+    Represents a specific route or action within the framework.
+
+    Each route has a name, a descriptive text, a target (e.g., a tool name,
+    function ID, or endpoint), and optional metadata. The description is used
+    for semantic matching.
+    """
+    name: str = Field(description="A unique, human-readable name for the route.")
+    description: str = Field(description="A detailed description of what this route does or represents. This text will be embedded and used for semantic matching.")
+    target: str = Field(description="The identifier of the target component (e.g., tool name, agent ID, function name, API endpoint) to be invoked when this route is matched.")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Arbitrary additional data associated with this route.")
+
+    # Private attribute to store the UUID generated for this route instance
+    _id: str = PrivateAttr(default_factory=lambda: str(uuid4()))
+
+    def __hash__(self) -> int:
+        return hash((self.name, self.description, self.target, frozenset(self.metadata.items())))
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, Route):
+            return NotImplemented
         return (
-            "You are an expert routing system for an AI orchestration framework called Vishustra. "
-            "Your task is to analyze a user's query and select the single most appropriate route "
-            "from the available options provided below. Your decision should be based solely on "
-            "the relevance of the route's description to the user's query.\n\n"
-            "Available Routes:\n"
-            "{routes_info}\n\n"
-            "Consider all aspects of the user's request, including intent, keywords, and context. "
-            "If no route is suitable or directly relevant to the query, explicitly state 'None'.\n\n"
-            "Output your choice in strict JSON format with a single key 'chosen_route_name' "
-            "and its value being the exact name of the chosen route (e.g., 'qa_pipeline', 'code_generation') "
-            "or 'None' if no route is appropriate.\n\n"
-            "User Query: {input_text}\n"
-            "JSON Response:"
+            self.name == other.name and
+            self.description == other.description and
+            self.target == other.target and
+            self.metadata == other.metadata
         )
 
-    def _format_routes_for_llm(self, routes: List[Route]) -> str:
-        """
-        Formats the list of `Route` objects into a human-readable string
-        that can be embedded effectively within an LLM prompt.
-        """
-        formatted_routes = []
-        for route in routes:
-            formatted_routes.append(
-                f"- Name: {route.name}\n"
-                f"  Description: {route.description}"
-            )
-        return "\n".join(formatted_routes)
+class RouteMatch(BaseModel):
+    """
+    Represents a matched route along with its similarity score.
+    """
+    route: Route = Field(description="The matched route object.")
+    score: float = Field(description="The similarity score (e.g., cosine similarity) of the match.")
 
-    def route(self, input_text: str, routes: List[Route]) -> Optional[Route]:
-        """
-        Routes the input text using an LLM to make the routing decision.
 
-        This method constructs a detailed prompt for the LLM, sends the prompt,
-        and then attempts to parse the LLM's structured (JSON) response to
-        identify the chosen route. Robust error handling is included for LLM
-        communication and response parsing.
+# --- Custom Exceptions ---
 
-        Args:
-            input_text (str): The incoming text to be routed.
-            routes (List[Route]): A list of available `Route` objects.
+class RouterError(Exception):
+    """Base exception for semantic router operations."""
+    pass
 
-        Returns:
-            Optional[Route]: The chosen `Route` object, or None if the LLM
-                             does not select a valid route, explicitly returns 'None',
-                             or an error occurs during the process.
-        """
-        if not routes:
-            logger.warning("No routes provided to LLMRoutingStrategy. Cannot route. Returning None.")
-            return None
 
-        routes_info = self._format_routes_for_llm(routes)
-        prompt = self.prompt_template.format(
-            routes_info=routes_info,
-            input_text=input_text
-        )
+class RouterInitializationError(RouterError):
+    """Raised when the semantic router fails to initialize its routes."""
+    pass
 
-        try:
-            llm_response_str = self.llm.generate(prompt)
-            logger.debug(f"LLM raw response for '{input_text[:50]}...': {llm_response_str}")
 
-            # Attempt to parse the JSON response from the LLM
-            response_json = json.loads(llm_response_str)
+class RoutingError(RouterError):
+    """Raised when an error occurs during the routing process."""
+    pass
 
-            chosen_route_name = response_json.get("chosen_route_name")
 
-            if chosen_route_name == "None":
-                logger.debug(
-                    f"LLM explicitly indicated no suitable route for input: '{input_text[:50]}...'"
-                )
-                return None
-            
-            if chosen_route_name:
-                for route in routes:
-                    if route.name == chosen_route_name:
-                        logger.info(
-                            f"LLM chose route '{route.name}' for input: '{input_text[:50]}...'"
-                        )
-                        return route
-                logger.warning(
-                    f"LLM chose route '{chosen_route_name}' but it's not present in the "
-                    f"provided route list. Available: {[r.name for r in routes]} "
-                    f"for input: '{input_text[:50]}...'"
-                )
-            else:
-                logger.warning(
-                    f"LLM response missing 'chosen_route_name' key or it was empty for "
-                    f"input: '{input_text[:50]}...'. Full response: {llm_response_str}"
-                )
-
-        except json.JSONDecodeError as e:
-            logger.error(
-                f"Failed to decode LLM response as JSON: {e}. "
-                f"Response: '{llm_response_str[:200]}...' for input: '{input_text[:50]}...'"
-            )
-        except Exception as e:
-            logger.error(
-                f"An unexpected error occurred during LLM routing for "
-                f"input '{input_text[:50]}...': {e}", exc_info=True
-            )
-
-        logger.debug(f"LLM routing failed to find a valid route for input: '{input_text[:50]}...'")
-        return None
-
+# --- Semantic Router Implementation ---
 
 class SemanticRouter:
     """
-    The core Semantic Router for Vishustra.
+    A highly modular and asynchronous semantic router for Vishustra.
 
-    This class acts as a central dispatcher, orchestrating routing decisions
-    by applying a specified `RoutingStrategy` to an incoming text based on
-    a predefined set of `Routes`. It directs queries to appropriate
-    downstream pipelines, agents, or tools within the framework, enabling
-    dynamic and intelligent routing.
+    This router uses an embedding model and a vector store to semantically
+    match incoming queries to predefined routes. It's designed for use in
+    LLM orchestration frameworks to intelligently dispatch requests to
+    appropriate tools, agents, or functions based on query meaning.
+
+    Attributes:
+        _embedding_model: The `EmbeddingModel` instance used for generating embeddings.
+        _vector_store: The `VectorStore` instance used for storing and searching route embeddings.
+        _routes_by_id: A mapping from vector store ID to the original `Route` object.
     """
-    def __init__(self, routes: List[Route], strategy: RoutingStrategy):
+
+    def __init__(
+        self,
+        embedding_model: EmbeddingModel,
+        vector_store: VectorStore,
+        routes: List[Route],
+        min_score_threshold: float = 0.7,
+    ):
         """
-        Initializes the SemanticRouter with a set of available routes and a
-        chosen routing strategy.
+        Initializes the SemanticRouter with an embedding model, vector store, and routes.
 
         Args:
-            routes (List[Route]): A list of `Route` objects that the router can
-                                  potentially direct traffic to. These routes
-                                  define the possible destinations or functionalities.
-            strategy (RoutingStrategy): An instance of a concrete `RoutingStrategy`
-                                        (e.g., `KeywordRoutingStrategy`, `LLMRoutingStrategy`)
-                                        that defines the actual mechanism for
-                                        making routing decisions.
-
+            embedding_model: An instance of a class implementing the `EmbeddingModel` interface.
+            vector_store: An instance of a class implementing the `VectorStore` interface.
+            routes: A list of `Route` objects that the router can match against.
+            min_score_threshold: The minimum similarity score required for a route to be
+                                 considered a match. Defaults to 0.7.
+        
         Raises:
-            ValueError: If the list of routes is empty or if any route names are not unique.
-            TypeError: If the provided `strategy` is not an instance of `RoutingStrategy`.
+            RouterInitializationError: If routes cannot be initialized in the vector store.
+            ValueError: If no routes are provided.
         """
         if not routes:
-            raise ValueError("SemanticRouter must be initialized with at least one route.")
-        
-        route_names = set()
-        for route in routes:
-            if route.name in route_names:
-                raise ValueError(f"Route names must be unique. Duplicate found: '{route.name}'")
-            route_names.add(route.name)
+            raise ValueError("SemanticRouter requires at least one route to be initialized.")
+        if not isinstance(embedding_model, EmbeddingModel):
+            raise TypeError("embedding_model must be an instance of EmbeddingModel.")
+        if not isinstance(vector_store, VectorStore):
+            raise TypeError("vector_store must be an instance of VectorStore.")
 
-        if not isinstance(strategy, RoutingStrategy):
-            raise TypeError(f"strategy must be an instance of a RoutingStrategy subclass, got {type(strategy).__name__}.")
+        self._embedding_model: EmbeddingModel = embedding_model
+        self._vector_store: VectorStore = vector_store
+        self._routes: List[Route] = routes
+        self._routes_by_id: Dict[str, Route] = {route._id: route for route in routes}
+        self._min_score_threshold: float = min_score_threshold
 
-        self._routes = routes
-        self._strategy = strategy
-        logger.info(
-            f"SemanticRouter initialized with {len(routes)} routes "
-            f"and strategy: {type(strategy).__name__}"
-        )
+        logger.info(f"Initializing SemanticRouter with {len(routes)} routes.")
+        # We don't await initialization here as __init__ cannot be async.
+        # The user of the router must await `await router.initialize()` explicitly
+        # to ensure routes are loaded before routing queries.
+        self._initialization_task: Optional[asyncio.Task] = None
 
-    def route(self, input_text: str) -> Optional[Route]:
+    async def initialize(self) -> None:
         """
-        Routes the given input text to the most appropriate `Route` using the
-        configured routing strategy.
+        Asynchronously initializes the router by embedding all routes and adding them
+        to the vector store. This method must be called after instantiation and awaited
+        before the router can be used for `route` calls.
 
-        This is the primary method for external components to interact with the router.
+        This method is idempotent; calling it multiple times will not re-initialize if
+        it has already successfully completed.
+        """
+        if self._initialization_task and self._initialization_task.done():
+            # If the task completed without error, we're already initialized.
+            # If it completed with an exception, re-raise it for the caller.
+            await self._initialization_task
+            return 
+        elif self._initialization_task:
+            # If the task is running, await it.
+            await self._initialization_task
+            return
+
+        # If no task, create and run it.
+        self._initialization_task = asyncio.create_task(self._add_routes_to_vector_store())
+        await self._initialization_task
+        logger.info("SemanticRouter initialization complete.")
+
+
+    async def _add_routes_to_vector_store(self) -> None:
+        """
+        Embeds route descriptions and adds them to the vector store.
+        Handles deletion of existing routes with the same IDs to ensure idempotency.
+        """
+        descriptions = [route.description for route in self._routes]
+        route_ids = [route._id for route in self._routes]
+        metadatas = [
+            {
+                "route_name": route.name,
+                "route_target": route.target,
+                "original_route_id": route._id, # Store our internal ID
+                **route.metadata,
+            }
+            for route in self._routes
+        ]
+
+        try:
+            # First, delete any existing routes with these IDs to ensure idempotency.
+            # This is important if routes might be updated or the router re-initialized.
+            await self._vector_store.delete(route_ids)
+            logger.debug(f"Deleted {len(route_ids)} potential pre-existing routes from vector store.")
+
+            embeddings = await self._embedding_model.embed(descriptions)
+            if len(embeddings) != len(descriptions):
+                raise RouterInitializationError(
+                    f"Embedding model returned {len(embeddings)} embeddings for {len(descriptions)} descriptions."
+                )
+
+            # Check embedding dimension
+            if embeddings and len(embeddings[0]) != self._embedding_model.dimension:
+                raise RouterInitializationError(
+                    f"Embedding dimension mismatch: model reports {self._embedding_model.dimension}, "
+                    f"but returned {len(embeddings[0])} for first embedding."
+                )
+
+            added_ids = await self._vector_store.add(
+                vectors=embeddings,
+                metadatas=metadatas,
+                ids=route_ids,
+            )
+            if len(added_ids) != len(route_ids):
+                raise RouterInitializationError(
+                    f"Vector store added {len(added_ids)} vectors, expected {len(route_ids)}."
+                )
+            logger.info(f"Successfully added {len(added_ids)} routes to vector store.")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize routes in vector store: {e}", exc_info=True)
+            raise RouterInitializationError(f"Error during route initialization: {e}") from e
+
+    async def route(self, query: str, top_k: int = 1) -> List[RouteMatch]:
+        """
+        Asynchronously routes an incoming query to the most semantically relevant routes.
 
         Args:
-            input_text (str): The incoming text from a user, an agent, or another
-                              component that needs to be directed to a specific
-                              functional pipeline.
+            query: The user query or intent string to route.
+            top_k: The maximum number of top matching routes to return.
 
         Returns:
-            Optional[Route]: The `Route` object chosen by the active strategy, or None
-                             if no suitable route could be determined by the strategy.
+            A list of `RouteMatch` objects, sorted by score in descending order,
+            and filtered by `min_score_threshold`. An empty list if no matches
+            are found above the threshold.
+
+        Raises:
+            RoutingError: If embedding the query or searching the vector store fails,
+                          or if the router has not been initialized.
         """
-        if not input_text:
-            logger.warning("Attempted to route empty input text. Returning None.")
-            return None
-            
-        chosen_route = self._strategy.route(input_text, self._routes)
+        if not self._initialization_task or not self._initialization_task.done():
+            raise RoutingError(
+                "SemanticRouter has not been initialized or initialization is still pending. Call `await router.initialize()` first."
+            )
+        try:
+            # Ensure the initialization task completed successfully.
+            # If it failed, this 'await' will re-raise the InitializationError.
+            await self._initialization_task 
+        except RouterInitializationError as e:
+            raise RoutingError("Router initialization failed previously.") from e
+
+        try:
+            query_embedding_list = await self._embedding_model.embed([query])
+            if not query_embedding_list:
+                raise RoutingError("Embedding model returned empty embedding for query.")
+            query_embedding = query_embedding_list[0]
+
+            if len(query_embedding) != self._embedding_model.dimension:
+                raise RoutingError(
+                    f"Query embedding dimension mismatch: expected {self._embedding_model.dimension}, "
+                    f"got {len(query_embedding)}."
+                )
+
+            search_results = await self._vector_store.search(query_embedding, top_k=top_k)
+            logger.debug(f"Vector store search returned {len(search_results)} results for query.")
+
+            matches: List[RouteMatch] = []
+            for result in search_results:
+                if result.score >= self._min_score_threshold:
+                    original_route_id = result.metadata.get("original_route_id")
+                    if original_route_id and original_route_id in self._routes_by_id:
+                        route = self._routes_by_id[original_route_id]
+                        matches.append(RouteMatch(route=route, score=result.score))
+                        logger.debug(f"Matched route '{route.name}' with score {result.score:.4f}")
+                    else:
+                        logger.warning(
+                            f"Vector store result with ID '{result.id}' has missing or unknown "
+                            f"original_route_id '{original_route_id}'. Skipping."
+                        )
+                else:
+                    logger.debug(
+                        f"Skipping route match below threshold: ID='{result.id}', "
+                        f"Score={result.score:.4f} < Threshold={self._min_score_threshold:.4f}"
+                    )
+
+            # Sort by score in descending order, although vector store should usually return them sorted
+            matches.sort(key=lambda m: m.score, reverse=True)
+            return matches
+
+        except ValidationError as ve:
+            logger.error(f"Pydantic validation error during routing: {ve}", exc_info=True)
+            raise RoutingError(f"Invalid data encountered during routing: {ve}") from ve
+        except Exception as e:
+            logger.error(f"Failed to route query: {e}", exc_info=True)
+            raise RoutingError(f"Error during query routing: {e}") from e
+
+
+# --- Example Implementations (for demonstration, not part of the core framework) ---
+# These would typically be in separate files like `openai_embedding.py` or `qdrant_vector_store.py`
+
+class MockEmbeddingModel(EmbeddingModel):
+    """A mock embedding model for testing purposes."""
+    def __init__(self, dimension: int = 1536):
+        self._dimension = dimension
+        logger.warning("Using MockEmbeddingModel. This is for demonstration/testing only.")
+
+    async def embed(self, texts: List[str]) -> List[List[float]]:
+        # Simulate an API call with a small delay
+        await asyncio.sleep(0.01)
+        # Create distinct but somewhat predictable vectors for demonstration
+        return [[float(hash(text + str(i)) % 1000) / 1000.0 for i in range(self._dimension)] for text in texts]
+
+    @property
+    def dimension(self) -> int:
+        return self._dimension
+
+class MockVectorStore(VectorStore):
+    """A simple in-memory mock vector store for testing purposes."""
+    def __init__(self):
+        self._store: Dict[str, Dict[str, Any]] = {}
+        logger.warning("Using MockVectorStore. This is for demonstration/testing only.")
+
+    async def add(
+        self,
+        vectors: List[List[float]],
+        metadatas: Optional[List[Dict[str, Any]]] = None,
+        ids: Optional[List[str]] = None,
+    ) -> List[str]:
+        await asyncio.sleep(0.005) # Simulate async I/O
+        added_ids = []
+        for i, vec in enumerate(vectors):
+            _id = ids[i] if ids and ids[i] else str(uuid4())
+            self._store[_id] = {
+                "vector": vec,
+                "metadata": metadatas[i] if metadatas else {},
+            }
+            added_ids.append(_id)
+        logger.debug(f"MockVectorStore: Added {len(added_ids)} vectors.")
+        return added_ids
+
+    async def search(
+        self, query_vector: List[float], top_k: int
+    ) -> List[VectorStoreResult]:
+        await asyncio.sleep(0.005) # Simulate async I/O
+        results: List[Tuple[float, str]] = []
         
-        if chosen_route:
-            logger.debug(
-                f"Router successfully selected route '{chosen_route.name}' "
-                f"for input: '{input_text[:50]}...'"
-            )
-        else:
-            logger.info(
-                f"No suitable route found by strategy '{type(self._strategy).__name__}' "
-                f"for input: '{input_text[:50]}...'"
-            )
-            
-        return chosen_route
+        # Simple dot product for similarity (cosine if normalized)
+        query_norm = (sum(q*q for q in query_vector)**0.5)
+        if query_norm == 0:
+            query_norm = 1e-8 # Avoid division by zero for zero vectors
 
-# Example Usage (typically, this would be in a separate 'examples' or 'tests' directory)
-if __name__ == "__main__":
-    # Configure basic logging for demonstration
+        for _id, data in self._store.items():
+            stored_vector = data["vector"]
+            stored_norm = (sum(s*s for s in stored_vector)**0.5)
+            if stored_norm == 0:
+                stored_norm = 1e-8 # Avoid division by zero
+
+            score = sum(q * s for q, s in zip(query_vector, stored_vector)) / (query_norm * stored_norm)
+            results.append((score, _id))
+
+        results.sort(key=lambda x: x[0], reverse=True)
+        
+        vector_store_results = []
+        for score, _id in results[:top_k]:
+            data = self._store[_id]
+            vector_store_results.append(
+                VectorStoreResult(id=_id, vector=data["vector"], metadata=data["metadata"], score=score)
+            )
+        logger.debug(f"MockVectorStore: Searched, returning {len(vector_store_results)} results.")
+        return vector_store_results
+    
+    async def delete(self, ids: List[str]) -> None:
+        await asyncio.sleep(0.001) # Simulate async I/O
+        deleted_count = 0
+        for _id in ids:
+            if _id in self._store:
+                del self._store[_id]
+                deleted_count += 1
+        logger.debug(f"MockVectorStore: Deleted {deleted_count} vectors.")
+
+
+# --- Example Usage (for demonstration) ---
+async def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    # Set this module's logger to DEBUG to see more detailed internal workings
-    logging.getLogger(__name__).setLevel(logging.DEBUG)
-    logging.getLogger('__main__').setLevel(logging.DEBUG) # For script-level print statements
+    logger.setLevel(logging.DEBUG) # Set this module's logger to debug for more detail
 
-    print("--- Vishustra Semantic Router Demonstration ---")
+    # 1. Instantiate the mock components
+    embedding_model = MockEmbeddingModel(dimension=8) # Lower dimension for easier mock
+    vector_store = MockVectorStore()
 
-    # 1. Define Routes for various functionalities
-    qa_route = Route(
-        name="documentation_qa",
-        description="Handles questions specifically about the Vishustra framework documentation "
-                    "or general technical queries related to its usage and concepts.",
-        keywords=["docs", "documentation", "how to", "what is", "explain", "usage", "vishustra"]
+    # 2. Define your application's routes
+    routes = [
+        Route(
+            name="customer_support_query",
+            description="Handles questions about product features, technical issues, order status, or general customer service inquiries.",
+            target="customer_support_agent",
+            metadata={"priority": "high", "department": "support"},
+        ),
+        Route(
+            name="sales_inquiry",
+            description="Routes requests related to purchasing new products, pricing, discounts, or partnership opportunities.",
+            target="sales_team_webhook",
+            metadata={"priority": "medium", "department": "sales"},
+        ),
+        Route(
+            name="knowledge_base_search",
+            description="Finds information in the internal knowledge base or documentation.",
+            target="knowledge_base_tool",
+            metadata={"source": "internal_docs"},
+        ),
+        Route(
+            name="developer_api_docs",
+            description="Provides access to API documentation, SDKs, and developer guides for integrating with Vishustra.",
+            target="developer_portal_tool",
+            metadata={"audience": "developers"},
+        ),
+        Route(
+            name="feedback_submission",
+            description="Collects user feedback, bug reports, or feature requests.",
+            target="feedback_system_api",
+            metadata={"type": "feedback"},
+        ),
+    ]
+
+    # 3. Instantiate the SemanticRouter
+    router = SemanticRouter(
+        embedding_model=embedding_model,
+        vector_store=vector_store,
+        routes=routes,
+        min_score_threshold=0.6, # Adjust threshold as needed
     )
-    code_gen_route = Route(
-        name="code_generation",
-        description="Generates Python code snippets, functions, or complete scripts based on "
-                    "natural language programming requests. This route is for coding assistance.",
-        keywords=["generate code", "write python", "code example", "implement function", "python script", "develop code"]
-    )
-    search_route = Route(
-        name="web_search",
-        description="Performs a web search to find external information, current events, "
-                    "or general knowledge that is not covered by internal documentation.",
-        keywords=["search online", "find information", "latest news", "google", "web search"]
-    )
-    # A route that might be caught by the LLM strategy for very specific intents
-    sentiment_route = Route(
-        name="sentiment_analysis",
-        description="Analyzes the emotional tone or sentiment of a given text, classifying it "
-                    "as positive, negative, or neutral.",
-        keywords=["sentiment", "analyze emotion", "mood", "tone"]
-    )
 
-    all_routes = [qa_route, code_gen_route, search_route, sentiment_route]
+    # 4. Initialize the router (important step to load routes into the vector store)
+    logger.info("Starting router initialization...")
+    await router.initialize()
+    logger.info("Router initialized.")
 
-    # --- Test 1: KeywordRoutingStrategy ---
-    print("\n--- Testing KeywordRoutingStrategy ---")
-    keyword_strategy = KeywordRoutingStrategy()
-    keyword_router = SemanticRouter(routes=all_routes, strategy=keyword_strategy)
+    # 5. Route some queries
+    queries = [
+        "I need help with my account and a bug in the software.",
+        "How much does your enterprise plan cost?",
+        "Where can I find details about your REST API endpoints?",
+        "I want to report a new feature idea.",
+        "Tell me about the product's main capabilities.",
+        "What is the capital of France?", # Should ideally not match strongly
+        "My order #12345 is delayed, can you check it?"
+    ]
 
-    test_queries_keyword = {
-        "How do I install Vishustra docs?": qa_route,
-        "Can you generate some Python code for a linked list?": code_gen_route,
-        "What is the capital of France?": search_route, # Matches 'find information' or 'google' (if added)
-        "Analyze the sentiment of this review.": sentiment_route,
-        "Tell me a funny joke.": None, # No keyword match
-        "Explain the architecture of Vishustra.": qa_route # Matches 'explain'
-    }
+    print("\n--- Routing Queries ---")
+    for i, query in enumerate(queries):
+        print(f"\nQuery {i+1}: '{query}'")
+        try:
+            matches = await router.route(query, top_k=2)
+            if matches:
+                for match in matches:
+                    print(f"  -> Matched Route: '{match.route.name}' (Score: {match.score:.4f})")
+                    print(f"     Target: {match.route.target}")
+                    print(f"     Description: {match.route.description[:100]}...")
+            else:
+                print("  -> No strong match found.")
+        except RouterError as e:
+            print(f"  -> ERROR during routing: {e}")
 
-    for query, expected_route in test_queries_keyword.items():
-        print(f"\nRouting (Keyword) '{query}'")
-        chosen = keyword_router.route(query)
-        expected_name = expected_route.name if expected_route else 'None'
-        chosen_name = chosen.name if chosen else 'None'
-        print(f"  Chosen route: {chosen_name} (Expected: {expected_name})")
-        assert chosen_name == expected_name, f"KeywordRouter failed for '{query}'"
-
-    # --- Test 2: LLMRoutingStrategy with MockLLM ---
-    print("\n--- Testing LLMRoutingStrategy with MockLLM ---")
-    mock_llm = MockLLM()
-    llm_strategy = LLMRoutingStrategy(llm=mock_llm)
-    llm_router = SemanticRouter(routes=all_routes, strategy=llm_strategy)
-
-    # MockLLM's logic is simplistic; it tries to find keywords from route descriptions in the query.
-    # Its output might not be perfect, but it demonstrates the integration.
-    test_queries_llm = {
-        "I need assistance with the framework documentation.": qa_route, # Matches 'documentation'
-        "Please write a Python function for a binary tree traversal.": code_gen_route, # Matches 'python function'
-        "Search for the latest AI news and trends.": search_route, # Matches 'search'
-        "What is the emotional tone of this sentence: 'I am very happy today!'?": sentiment_route, # Matches 'emotional tone'
-        "How's the weather today in London?": None, # No direct match in mock
-        "Tell me a bedtime story.": None # No direct match in mock
-    }
-
-    for query, expected_route in test_queries_llm.items():
-        print(f"\nRouting (LLM Mock) '{query}'")
-        chosen = llm_router.route(query)
-        expected_name = expected_route.name if expected_route else 'None'
-        chosen_name = chosen.name if chosen else 'None'
-        print(f"  Chosen route: {chosen_name} (Expected: {expected_name})")
-        # Asserting on MockLLM is tricky due to its simplicity, but we can check if it
-        # at least tried to pick one if there's a good match.
-        if expected_route:
-            assert chosen_name == expected_name or chosen_name == "default_fallback", \
-                f"LLMRouter (Mock) failed for '{query}'"
-
-    # --- Test 3: Error Handling and Edge Cases ---
-    print("\n--- Testing Error Handling ---")
-
-    # Empty routes list
-    try:
-        print("\nAttempting to initialize SemanticRouter with empty routes list...")
-        SemanticRouter(routes=[], strategy=keyword_strategy)
-    except ValueError as e:
-        print(f"  Caught expected error: {e}")
-        assert "at least one route" in str(e)
-
-    # Duplicate route names
-    try:
-        print("\nAttempting to initialize SemanticRouter with duplicate route names...")
-        duplicate_routes = [qa_route, Route(name="documentation_qa", description="another qa")]
-        SemanticRouter(routes=duplicate_routes, strategy=keyword_strategy)
-    except ValueError as e:
-        print(f"  Caught expected error: {e}")
-        assert "unique" in str(e) and "documentation_qa" in str(e)
-
-    # Invalid Route creation (empty name/description)
-    try:
-        print("\nAttempting to create a Route with an empty name...")
-        Route(name="", description="invalid")
-    except ValueError as e:
-        print(f"  Caught expected error for empty route name: {e}")
-        assert "name cannot be empty" in str(e)
-
-    try:
-        print("\nAttempting to create a Route with an empty description...")
-        Route(name="valid", description="")
-    except ValueError as e:
-        print(f"  Caught expected error for empty route description: {e}")
-        assert "description cannot be empty" in str(e)
-
-    # Router with invalid strategy type
-    try:
-        print("\nAttempting to initialize SemanticRouter with a non-RoutingStrategy object...")
-        SemanticRouter(routes=[qa_route], strategy="not_a_strategy_object") # type: ignore
-    except TypeError as e:
-        print(f"  Caught expected error: {e}")
-        assert "instance of a RoutingStrategy subclass" in str(e)
-
-    # LLMRoutingStrategy with invalid LLM type
-    try:
-        print("\nAttempting to initialize LLMRoutingStrategy with a non-BaseLLM object...")
-        LLMRoutingStrategy(llm="not_an_llm_object") # type: ignore
-    except TypeError as e:
-        print(f"  Caught expected error: {e}")
-        assert "instance of BaseLLM" in str(e)
-
-    print("\n--- Demonstration Complete ---")
+if __name__ == "__main__":
+    asyncio.run(main())
