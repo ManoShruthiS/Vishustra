@@ -1,23 +1,27 @@
-import logging
+import asyncio
+import numpy as np
+import json
+import re # Only used in example main block, can be removed if not in production
 from abc import ABC, abstractmethod
-from typing import List, Optional, Tuple, Dict, Any, Union
+from typing import List, Dict, Any, Optional, Tuple
+
 from pydantic import BaseModel, Field, ValidationError
 
-logger = logging.getLogger(__name__)
+# --- Framework-level Abstract Base Classes (assumed to exist elsewhere in Vishustra) ---
 
-class EmbeddingModel(ABC):
+class BaseEmbeddingModel(ABC):
     """
-    Abstract Base Class for any embedding model used by Vishustra.
-    Concrete implementations should inherit from this class and provide
-    async and sync methods for text embedding.
+    Abstract base class for an embedding model within Vishustra.
+    Concrete implementations would integrate with various embedding providers
+    (e.g., OpenAI, Cohere, local models).
     """
     @abstractmethod
-    async def aembed(self, texts: List[str]) -> List[List[float]]:
+    async def embed(self, texts: List[str]) -> List[List[float]]:
         """
-        Asynchronously embeds a list of texts into dense vector representations.
+        Embeds a list of texts into vector representations.
 
         Args:
-            texts: A list of strings to be embedded.
+            texts: A list of strings to embed.
 
         Returns:
             A list of lists of floats, where each inner list is the embedding
@@ -25,444 +29,474 @@ class EmbeddingModel(ABC):
         """
         pass
 
-    @abstractmethod
-    def embed(self, texts: List[str]) -> List[List[float]]:
-        """
-        Synchronously embeds a list of texts into dense vector representations.
-
-        Args:
-            texts: A list of strings to be embedded.
-
-        Returns:
-            A list of lists of floats, where each inner list is the embedding
-            vector for the corresponding text.
-        """
-        pass
-
-    @property
-    @abstractmethod
-    def embedding_dimension(self) -> int:
-        """
-        Returns the dimension of the embedding vectors produced by this model.
-        """
-        pass
-
-class VectorStore(ABC):
+class BaseLLMClient(ABC):
     """
-    Abstract Base Class for any vector store used by Vishustra.
-    Concrete implementations should provide methods for adding, querying,
-    and managing vectors, potentially within namespaces.
+    Abstract base class for an LLM client within Vishustra.
+    Concrete implementations would integrate with various LLM providers
+    (e.g., OpenAI, Anthropic, custom local LLMs).
     """
     @abstractmethod
-    async def aadd_vectors(self, vectors: List[List[float]], metadatas: List[Dict[str, Any]], namespace: Optional[str] = None):
+    async def generate(self, prompt: str, **kwargs) -> str:
         """
-        Asynchronously adds vectors with associated metadata to the store.
+        Generates a response from the LLM based on the prompt.
 
         Args:
-            vectors: A list of embedding vectors.
-            metadatas: A list of dictionaries, where each dictionary contains
-                       metadata for the corresponding vector.
-            namespace: An optional string to partition vectors within the store.
-        """
-        pass
-
-    @abstractmethod
-    def add_vectors(self, vectors: List[List[float]], metadatas: List[Dict[str, Any]], namespace: Optional[str] = None):
-        """
-        Synchronously adds vectors with associated metadata to the store.
-
-        Args:
-            vectors: A list of embedding vectors.
-            metadatas: A list of dictionaries, where each dictionary contains
-                       metadata for the corresponding vector.
-            namespace: An optional string to partition vectors within the store.
-        """
-        pass
-
-    @abstractmethod
-    async def aquery_vectors(self, query_vector: List[float], top_k: int = 1, namespace: Optional[str] = None) -> List[Tuple[Dict[str, Any], float]]:
-        """
-        Asynchronously queries the store for the most similar vectors to a given
-        query vector.
-
-        Args:
-            query_vector: The embedding vector for the query.
-            top_k: The number of top similar results to return.
-            namespace: An optional string to limit the query to a specific partition.
+            prompt: The prompt string to send to the LLM.
+            **kwargs: Additional parameters specific to the LLM provider
+                      (e.g., `temperature`, `max_tokens`, `response_format`).
 
         Returns:
-            A list of tuples, where each tuple contains (metadata, similarity_score).
+            The generated response string from the LLM.
         """
         pass
 
-    @abstractmethod
-    def query_vectors(self, query_vector: List[float], top_k: int = 1, namespace: Optional[str] = None) -> List[Tuple[Dict[str, Any], float]]:
-        """
-        Synchronously queries the store for the most similar vectors to a given
-        query vector.
-
-        Args:
-            query_vector: The embedding vector for the query.
-            top_k: The number of top similar results to return.
-            namespace: An optional string to limit the query to a specific partition.
-
-        Returns:
-            A list of tuples, where each tuple contains (metadata, similarity_score).
-        """
-        pass
-
-    @abstractmethod
-    async def adelete_namespace(self, namespace: str):
-        """
-        Asynchronously deletes all vectors within a specific namespace.
-
-        Args:
-            namespace: The namespace to delete.
-        """
-        pass
-
-    @abstractmethod
-    def delete_namespace(self, namespace: str):
-        """
-        Synchronously deletes all vectors within a specific namespace.
-
-        Args:
-            namespace: The namespace to delete.
-        """
-        pass
+# --- Semantic Router Specific Models and Classes ---
 
 class Route(BaseModel):
     """
-    Represents a specific routing target within Vishustra, defined by a name,
-    a description, and a set of example queries that should map to it.
-    """
-    name: str = Field(..., description="A unique identifier for this route.")
-    description: str = Field(..., description="A brief, human-readable description of what this route handles.")
-    examples: List[str] = Field(..., min_length=1, description="A list of example queries or phrases that semantically map to this route.")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Optional arbitrary metadata associated with the route.")
+    Represents a potential routing destination with example queries.
 
-    class Config:
-        frozen = True # Routes are immutable once defined for stability
-
-class SemanticRouter:
+    Attributes:
+        name: A unique identifier for the route (e.g., "customer_service", "payments").
+        description: A brief explanation of what this route handles.
+        examples: A list of example user queries that should map to this route.
     """
-    The SemanticRouter component intelligently routes incoming natural language
-    queries to predefined 'routes' (e.g., specific tools, agents, or chains)
-    based on their semantic similarity.
+    name: str = Field(..., description="Unique name of the route.")
+    description: str = Field(..., description="Brief description of the route's purpose.")
+    examples: List[str] = Field(..., description="List of example queries for this route.")
 
-    It leverages an `EmbeddingModel` to vectorize queries and route examples,
-    and a `VectorStore` to perform efficient similarity searches. This allows
-    for flexible, intent-based routing without explicit keyword matching.
+class RouterDecision(BaseModel):
     """
-    def __init__(self,
-                 embedding_model: EmbeddingModel,
-                 vector_store: VectorStore,
-                 similarity_threshold: float = 0.75,
-                 route_namespace: str = "vishustra-semantic-routes"):
+    The result of a routing decision.
+
+    Attributes:
+        route_name: The name of the chosen route, or 'no_match' if no route was found.
+        confidence: A confidence score (0.0 to 1.0) for the decision.
+        reason: An explanation for why this route was chosen.
+    """
+    route_name: str = Field(..., description="Name of the chosen route or 'no_match'.")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score for the decision.")
+    reason: Optional[str] = Field(None, description="Explanation for the routing decision.")
+
+class BaseSemanticRouter(ABC):
+    """
+    Abstract base class for a semantic router.
+    """
+    @abstractmethod
+    async def route(self, query: str) -> Optional[RouterDecision]:
         """
-        Initializes the SemanticRouter.
+        Determines the most appropriate route for a given user query.
 
         Args:
-            embedding_model: An instance of an `EmbeddingModel` implementation
-                             responsible for creating vector embeddings.
-            vector_store: An instance of a `VectorStore` implementation where
-                          route example embeddings are stored and queried.
-            similarity_threshold: The minimum cosine similarity score required
-                                  for a query to be confidently assigned to a route.
-                                  Queries below this threshold will result in no route.
-            route_namespace: A unique string to identify and isolate route examples
-                             within the `VectorStore`. Useful if the vector store
-                             is shared across multiple components.
+            query: The user's input query.
 
-        Raises:
-            TypeError: If `embedding_model` or `vector_store` are not instances
-                       of their respective abstract base classes.
+        Returns:
+            An optional RouterDecision object, or None if no route could be determined.
         """
-        if not isinstance(embedding_model, EmbeddingModel):
-            raise TypeError("`embedding_model` must be an instance of `EmbeddingModel`.")
-        if not isinstance(vector_store, VectorStore):
-            raise TypeError("`vector_store` must be an instance of `VectorStore`.")
-        if not (0.0 <= similarity_threshold <= 1.0):
-            raise ValueError("`similarity_threshold` must be between 0.0 and 1.0.")
-        if not isinstance(route_namespace, str) or not route_namespace.strip():
-            raise ValueError("`route_namespace` must be a non-empty string.")
+        pass
+
+class LLMSemanticRouter(BaseSemanticRouter):
+    """
+    A semantic router that leverages an embedding model for initial similarity matching
+    and an optional LLM for nuanced decision-making and disambiguation.
+
+    This router maintains a collection of predefined routes, each with example queries.
+    When a new query comes in, it first uses an embedding model to find the most
+    semantically similar routes. If an LLM client is provided, it can then use
+    the LLM to make a more intelligent decision, especially when multiple routes
+    are semantically close or require contextual understanding beyond simple similarity.
+    """
+    _LLM_DECISION_PROMPT = """
+    Given the user query below, select the most appropriate route from the provided options.
+    Each route includes a description and example queries that fall under it.
+    If none of the routes are a good fit, respond with 'no_match'.
+
+    Your response MUST be a JSON object with a 'route' key and a 'reason' key.
+    The 'route' value should be the exact name of one of the available routes or 'no_match'.
+    The 'reason' value should be a brief, concise explanation for your choice.
+
+    User Query: "{query}"
+
+    Available Routes:
+    {route_options_str}
+
+    Please respond in JSON format:
+    {{
+        "route": "route_name_here" | "no_match",
+        "reason": "explanation here"
+    }}
+    """
+
+    def __init__(
+        self,
+        embedding_model: BaseEmbeddingModel,
+        llm_client: Optional[BaseLLMClient] = None,
+        similarity_threshold: float = 0.7,
+        top_k_for_llm: int = 3,
+        llm_supports_json_mode: bool = False
+    ):
+        """
+        Initializes the LLMSemanticRouter.
+
+        Args:
+            embedding_model: An instance of BaseEmbeddingModel for semantic similarity.
+            llm_client: An optional instance of BaseLLMClient for advanced decision-making.
+                        If None, routing relies solely on embedding similarity.
+            similarity_threshold: The minimum cosine similarity score to consider a route
+                                  a potential match based on embedding similarity alone.
+            top_k_for_llm: When using an LLM, the number of top candidate routes (based on
+                           embedding similarity) to present to the LLM for final decision.
+            llm_supports_json_mode: Set to True if the LLM client supports a native JSON
+                                    response format parameter (e.g., OpenAI's 'json_object').
+        """
+        if not isinstance(embedding_model, BaseEmbeddingModel):
+            raise TypeError("embedding_model must be an instance of BaseEmbeddingModel")
+        if llm_client is not None and not isinstance(llm_client, BaseLLMClient):
+            raise TypeError("llm_client must be an instance of BaseLLMClient or None")
 
         self._embedding_model = embedding_model
-        self._vector_store = vector_store
+        self._llm_client = llm_client
         self._similarity_threshold = similarity_threshold
-        self._route_namespace = route_namespace
-        self._registered_routes: Dict[str, Route] = {} # Caches Route objects by name
+        self._top_k_for_llm = top_k_for_llm
+        self._llm_supports_json_mode = llm_supports_json_mode
 
-        logger.info(f"SemanticRouter initialized. Namespace: '{self._route_namespace}', "
-                    f"Similarity Threshold: {self._similarity_threshold:.2f}")
+        # Stores pre-computed embeddings and their associated route names and example texts
+        # Format: [(route_name, example_text), ...]
+        self._all_route_examples_meta: List[Tuple[str, str]] = []
+        # Stores numpy array of all example embeddings for efficient similarity search
+        self._all_example_embeddings: Optional[np.ndarray] = None
+        # Maps route_name to the full Route object for accessing descriptions etc.
+        self._routes_map: Dict[str, Route] = {}
 
-    async def aadd_route(self, route: Route):
+    async def add_routes(self, routes: List[Route]):
         """
-        Asynchronously adds a new `Route` to the router.
-        This involves embedding its example queries and storing them in the
-        configured `VectorStore`. If a route with the same name already exists,
-        it will be overwritten.
+        Adds a list of routes to the router. This method will pre-compute
+        embeddings for all example queries within each route.
 
         Args:
-            route: The `Route` object to add.
-
-        Raises:
-            TypeError: If the provided `route` is not an instance of `Route`.
-            Exception: Propagates exceptions from embedding model or vector store
-                       operations (e.g., API errors, network issues).
+            routes: A list of Route objects to add.
         """
-        if not isinstance(route, Route):
-            raise TypeError("`route` must be an instance of `Route`.")
-        if not route.examples:
-            logger.warning(f"Route '{route.name}' has no examples. It will not be routable.")
-            self._registered_routes[route.name] = route
+        if not routes:
             return
 
-        if route.name in self._registered_routes:
-            logger.warning(f"Route '{route.name}' already exists. Its examples will be updated "
-                           f"and any prior examples for this route might persist if not explicitly cleaned.")
-            # In a real-world scenario, you might want to delete previous vectors for this route
-            # or ensure the vector store supports upsert based on a unique ID.
-            # For simplicity, we add new vectors and rely on subsequent queries finding the latest.
+        new_example_texts: List[str] = []
+        new_example_meta: List[Tuple[str, str]] = [] # (route_name, example_text)
 
-        try:
-            example_embeddings = await self._embedding_model.aembed(route.examples)
-            metadatas = [
-                {"route_name": route.name, "original_example": example_text, "route_metadata": route.metadata}
-                for example_text in route.examples
-            ]
+        for route in routes:
+            if route.name in self._routes_map:
+                print(f"Warning: Route with name '{route.name}' already exists. Overwriting definition.")
+            self._routes_map[route.name] = route
+            
+            for example in route.examples:
+                new_example_texts.append(example)
+                new_example_meta.append((route.name, example))
 
-            await self._vector_store.aadd_vectors(
-                vectors=example_embeddings,
-                metadatas=metadatas,
-                namespace=self._route_namespace
-            )
-            self._registered_routes[route.name] = route
-            logger.info(f"Route '{route.name}' added/updated successfully with {len(route.examples)} examples.")
-        except Exception as e:
-            logger.error(f"Failed to add route '{route.name}': {e}", exc_info=True)
-            raise
-
-    def add_route(self, route: Route):
-        """
-        Synchronously adds a new `Route` to the router.
-        This involves embedding its example queries and storing them in the
-        configured `VectorStore`. If a route with the same name already exists,
-        it will be overwritten.
-
-        Args:
-            route: The `Route` object to add.
-
-        Raises:
-            TypeError: If the provided `route` is not an instance of `Route`.
-            Exception: Propagates exceptions from embedding model or vector store
-                       operations.
-        """
-        if not isinstance(route, Route):
-            raise TypeError("`route` must be an instance of `Route`.")
-        if not route.examples:
-            logger.warning(f"Route '{route.name}' has no examples. It will not be routable.")
-            self._registered_routes[route.name] = route
+        if not new_example_texts:
             return
 
-        if route.name in self._registered_routes:
-            logger.warning(f"Route '{route.name}' already exists. Its examples will be updated "
-                           f"and any prior examples for this route might persist if not explicitly cleaned.")
+        # Embed all new examples in a single call for efficiency
+        new_embeddings = await self._embedding_model.embed(new_example_texts)
+        if not new_embeddings:
+            raise ValueError("Embedding model returned empty embeddings for new routes.")
 
-        try:
-            example_embeddings = self._embedding_model.embed(route.examples)
-            metadatas = [
-                {"route_name": route.name, "original_example": example_text, "route_metadata": route.metadata}
-                for example_text in route.examples
-            ]
+        new_embeddings_np = np.array(new_embeddings)
 
-            self._vector_store.add_vectors(
-                vectors=example_embeddings,
-                metadatas=metadatas,
-                namespace=self._route_namespace
+        # Append new embeddings and metadata
+        if self._all_example_embeddings is None or self._all_example_embeddings.size == 0:
+            self._all_example_embeddings = new_embeddings_np
+        else:
+            self._all_example_embeddings = np.vstack(
+                (self._all_example_embeddings, new_embeddings_np)
             )
-            self._registered_routes[route.name] = route
-            logger.info(f"Route '{route.name}' added/updated successfully with {len(route.examples)} examples.")
-        except Exception as e:
-            logger.error(f"Failed to add route '{route.name}': {e}", exc_info=True)
-            raise
+        self._all_route_examples_meta.extend(new_example_meta)
 
-    async def aroute_query(self, query: str) -> Optional[Tuple[Route, float]]:
+    @staticmethod
+    def _calculate_cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
+        """Calculates cosine similarity between two numpy vectors."""
+        norm_vec1 = np.linalg.norm(vec1)
+        norm_vec2 = np.linalg.norm(vec2)
+        if norm_vec1 == 0 or norm_vec2 == 0:
+            return 0.0 # Handle zero vectors gracefully
+        return np.dot(vec1, vec2) / (norm_vec1 * norm_vec2)
+
+    async def route(self, query: str) -> Optional[RouterDecision]:
         """
-        Asynchronously routes an incoming natural language query to the most
-        semantically similar registered route.
-
-        The query is embedded, and a similarity search is performed against
-        all stored route examples. If the highest similarity score meets or
-        exceeds the `similarity_threshold`, the corresponding `Route` and
-        score are returned. Otherwise, `None` is returned.
+        Determines the most appropriate route for a given user query.
 
         Args:
-            query: The input query string to route.
+            query: The user's input query.
 
         Returns:
-            A tuple of (`Route`, `similarity_score`) if a confident route is found,
-            otherwise `None`.
+            An optional RouterDecision object, or None if no route could be determined.
         """
-        if not query or not query.strip():
-            logger.warning("Attempted to route an empty or whitespace-only query.")
+        if self._all_example_embeddings is None or len(self._all_route_examples_meta) == 0:
+            print("Warning: No routes have been added to the router. Cannot route query.")
             return None
 
-        try:
-            # Embed the query
-            query_embedding = (await self._embedding_model.aembed([query]))[0]
-            if not query_embedding:
-                logger.error("Embedding model returned empty embedding for query, cannot route.")
-                return None
+        query_embedding_list = await self._embedding_model.embed([query])
+        if not query_embedding_list:
+            print("Error: Embedding model returned empty embedding for the query.")
+            return None
+        query_embedding = np.array(query_embedding_list[0])
 
-            # Query the vector store for the top match
-            results = await self._vector_store.aquery_vectors(
-                query_vector=query_embedding,
-                top_k=1,
-                namespace=self._route_namespace
+        # Calculate similarity with all stored example embeddings
+        similarities = [
+            self._calculate_cosine_similarity(query_embedding, ex_emb)
+            for ex_emb in self._all_example_embeddings
+        ]
+        
+        # Get indices of top K most similar *examples*
+        # Use min(len, top_k) to handle cases where there are fewer examples than top_k
+        num_candidates_to_consider = min(len(similarities), self._top_k_for_llm * 2) # Get more examples than routes
+        top_k_example_indices = np.argsort(similarities)[::-1][:num_candidates_to_consider]
+
+        # Aggregate similarities by route name. Keep track of the highest similarity score
+        # for a route and a few top examples for that route.
+        candidate_routes_data: Dict[str, Tuple[float, List[str]]] = {} # {route_name: (max_similarity, [top_examples_text])}
+        
+        for i in top_k_example_indices:
+            route_name, example_text = self._all_route_examples_meta[i]
+            similarity_score = similarities[i]
+
+            current_max_sim, current_examples = candidate_routes_data.get(route_name, (0.0, []))
+
+            if similarity_score > current_max_sim:
+                candidate_routes_data[route_name] = (similarity_score, [example_text]) # Reset examples if new max
+            elif len(current_examples) < 2: # Keep up to 2 examples per route
+                if example_text not in current_examples:
+                    current_examples.append(example_text)
+                    candidate_routes_data[route_name] = (current_max_sim, current_examples)
+
+        # Sort candidate routes by their highest example similarity score for presentation to LLM
+        # and for fallback similarity-only routing
+        sorted_candidates = sorted(candidate_routes_data.items(), key=lambda item: item[1][0], reverse=True)[:self._top_k_for_llm]
+
+        if not sorted_candidates:
+            return None # No candidates found based on similarity
+
+        # --- Decision Making Strategy ---
+        if self._llm_client:
+            return await self._route_with_llm(query, sorted_candidates)
+        else:
+            return self._route_with_similarity_only(sorted_candidates)
+
+    def _route_with_similarity_only(self, sorted_candidates: List[Tuple[str, Tuple[float, List[str]]]]) -> Optional[RouterDecision]:
+        """
+        Routes the query based solely on embedding similarity if no LLM client is available.
+        """
+        if not sorted_candidates:
+            return None
+
+        top_route_name, (top_similarity, top_examples) = sorted_candidates[0]
+
+        if top_similarity >= self._similarity_threshold:
+            return RouterDecision(
+                route_name=top_route_name,
+                confidence=top_similarity,
+                reason=f"Highest embedding similarity ({top_similarity:.2f}) to example '{top_examples[0]}'."
             )
+        else:
+            return None # No route met the similarity threshold
 
-            if not results:
-                logger.debug(f"No semantic routes found in vector store for query: '{query[:100]}...'")
-                return None
+    async def _route_with_llm(self, query: str, sorted_candidates: List[Tuple[str, Tuple[float, List[str]]]]) -> Optional[RouterDecision]:
+        """
+        Routes the query using the LLM for advanced decision-making, considering top semantic candidates.
+        """
+        if not self._llm_client:
+            raise RuntimeError("LLM client not provided for LLM-based routing.")
 
-            # Evaluate the best match
-            most_similar_metadata, similarity = results[0]
-            if similarity >= self._similarity_threshold:
-                route_name = most_similar_metadata.get("route_name")
-                if route_name and route_name in self._registered_routes:
-                    routed_route = self._registered_routes[route_name]
-                    logger.debug(f"Query '{query[:100]}...' confidently routed to '{route_name}' "
-                                 f"with similarity {similarity:.4f} (threshold: {self._similarity_threshold:.2f}).")
-                    return routed_route, similarity
-                else:
-                    logger.warning(f"Vector store returned an unregistered route_name '{route_name}'. "
-                                   f"Similarity: {similarity:.4f}. Route examples might be stale.")
+        route_options_str_parts = []
+        for route_name, (similarity, examples) in sorted_candidates:
+            route_obj = self._routes_map.get(route_name)
+            if not route_obj:
+                continue # This should ideally not happen if data integrity is maintained
+
+            route_options_str_parts.append(f"Route Name: \"{route_name}\" (Similarity Score: {similarity:.2f})")
+            route_options_str_parts.append(f"Description: {route_obj.description}")
+            route_options_str_parts.append(f"Examples: {', '.join(f'\"{ex}\"' for ex in examples)}")
+            route_options_str_parts.append("") # Newline for separation
+
+        route_options_str = "\n".join(route_options_str_parts).strip()
+
+        llm_prompt = self._LLM_DECISION_PROMPT.format(
+            query=query,
+            route_options_str=route_options_str
+        )
+        
+        llm_kwargs = {"temperature": 0.0} # Keep LLM deterministic for routing
+        if self._llm_supports_json_mode:
+            llm_kwargs["response_format"] = {"type": "json_object"}
+
+        try:
+            llm_response_str = await self._llm_client.generate(prompt=llm_prompt, **llm_kwargs)
+            llm_decision_data = json.loads(llm_response_str)
+
+            chosen_route_name = llm_decision_data.get("route")
+            reason = llm_decision_data.get("reason")
+
+            if chosen_route_name and chosen_route_name != "no_match" and chosen_route_name in self._routes_map:
+                # Determine confidence: use the highest similarity score for the chosen route among candidates.
+                # If LLM chooses a route not in top_k_for_llm, we can still use a base confidence.
+                confidence = 0.0
+                for r_name, (sim, _) in sorted_candidates:
+                    if r_name == chosen_route_name:
+                        confidence = sim
+                        break
+                confidence = max(confidence, self._similarity_threshold) # Ensure minimum threshold if LLM chose it.
+
+                return RouterDecision(
+                    route_name=chosen_route_name,
+                    confidence=confidence,
+                    reason=reason or "LLM selected this route based on contextual understanding."
+                )
+            elif chosen_route_name == "no_match":
+                 return RouterDecision(
+                    route_name="no_match",
+                    confidence=0.0, # No match typically implies very low confidence
+                    reason=reason or "LLM determined no suitable route among the options."
+                )
             else:
-                logger.debug(f"Query '{query[:100]}...' did not meet similarity threshold "
-                             f"({self._similarity_threshold:.2f}). Best similarity: {similarity:.4f}.")
-            return None
+                # LLM returned an invalid route name or unexpected format, fallback
+                print(f"Warning: LLM returned an invalid route '{chosen_route_name}' or bad format. Falling back to similarity-only decision.")
+                return self._route_with_similarity_only(sorted_candidates)
 
+        except (json.JSONDecodeError, ValidationError) as e:
+            print(f"Warning: Failed to parse LLM response or validate decision: {e}. Raw response: '{llm_response_str}'. Falling back to similarity-only decision.")
+            return self._route_with_similarity_only(sorted_candidates)
         except Exception as e:
-            logger.error(f"Error during asynchronous query routing for '{query[:100]}...': {e}", exc_info=True)
-            return None
+            print(f"Error during LLM routing: {e}. Falling back to similarity-only decision.")
+            return self._route_with_similarity_only(sorted_candidates)
 
-    def route_query(self, query: str) -> Optional[Tuple[Route, float]]:
-        """
-        Synchronously routes an incoming natural language query to the most
-        semantically similar registered route.
 
-        The query is embedded, and a similarity search is performed against
-        all stored route examples. If the highest similarity score meets or
-        exceeds the `similarity_threshold`, the corresponding `Route` and
-        score are returned. Otherwise, `None` is returned.
+# --- Example Usage (for demonstration purposes) ---
+if __name__ == "__main__":
+    import asyncio
+    
+    # Mock implementations for demonstration purposes
+    class MockEmbeddingModel(BaseEmbeddingModel):
+        async def embed(self, texts: List[str]) -> List[List[float]]:
+            # A deterministic, simple mock embedding for testing similarity
+            embeddings = []
+            for text in texts:
+                char_sum = sum(ord(c) for c in text)
+                # Create a 3-dim vector based on text properties, then normalize
+                vec = [
+                    len(text) * 0.1,
+                    (char_sum % 100) * 0.01,
+                    ((len(text) + char_sum) % 50) * 0.02
+                ]
+                np_vec = np.array(vec)
+                norm = np.linalg.norm(np_vec)
+                embeddings.append((np_vec / (norm if norm != 0 else 1.0)).tolist())
+            return embeddings
 
-        Args:
-            query: The input query string to route.
-
-        Returns:
-            A tuple of (`Route`, `similarity_score`) if a confident route is found,
-            otherwise `None`.
-        """
-        if not query or not query.strip():
-            logger.warning("Attempted to route an empty or whitespace-only query.")
-            return None
-
-        try:
-            # Embed the query
-            query_embedding = (self._embedding_model.embed([query]))[0]
-            if not query_embedding:
-                logger.error("Embedding model returned empty embedding for query, cannot route.")
-                return None
-
-            # Query the vector store for the top match
-            results = self._vector_store.query_vectors(
-                query_vector=query_embedding,
-                top_k=1,
-                namespace=self._route_namespace
-            )
-
-            if not results:
-                logger.debug(f"No semantic routes found in vector store for query: '{query[:100]}...'")
-                return None
-
-            # Evaluate the best match
-            most_similar_metadata, similarity = results[0]
-            if similarity >= self._similarity_threshold:
-                route_name = most_similar_metadata.get("route_name")
-                if route_name and route_name in self._registered_routes:
-                    routed_route = self._registered_routes[route_name]
-                    logger.debug(f"Query '{query[:100]}...' confidently routed to '{route_name}' "
-                                 f"with similarity {similarity:.4f} (threshold: {self._similarity_threshold:.2f}).")
-                    return routed_route, similarity
-                else:
-                    logger.warning(f"Vector store returned an unregistered route_name '{route_name}'. "
-                                   f"Similarity: {similarity:.4f}. Route examples might be stale.")
+    class MockLLMClient(BaseLLMClient):
+        async def generate(self, prompt: str, **kwargs) -> str:
+            print(f"\n--- Mock LLM Call (Truncated Prompt) ---\nPrompt: {prompt[:400]}...") # Truncate long prompts
+            
+            # Simulate LLM decision based on prompt content using simple keyword checks
+            if "refund" in prompt.lower() and "customer service" in prompt.lower():
+                return '{"route": "customer_service", "reason": "Query about refund requires customer service."}'
+            elif "billing" in prompt.lower() and "payment" in prompt.lower():
+                 return '{"route": "payments", "reason": "Query clearly about billing and payments."}'
+            elif "technical issue" in prompt.lower() or "bug" in prompt.lower() or "crashed" in prompt.lower():
+                 return '{"route": "technical_support", "reason": "User is reporting a technical problem."}'
+            elif "product features" in prompt.lower() or "what can it do" in prompt.lower() or "capabilities" in prompt.lower():
+                 return '{"route": "product_info", "reason": "User is asking about product capabilities."}'
+            elif "no_match" in prompt.lower(): # If prompt hints no_match from low similarity
+                return '{"route": "no_match", "reason": "No clear route based on the options provided."}'
             else:
-                logger.debug(f"Query '{query[:100]}...' did not meet similarity threshold "
-                             f"({self._similarity_threshold:.2f}). Best similarity: {similarity:.4f}.")
-            return None
+                # If LLM doesn't have a specific rule, try to pick the highest similarity one from prompt
+                if "Available Routes:" in prompt:
+                    routes_section_match = re.search(r'Available Routes:(.*?)\nPlease respond in JSON format:', prompt, re.DOTALL)
+                    if routes_section_match:
+                        routes_section = routes_section_match.group(1)
+                        first_route_name_match = re.search(r'Route Name: "([^"]+)"', routes_section)
+                        if first_route_name_match:
+                            chosen_route = first_route_name_match.group(1)
+                            return f'{{"route": "{chosen_route}", "reason": "LLM picked the first highly similar candidate from the provided list."}}'
+                return '{"route": "no_match", "reason": "LLM could not confidently determine a route based on ambiguous input."}'
 
-        except Exception as e:
-            logger.error(f"Error during synchronous query routing for '{query[:100]}...': {e}", exc_info=True)
-            return None
 
-    async def aclear_routes(self):
-        """
-        Asynchronously clears all registered routes and their corresponding
-        examples from the `VectorStore` within the configured namespace.
-        Also clears the in-memory cache of registered routes.
+    async def main():
+        embedding_model = MockEmbeddingModel()
+        llm_client = MockLLMClient()
 
-        Raises:
-            Exception: Propagates exceptions from vector store operations.
-        """
-        try:
-            await self._vector_store.adelete_namespace(self._route_namespace)
-            self._registered_routes.clear()
-            logger.info(f"All routes and their examples cleared from namespace '{self._route_namespace}'.")
-        except Exception as e:
-            logger.error(f"Failed to clear routes from namespace '{self._route_namespace}': {e}", exc_info=True)
-            raise
+        # Define some routes for the router
+        routes = [
+            Route(
+                name="customer_service",
+                description="Handles all customer inquiries, complaints, and refunds.",
+                examples=["I need a refund", "My order is delayed", "How do I contact support?", "I have a complaint about my service"]
+            ),
+            Route(
+                name="payments",
+                description="Manages billing, invoices, and payment method updates.",
+                examples=["How do I pay my bill?", "Where can I see my invoices?", "Update payment method", "Payment failed for my subscription"]
+            ),
+            Route(
+                name="product_info",
+                description="Provides information about Vishustra's features, capabilities, and usage.",
+                examples=["What can Vishustra do?", "How to use agent tools?", "Explain LLM orchestration", "Product capabilities and integrations"]
+            ),
+            Route(
+                name="technical_support",
+                description="Assists with technical issues, bugs, and system outages affecting Vishustra.",
+                examples=["I found a bug in the API", "The system is down", "Technical issue with the dashboard", "Error message X when deploying"]
+            )
+        ]
 
-    def clear_routes(self):
-        """
-        Synchronously clears all registered routes and their corresponding
-        examples from the `VectorStore` within the configured namespace.
-        Also clears the in-memory cache of registered routes.
+        # --- Test Similarity-only Router ---
+        print("\n--- Testing Similarity-only Router ---")
+        router_similarity_only = LLMSemanticRouter(
+            embedding_model=embedding_model,
+            similarity_threshold=0.6 # Lower threshold for mock
+        )
+        await router_similarity_only.add_routes(routes)
 
-        Raises:
-            Exception: Propagates exceptions from vector store operations.
-        """
-        try:
-            self._vector_store.delete_namespace(self._route_namespace)
-            self._registered_routes.clear()
-            logger.info(f"All routes and their examples cleared from namespace '{self._route_namespace}'.")
-        except Exception as e:
-            logger.error(f"Failed to clear routes from namespace '{self._route_namespace}': {e}", exc_info=True)
-            raise
+        queries_similarity = [
+            "I want my money back",
+            "Where is my invoice?",
+            "Tell me about the new features",
+            "My account is not loading, it crashed",
+            "Hello, how are you today?", # Should be no_match or low confidence
+            "How do I update my credit card information?"
+        ]
 
-    @property
-    def registered_route_names(self) -> List[str]:
-        """
-        Returns a list of the names of all currently registered routes.
-        """
-        return list(self._registered_routes.keys())
+        for query in queries_similarity:
+            decision = await router_similarity_only.route(query)
+            print(f"\nQuery: '{query}'")
+            if decision:
+                print(f"  Decision (Similarity): Route='{decision.route_name}', Confidence={decision.confidence:.2f}, Reason: {decision.reason}")
+            else:
+                print("  Decision (Similarity): No matching route found.")
 
-    @property
-    def registered_routes(self) -> Dict[str, Route]:
-        """
-        Returns a dictionary mapping route names to their `Route` objects.
-        """
-        return self._registered_routes.copy() # Return a copy to prevent external modification
+        # --- Test LLM-enhanced Router ---
+        print("\n--- Testing LLM-enhanced Router ---")
+        router_with_llm = LLMSemanticRouter(
+            embedding_model=embedding_model,
+            llm_client=llm_client,
+            similarity_threshold=0.6,
+            top_k_for_llm=2, # Present top 2 candidate routes to LLM
+            llm_supports_json_mode=False # Mock LLM doesn't need native JSON mode
+        )
+        await router_with_llm.add_routes(routes) # Add routes again
 
-    def get_route(self, route_name: str) -> Optional[Route]:
-        """
-        Retrieves a registered `Route` object by its name.
+        queries_llm = [
+            "I need to talk to someone about getting a refund for a recent service outage.", # Combines customer_service and tech_support
+            "What's the process for changing my payment details and seeing past bills?", # Combines payments and product_info slightly
+            "My application crashed, what's wrong? I see an error 500.", # Clearly technical
+            "Can Vishustra integrate with custom vector databases and what are its capabilities?", # Product info
+            "What is the current weather in London?", # Definitely no_match
+            "I have a general query about an API, where should I go?" # Could be tech_support or product_info, LLM disambiguates
+        ]
 
-        Args:
-            route_name: The name of the route to retrieve.
-
-        Returns:
-            The `Route` object if found, otherwise `None`.
-        """
-        return self._registered_routes.get(route_name)
+        for query in queries_llm:
+            decision = await router_with_llm.route(query)
+            print(f"\nQuery: '{query}'")
+            if decision:
+                print(f"  Decision (LLM Enhanced): Route='{decision.route_name}', Confidence={decision.confidence:.2f}, Reason: {decision.reason}")
+            else:
+                print("  Decision (LLM Enhanced): No matching route found.")
+    
+    asyncio.run(main())
