@@ -1,0 +1,9 @@
+# Ignore the GhostBot script so people don't know it's a bot!
+ayan.py
+
+# Ignore Python caches
+__pycache__/
+*.pyc
+
+# Ignore environment variables if used later
+.env
