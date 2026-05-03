@@ -1,506 +1,432 @@
 import logging
-from abc import ABC, abstractmethod
-from typing import List, Optional, Tuple
-from dataclasses import dataclass, field
+from typing import Dict, Any, List, Optional, Protocol, Tuple
+import uuid
+import numpy as np
+from pydantic import BaseModel, Field
 
-try:
-    import numpy as np
-    from scipy.spatial.distance import cosine
-    from sentence_transformers import SentenceTransformer
-except ImportError as e:
-    # This block allows the module to be imported even if heavy optional dependencies
-    # are not installed, but functions relying on them will raise a specific error.
-    # In a full framework, dependency management would be more centralized.
-    _missing_deps_error = str(e)
-    np = None
-    cosine = None
-    SentenceTransformer = None
-    logging.warning(
-        f"Missing optional dependencies for semantic_router: {e}. "
-        "Some functionalities may not be available. "
-        "Please install numpy, scipy, and sentence-transformers for full functionality."
-    )
-
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-
-@dataclass(frozen=True)
-class Route:
+class RouterPath(BaseModel):
     """
-    Represents a specific route or scenario within the Vishustra framework.
-
-    Each route defines a particular intent or context that the system can handle,
-    and maps it to a target component responsible for processing that intent.
+    Represents a definable route within the Vishustra framework, encapsulating
+    metadata for semantic routing decisions.
 
     Attributes:
-        name (str): A unique identifier for the route (e.g., "customer_support", "sales_inquiry").
-        description (str): A natural language description of what this route handles.
-                           This description is crucial for the SemanticRouter to
-                           semantically match incoming queries.
-        target_component_id (str): The ID of the Vishustra component (e.g., agent, chain, LLM, tool)
-                                   that should handle this route if matched.
-        metadata (dict): Optional additional key-value pairs associated with the route,
-                         allowing for flexible extensibility (e.g., required permissions,
-                         specific LLM parameters).
+        name (str): A unique identifier for this path.
+        description (str): A detailed natural language description of what this
+                           path handles or represents. This description is used
+                           to generate embeddings for semantic matching.
+        target_id (str): An identifier for the actual backend component (e.g.,
+                         a specific chain ID, tool name, or sub-agent function)
+                         that this path routes to.
+        metadata (Dict[str, Any]): Arbitrary additional metadata associated
+                                   with this path.
+        embedding (Optional[List[float]]): The pre-computed embedding of the
+                                           description. Populated internally.
     """
-    name: str
-    description: str
-    target_component_id: str
-    metadata: dict = field(default_factory=dict)
+    name: str = Field(..., description="Unique name for the routing path.")
+    description: str = Field(..., description="Natural language description for semantic matching.")
+    target_id: str = Field(..., description="Identifier for the actual component this path routes to.")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Arbitrary metadata for the path.")
+    embedding: Optional[List[float]] = Field(None, exclude=True, description="Pre-computed embedding of the description.")
+
+    class Config:
+        """Pydantic configuration for RouterPath."""
+        arbitrary_types_allowed = True
 
 
-class EmbeddingModel(ABC):
+class BaseEmbeddingModel(Protocol):
     """
-    Abstract Base Class for embedding models.
-
-    Defines the standard interface for any model capable of converting text into
-    numerical vector representations (embeddings). This abstraction allows
-    plugging in different embedding providers (e.g., local, OpenAI, Cohere)
-    without modifying the core router logic.
+    Abstract base class for embedding models used by the SemanticRouter.
+    Any concrete embedding model must implement the `embed` method.
     """
-
-    @abstractmethod
-    def embed(self, texts: List[str]) -> List[List[float]]:
+    def embed(self, text: str) -> List[float]:
         """
-        Generates embeddings for a list of text inputs.
+        Generates a numerical vector embedding for the given text.
 
         Args:
-            texts (List[str]): A list of strings to embed.
+            text (str): The input string to embed.
 
         Returns:
-            List[List[float]]: A list of embedding vectors, where each vector is
-                               a list of floats. The order of embeddings corresponds
-                               to the order of input texts.
+            List[float]: A list of floats representing the embedding vector.
         """
-        pass
+        ...
 
-    @abstractmethod
-    def get_embedding_dimension(self) -> int:
+    def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """
-        Returns the expected dimension of the embedding vectors produced by this model.
+        Generates numerical vector embeddings for a batch of texts.
+        Default implementation iterates over `embed`. Implementations can
+        override for efficiency.
+
+        Args:
+            texts (List[str]): A list of input strings to embed.
 
         Returns:
-            int: The dimensionality (number of features) of the embeddings.
+            List[List[float]]: A list of embedding vectors.
         """
-        pass
+        return [self.embed(text) for text in texts]
 
 
-class SentenceTransformerEmbeddingModel(EmbeddingModel):
+class BaseVectorStore(Protocol):
     """
-    Concrete implementation of EmbeddingModel using Sentence Transformers.
-
-    Leverages pre-trained models from the 'sentence-transformers' library to
-    generate high-quality, dense text embeddings locally. This is a common
-    choice for efficient semantic similarity tasks.
+    Abstract base class for vector store implementations used by the SemanticRouter.
+    This defines the interface for storing and querying vector embeddings.
     """
-
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+    def add_vector(self, vector: List[float], document_id: str, metadata: Optional[Dict[str, Any]] = None) -> None:
         """
-        Initializes the SentenceTransformerEmbeddingModel.
+        Adds a single vector with an associated ID and optional metadata to the store.
 
         Args:
-            model_name (str): The name of the Sentence Transformer model to load
-                              from Hugging Face. Defaults to "all-MiniLM-L6-v2"
-                              due to its balance of performance and efficiency.
-        Raises:
-            ImportError: If 'sentence_transformers' or 'numpy' is not installed.
-            Exception: For any issues during model loading.
+            vector (List[float]): The embedding vector to add.
+            document_id (str): A unique identifier for the document associated with the vector.
+            metadata (Optional[Dict[str, Any]]): Arbitrary metadata to store alongside the vector.
         """
-        if SentenceTransformer is None or np is None:
-            raise ImportError(
-                f"SentenceTransformerEmbeddingModel requires 'sentence-transformers' and 'numpy'. "
-                f"Please install them via 'pip install sentence-transformers numpy'. "
-                f"Original error: {_missing_deps_error}"
-            )
-        try:
-            logger.info(f"Loading SentenceTransformer model: {model_name}...")
-            self._model = SentenceTransformer(model_name)
-            self._embedding_dimension = self._model.get_sentence_embedding_dimension()
-            logger.info(f"SentenceTransformer model '{model_name}' loaded successfully. "
-                        f"Embedding dimension: {self._embedding_dimension}")
-        except Exception as e:
-            logger.error(f"Failed to load SentenceTransformer model '{model_name}': {e}")
-            raise
+        ...
 
-    def embed(self, texts: List[str]) -> List[List[float]]:
+    def search(self, query_vector: List[float], k: int = 1) -> List[Tuple[str, float, Dict[str, Any]]]:
         """
-        Generates embeddings for a list of text inputs using the loaded model.
+        Performs a similarity search against the stored vectors.
 
         Args:
-            texts (List[str]): A list of strings to embed.
+            query_vector (List[float]): The vector to search for similar items.
+            k (int): The number of top similar results to return.
 
         Returns:
-            List[List[float]]: A list of embedding vectors. Returns an empty list
-                               if the input texts list is empty.
+            List[Tuple[str, float, Dict[str, Any]]]: A list of tuples, where each tuple contains
+            (document_id, similarity_score, metadata). Results are ordered by similarity score (highest first).
         """
-        if not texts:
-            return []
-        embeddings = self._model.encode(texts, convert_to_numpy=True)
-        return embeddings.tolist()
+        ...
 
-    def get_embedding_dimension(self) -> int:
+    def get_by_id(self, document_id: str) -> Optional[Tuple[List[float], Dict[str, Any]]]:
         """
-        Returns the dimension of the embedding vectors produced by this model.
-        """
-        return self._embedding_dimension
-
-
-class VectorStore(ABC):
-    """
-    Abstract Base Class for a vector store.
-
-    Defines the standard interface for any component capable of efficiently
-    storing and searching vector embeddings. This allows for interchangeable
-    backend vector databases (e.g., FAISS, Qdrant, Milvus, ChromaDB).
-    """
-
-    @abstractmethod
-    def add_vectors(self, vectors: List[List[float]], metadata: List[dict]):
-        """
-        Adds vectors and their associated metadata to the store.
+        Retrieves a vector and its metadata by its document_id.
 
         Args:
-            vectors (List[List[float]]): A list of embedding vectors to add.
-            metadata (List[dict]): A list of dictionaries, where each dictionary
-                                   corresponds to the metadata of the respective vector.
-                                   The order must match 'vectors'.
-        """
-        pass
-
-    @abstractmethod
-    def similarity_search(self, query_vector: List[float], k: int = 1) -> List[Tuple[dict, float]]:
-        """
-        Performs a similarity search to find the top 'k' most similar vectors.
-
-        Args:
-            query_vector (List[float]): The embedding vector of the query to search for.
-            k (int): The number of top similar results to retrieve.
+            document_id (str): The ID of the document to retrieve.
 
         Returns:
-            List[Tuple[dict, float]]: A list of tuples, where each tuple contains
-                                      the metadata of a matched vector and its
-                                      similarity score (e.g., cosine similarity).
-                                      Higher score indicates greater similarity.
-                                      The list is sorted by similarity in descending order.
+            Optional[Tuple[List[float], Dict[str, Any]]]: A tuple of (vector, metadata) if found, else None.
         """
-        pass
+        ...
 
 
-class InMemoryVectorStore(VectorStore):
+class InMemoryVectorStore:
     """
-    A lightweight, in-memory vector store implementation.
-
-    This store is suitable for development, testing, or scenarios with a small
-    number of routes where persistence and high-scale performance are not critical.
-    It uses NumPy for vector operations and SciPy for cosine similarity calculation.
-
-    For production environments with many routes or high query loads, a dedicated
-    vector database (e.g., FAISS, Qdrant, Milvus) is strongly recommended
-    due to its optimized indexing and search capabilities.
+    A simple in-memory implementation of a vector store for demonstration
+    and testing purposes. Uses cosine similarity for search.
     """
-
     def __init__(self):
-        """Initializes the InMemoryVectorStore."""
-        if np is None or cosine is None:
-            raise ImportError(
-                f"InMemoryVectorStore requires 'numpy' and 'scipy'. "
-                f"Please install them via 'pip install numpy scipy'. "
-                f"Original error: {_missing_deps_error}"
-            )
-        self._vectors: List[np.ndarray] = []
-        self._metadata: List[dict] = []
-        logger.info("InMemoryVectorStore initialized.")
+        self._vectors: Dict[str, Tuple[np.ndarray, Dict[str, Any]]] = {}
 
-    def add_vectors(self, vectors: List[List[float]], metadata: List[dict]):
-        """
-        Adds vectors and their associated metadata to the store.
+    @staticmethod
+    def _cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
+        """Computes the cosine similarity between two vectors."""
+        dot_product = np.dot(vec1, vec2)
+        norm_a = np.linalg.norm(vec1)
+        norm_b = np.linalg.norm(vec2)
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return dot_product / (norm_a * norm_b)
 
-        Args:
-            vectors (List[List[float]]): A list of embedding vectors to add.
-            metadata (List[dict]): A list of dictionaries, where each dictionary
-                                   corresponds to the metadata of the respective vector.
-        Raises:
-            ValueError: If the number of vectors and metadata entries do not match.
-        """
-        if len(vectors) != len(metadata):
-            raise ValueError("Number of vectors must match the number of metadata entries.")
+    def add_vector(self, vector: List[float], document_id: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """Adds a vector to the in-memory store."""
+        if document_id in self._vectors:
+            logger.warning(f"Vector with ID '{document_id}' already exists. Overwriting.")
+        self._vectors[document_id] = (np.array(vector, dtype=np.float32), metadata if metadata is not None else {})
+        logger.debug(f"Added vector with ID: {document_id}")
 
-        for vec, meta in zip(vectors, metadata):
-            self._vectors.append(np.array(vec, dtype=np.float32))
-            self._metadata.append(meta)
-        logger.debug(f"Added {len(vectors)} vectors to store. Total vectors: {len(self._vectors)}")
-
-    def similarity_search(self, query_vector: List[float], k: int = 1) -> List[Tuple[dict, float]]:
-        """
-        Performs a similarity search to find the top 'k' most similar vectors.
-
-        Calculates cosine similarity between the query vector and all stored vectors.
-        Cosine similarity ranges from -1 (opposite) to 1 (identical). Higher scores
-        indicate greater similarity.
-
-        Args:
-            query_vector (List[float]): The embedding vector of the query.
-            k (int): The number of top similar results to retrieve.
-
-        Returns:
-            List[Tuple[dict, float]]: A list of tuples (metadata, similarity_score).
-                                      Returns an empty list if the store is empty.
-        """
+    def search(self, query_vector: List[float], k: int = 1) -> List[Tuple[str, float, Dict[str, Any]]]:
+        """Performs a cosine similarity search."""
+        query_vec_np = np.array(query_vector, dtype=np.float32)
         if not self._vectors:
             return []
 
-        query_vec_np = np.array(query_vector, dtype=np.float32)
         similarities = []
+        for doc_id, (vec, meta) in self._vectors.items():
+            score = self._cosine_similarity(query_vec_np, vec)
+            similarities.append((doc_id, score, meta))
 
-        for i, stored_vec in enumerate(self._vectors):
-            try:
-                # Cosine distance returns 0 for identical vectors, 1 for orthogonal.
-                # Cosine similarity is 1 - cosine distance.
-                similarity = 1 - cosine(query_vec_np, stored_vec)
-                similarities.append((self._metadata[i], float(similarity))) # Ensure float for JSON serialization if needed
-            except ValueError as e:
-                logger.error(f"Error calculating similarity for vector {i}: {e}. Skipping this vector.")
-                continue
-
-        # Sort by similarity in descending order
+        # Sort by similarity score in descending order
         similarities.sort(key=lambda x: x[1], reverse=True)
-
+        logger.debug(f"Search performed. Top {k} results found.")
         return similarities[:k]
+
+    def get_by_id(self, document_id: str) -> Optional[Tuple[List[float], Dict[str, Any]]]:
+        """Retrieves a vector and its metadata by its document_id."""
+        item = self._vectors.get(document_id)
+        if item:
+            return item[0].tolist(), item[1]
+        return None
+
+    def __len__(self) -> int:
+        """Returns the number of vectors currently stored."""
+        return len(self._vectors)
+
+
+class MockEmbeddingModel:
+    """
+    A mock embedding model for testing purposes. Generates deterministic
+    but non-meaningful embeddings.
+    """
+    def __init__(self, embed_dim: int = 1536):
+        self.embed_dim = embed_dim
+        logger.warning("Using MockEmbeddingModel. Embeddings are not semantically meaningful.")
+
+    def embed(self, text: str) -> List[float]:
+        """Generates a pseudo-random embedding based on the hash of the text."""
+        # A simple way to get a deterministic but different vector for each unique text
+        seed = sum(ord(c) for c in text)
+        rng = np.random.default_rng(seed)
+        return rng.rand(self.embed_dim).tolist()
+
+    def embed_batch(self, texts: List[str]) -> List[List[float]]:
+        """Generates embeddings for a batch of texts."""
+        return [self.embed(text) for text in texts]
 
 
 class SemanticRouter:
     """
     The SemanticRouter intelligently dispatches incoming queries to appropriate
-    Vishustra components based on the semantic meaning of the query.
+    backend components (chains, tools, agents) based on semantic similarity.
 
-    It operates by embedding user queries and a predefined set of route descriptions.
-    It then uses a vector store to find the semantically closest route, enabling
-    highly modular and dynamic orchestration of LLM applications without
-    relying on rigid keyword matching or complex rule engines.
+    It uses an embedding model to vectorize both the incoming query and
+    pre-registered route descriptions, then performs a vector similarity search
+    to find the best matching route(s).
+
+    Args:
+        embedding_model (BaseEmbeddingModel): An instance of a class implementing
+                                              BaseEmbeddingModel, responsible for
+                                              generating text embeddings.
+        vector_store (BaseVectorStore, optional): An instance of a class implementing
+                                                  BaseVectorStore. Defaults to
+                                                  `InMemoryVectorStore`.
+        threshold (float, optional): A minimum similarity score required for a path
+                                     to be considered a valid match. Defaults to 0.7.
     """
-
     def __init__(
         self,
-        routes: List[Route],
-        embedding_model: Optional[EmbeddingModel] = None,
-        vector_store: Optional[VectorStore] = None,
-        similarity_threshold: float = 0.75
+        embedding_model: BaseEmbeddingModel,
+        vector_store: Optional[BaseVectorStore] = None,
+        threshold: float = 0.7,
     ):
+        self.embedding_model = embedding_model
+        self.vector_store = vector_store if vector_store is not None else InMemoryVectorStore()
+        self.threshold = threshold
+        self._registered_paths: Dict[str, RouterPath] = {}
+        logger.info(f"SemanticRouter initialized with threshold={self.threshold}")
+
+    def _embed_text(self, text: str) -> List[float]:
+        """Internal helper to embed text using the configured embedding model."""
+        try:
+            return self.embedding_model.embed(text)
+        except Exception as e:
+            logger.error(f"Failed to embed text '{text[:50]}...': {e}")
+            raise
+
+    def add_path(self, path: RouterPath) -> None:
         """
-        Initializes the SemanticRouter.
+        Registers a new routing path with the router.
+
+        The path's description will be embedded and stored in the vector store
+        for future semantic matching.
 
         Args:
-            routes (List[Route]): A list of predefined Route objects that the
-                                  router can dispatch to. Each route defines an
-                                  intent and its corresponding handler.
-            embedding_model (Optional[EmbeddingModel]): The embedding model to use
-                                                        for converting text to vectors.
-                                                        If None, defaults to
-                                                        SentenceTransformerEmbeddingModel
-                                                        ("all-MiniLM-L6-v2").
-            vector_store (Optional[VectorStore]): The vector store to use for
-                                                  storing and searching route embeddings.
-                                                  If None, defaults to InMemoryVectorStore.
-            similarity_threshold (float): The minimum cosine similarity score required
-                                          for a route to be considered a match.
-                                          Scores range from -1 (opposite) to 1 (identical).
-                                          A higher threshold means stricter matching.
-                                          Defaults to 0.75.
+            path (RouterPath): An instance of RouterPath containing the path's
+                               name, description, and target_id.
+
         Raises:
-            ValueError: If an empty list of routes is provided.
-            ImportError: If required dependencies for default models are missing.
+            ValueError: If a path with the same name already exists.
         """
-        if not routes:
-            raise ValueError("SemanticRouter must be initialized with at least one route.")
+        if path.name in self._registered_paths:
+            raise ValueError(f"Path with name '{path.name}' already exists.")
 
-        self._embedding_model = embedding_model or SentenceTransformerEmbeddingModel()
-        self._vector_store = vector_store or InMemoryVectorStore()
+        logger.debug(f"Adding path '{path.name}' with description: '{path.description}'")
+        embedding = self._embed_text(path.description)
+        path.embedding = embedding  # Store embedding on the path object too
+        self.vector_store.add_vector(
+            vector=embedding,
+            document_id=path.name,
+            metadata={
+                "target_id": path.target_id,
+                "description": path.description,
+                **path.metadata
+            }
+        )
+        self._registered_paths[path.name] = path
+        logger.info(f"Path '{path.name}' successfully added and embedded.")
 
-        if not (0 <= similarity_threshold <= 1):
-            logger.warning(f"Similarity threshold {similarity_threshold} is outside "
-                           "the typical range [0, 1] for cosine similarity. "
-                           "Values outside this range might lead to unexpected behavior.")
-        self._similarity_threshold = similarity_threshold
-
-        # Store routes in a map for quick lookup by name after a match
-        self._routes_map: dict[str, Route] = {route.name: route for route in routes}
-
-        logger.info(f"SemanticRouter initializing with {len(routes)} routes.")
-        self._load_routes(routes)
-        logger.info(f"SemanticRouter ready. Default similarity threshold: {similarity_threshold}")
-
-    def _load_routes(self, routes: List[Route]):
+    def route(self, query: str, k: int = 1) -> List[Tuple[RouterPath, float]]:
         """
-        Internal method to embed route descriptions and add them to the vector store.
-        """
-        descriptions = [route.description for route in routes]
-        route_names = [route.name for route in routes]
+        Routes an incoming query to one or more best-matching paths.
 
-        if not descriptions:
-            logger.warning("No route descriptions to embed.")
-            return
-
-        logger.debug(f"Embedding {len(descriptions)} route descriptions...")
-        embeddings = self._embedding_model.embed(descriptions)
-        logger.debug("Route descriptions embedded.")
-
-        # Prepare metadata for the vector store search results
-        metadata = [{"route_name": name} for name in route_names]
-        self._vector_store.add_vectors(embeddings, metadata)
-        logger.info(f"Added {len(embeddings)} route embeddings to vector store.")
-
-    def route(self, query: str) -> Optional[Route]:
-        """
-        Routes an incoming query to the most semantically similar predefined route.
-
-        This method first embeds the query, then performs a similarity search
-        against all stored route descriptions. If a route is found with a
-        similarity score above the configured threshold, that route is returned.
+        The query is embedded, and a similarity search is performed against
+        the descriptions of registered paths. Paths with a similarity score
+        above the configured threshold are returned.
 
         Args:
-            query (str): The user's input query or an internal prompt that needs
-                         to be routed to a specific Vishustra component.
+            query (str): The natural language query to route.
+            k (int): The maximum number of top matching paths to return.
 
         Returns:
-            Optional[Route]: The matched Route object if a sufficiently similar
-                             route is found (i.e., above `similarity_threshold`),
-                             otherwise None.
+            List[Tuple[RouterPath, float]]: A list of tuples, where each tuple
+            contains the matched RouterPath object and its similarity score
+            with the query. The list is sorted by score in descending order.
+            Returns an empty list if no suitable paths are found above the threshold.
         """
-        if not query or not query.strip():
-            logger.warning("Received an empty or whitespace-only query, cannot route.")
-            return None
+        if not self._registered_paths:
+            logger.warning("No paths registered in the SemanticRouter. Returning empty list.")
+            return []
 
-        logger.debug(f"Attempting to route query: '{query[:75]}{'...' if len(query) > 75 else ''}'")
-        try:
-            query_embedding = self._embedding_model.embed([query])[0]
-        except Exception as e:
-            logger.error(f"Failed to embed query '{query[:50]}...': {e}")
-            return None
+        query_embedding = self._embed_text(query)
+        results = self.vector_store.search(query_embedding, k=k)
 
-        search_results = self._vector_store.similarity_search(query_embedding, k=1)
-
-        if not search_results:
-            logger.info("No routes found in vector store to compare against.")
-            return None
-
-        matched_metadata, similarity = search_results[0]
-        matched_route_name = matched_metadata.get("route_name")
-
-        if matched_route_name is None:
-            logger.error("Vector store returned a match without 'route_name' in metadata. Skipping.")
-            return None
-
-        if similarity >= self._similarity_threshold:
-            matched_route = self._routes_map.get(matched_route_name)
-            if matched_route:
-                logger.info(
-                    f"Query matched route '{matched_route.name}' "
-                    f"with similarity {similarity:.4f} (threshold: {self._similarity_threshold:.2f}). "
-                    f"Target component: '{matched_route.target_component_id}'"
-                )
-                return matched_route
+        matched_paths: List[Tuple[RouterPath, float]] = []
+        for doc_id, score, metadata in results:
+            if score >= self.threshold:
+                # Retrieve the full RouterPath object from our internal registry
+                # This ensures we return the Pydantic object with all its original fields.
+                original_path = self._registered_paths.get(doc_id)
+                if original_path:
+                    # Create a copy or update the score if needed, but for returning, original is fine
+                    matched_paths.append((original_path, score))
+                else:
+                    logger.warning(f"Vector store returned doc_id '{doc_id}' but it's not in registered paths.")
             else:
-                logger.error(f"Matched route name '{matched_route_name}' not found in internal routes map. "
-                             "This indicates an inconsistency.")
-                return None
+                logger.debug(f"Path '{doc_id}' scored {score:.4f} but is below threshold {self.threshold:.4f}.")
+
+        # Ensure results are sorted by score (vector store should do this, but defensive check)
+        matched_paths.sort(key=lambda x: x[1], reverse=True)
+        
+        if matched_paths:
+            logger.info(f"Query '{query[:50]}...' routed to: {[(p.name, f'{s:.2f}') for p, s in matched_paths]}")
         else:
-            logger.info(
-                f"No route found above similarity threshold {self._similarity_threshold:.2f}. "
-                f"Best match was '{matched_route_name}' with similarity {similarity:.4f}."
-            )
-            return None
+            logger.info(f"Query '{query[:50]}...' did not match any path above threshold {self.threshold}.")
 
+        return matched_paths
 
+    def get_path_by_name(self, name: str) -> Optional[RouterPath]:
+        """
+        Retrieves a registered path by its unique name.
+
+        Args:
+            name (str): The name of the path to retrieve.
+
+        Returns:
+            Optional[RouterPath]: The RouterPath object if found, otherwise None.
+        """
+        return self._registered_paths.get(name)
+
+    def list_paths(self) -> List[RouterPath]:
+        """
+        Returns a list of all currently registered RouterPath objects.
+
+        Returns:
+            List[RouterPath]: A list of all registered paths.
+        """
+        return list(self._registered_paths.values())
+
+    def __len__(self) -> int:
+        """Returns the number of registered paths."""
+        return len(self._registered_paths)
+
+# Example Usage (typically kept in a separate examples/tests folder, but included here for demonstration)
 if __name__ == "__main__":
-    # Example Usage for SemanticRouter
-    try:
-        # Define a set of routes that Vishustra can handle
-        example_routes = [
-            Route(
-                name="customer_support",
-                description="Answer questions about product features, technical issues, troubleshooting, bugs.",
-                target_component_id="support_agent"
-            ),
-            Route(
-                name="sales_inquiry",
-                description="Handle questions about pricing, subscriptions, different plans, purchasing, upgrades.",
-                target_component_id="sales_pipeline_tool"
-            ),
-            Route(
-                name="documentation_search",
-                description="Find information in our internal knowledge base, user manuals, or official documentation.",
-                target_component_id="docs_retriever"
-            ),
-            Route(
-                name="general_chat",
-                description="Engage in general conversation, small talk, chit-chat, or off-topic discussions.",
-                target_component_id="chat_llm"
-            ),
-            Route(
-                name="refund_request",
-                description="Process requests for refunds, cancellations, billing adjustments, or account closure.",
-                target_component_id="billing_system_tool"
-            ),
-            Route(
-                name="api_documentation",
-                description="Provide details, examples, or usage guides for our API endpoints and SDKs.",
-                target_component_id="api_doc_agent"
-            ),
-        ]
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
+    # Set the SemanticRouter's logger to DEBUG for more detailed output during execution
+    logging.getLogger(__name__).setLevel(logging.DEBUG)
 
-        # Initialize the router.
-        # For a real application, you might inject specific `EmbeddingModel`
-        # and `VectorStore` instances (e.g., OpenAI embeddings with Qdrant).
-        # We'll use the defaults here for simplicity (SentenceTransformer + InMemory).
-        router = SemanticRouter(routes=example_routes, similarity_threshold=0.7)
+    print("--- Initializing Semantic Router ---")
+    # 1. Initialize Components
+    mock_embedder = MockEmbeddingModel(embed_dim=768) # Using a common embedding dimension
+    in_memory_vec_store = InMemoryVectorStore()
+    
+    # Initialize the router with a default threshold
+    router = SemanticRouter(
+        embedding_model=mock_embedder,
+        vector_store=in_memory_vec_store,
+        threshold=0.6 # A moderately permissive threshold for mock embeddings
+    )
 
-        test_queries = [
-            "What's the cost of the enterprise plan?",                      # -> sales_inquiry
-            "My application is crashing when I open it, help!",             # -> customer_support
-            "Can I get a refund for my last month's subscription?",        # -> refund_request
-            "Tell me about the weather today.",                             # -> general_chat (or None)
-            "Where can I find the API reference?",                          # -> api_documentation
-            "How do I integrate with your platform using Python?",          # -> api_documentation
-            "I need to cancel my annual membership.",                       # -> refund_request
-            "What features does the standard package include?",             # -> sales_inquiry
-            "How to troubleshoot network issues?",                          # -> customer_support
-            "Where is the guide for getting started?",                      # -> documentation_search
-            "Hello, how are you?",                                          # -> general_chat
-            "I want to know the specifications of product X.",              # -> customer_support
-            "What is the average rainfall in Seattle in October?"           # -> No suitable route
-        ]
+    # 2. Define and Add Router Paths
+    print("\n--- Registering Router Paths ---")
+    path_qa = RouterPath(
+        name="documentation_qa",
+        description="Handles questions about the Vishustra framework's documentation, features, and usage.",
+        target_id="vishustra_docs_chain",
+        metadata={"category": "support", "model_context": "docs_qa_model"}
+    )
+    path_code_gen = RouterPath(
+        name="code_generation",
+        description="Generates Python code snippets or functions based on user requests, especially for Vishustra components.",
+        target_id="vishustra_code_generator_tool",
+        metadata={"category": "development", "language": "python"}
+    )
+    path_sales = RouterPath(
+        name="sales_inquiry",
+        description="Routes queries related to product pricing, subscriptions, licensing, or commercial inquiries.",
+        target_id="sales_agent_handoff_chain",
+        metadata={"category": "business", "contact_info": "sales@vishustra.com"}
+    )
+    path_bug_report = RouterPath(
+        name="bug_report",
+        description="Collects and processes information about bugs, errors, or unexpected behavior in the framework.",
+        target_id="issue_tracker_tool",
+        metadata={"category": "support", "priority_level": "medium"}
+    )
+    path_greetings = RouterPath(
+        name="general_greeting",
+        description="Handles basic greetings, farewells, and pleasantries.",
+        target_id="greeting_response_chain",
+        metadata={"category": "conversational"}
+    )
 
-        print("\n--- Semantic Router Test Cases ---")
-        for query in test_queries:
-            print(f"\nQuery: '{query}'")
-            matched_route = router.route(query)
-            if matched_route:
-                print(f"  -> Matched Route: '{matched_route.name}'")
-                print(f"     Target Component: '{matched_route.target_component_id}'")
-                # print(f"     Route Description: '{matched_route.description}'")
-            else:
-                print("  -> No suitable route found above the similarity threshold.")
+    router.add_path(path_qa)
+    router.add_path(path_code_gen)
+    router.add_path(path_sales)
+    router.add_path(path_bug_report)
+    router.add_path(path_greetings)
 
-        # Test with an empty query
-        print("\n--- Testing with empty query ---")
-        matched_route = router.route("   ")
-        if matched_route:
-            print(f"Empty query -> Matched: '{matched_route.name}' (unexpected, should be None)")
+    print(f"\nRouter has {len(router)} paths registered.")
+    print("Currently registered paths:")
+    for p in router.list_paths():
+        print(f"  - '{p.name}': '{p.description[:70]}...'")
+
+    # 3. Route Incoming Queries
+    print("\n--- Routing Incoming Queries ---")
+
+    queries = [
+        "How do I use the memory buffer component in Vishustra?",
+        "Write a Python function to integrate with a new LLM provider.",
+        "What are the pricing plans for the enterprise version?",
+        "I found a critical bug with the agent's tool execution.",
+        "Hello, how are you today?",
+        "Tell me about the history of artificial intelligence.", # This should not match well with our paths
+        "I need help debugging my agent configuration.",
+    ]
+
+    for i, query in enumerate(queries):
+        print(f"\nQuery {i+1}: '{query}'")
+        matched_paths = router.route(query, k=2) # Get top 2 matches
+
+        if matched_paths:
+            for j, (path, score) in enumerate(matched_paths):
+                print(f"  Match {j+1}: Path='{path.name}', Score={score:.4f}, Target='{path.target_id}', Metadata={path.metadata}")
         else:
-            print("Empty query -> No match (as expected).")
+            print("  No suitable path found above the threshold.")
 
-        # Test with no routes (should raise ValueError during initialization)
-        print("\n--- Testing router initialization with no routes (expected ValueError) ---")
-        try:
-            _ = SemanticRouter(routes=[])
-        except ValueError as e:
-            print(f"Caught expected error: {e}")
-        except Exception as e:
-            print(f"Caught unexpected error type: {type(e).__name__}: {e}")
+    # Demonstrate retrieving a path by name
+    print("\n--- Demonstrating path retrieval by name ---")
+    qa_path_retrieved = router.get_path_by_name("documentation_qa")
+    if qa_path_retrieved:
+        print(f"Successfully retrieved path by name 'documentation_qa': {qa_path_retrieved.description}")
+    else:
+        print("Failed to retrieve path 'documentation_qa' by name.")
 
-    except ImportError as e:
-        print(f"\nERROR: Could not run example due to missing dependencies: {e}")
-        print("Please install required libraries: pip install numpy scipy sentence-transformers")
+    # Demonstrate error handling for adding duplicate path
+    print("\n--- Demonstrating error for duplicate path addition ---")
+    try:
+        router.add_path(RouterPath(name="documentation_qa", description="Another doc path description.", target_id="dummy_chain"))
+    except ValueError as e:
+        print(f"Caught expected error: {e}")
     except Exception as e:
-        print(f"\nAn unexpected error occurred during example execution: {type(e).__name__}: {e}")
+        print(f"An unexpected error occurred: {e}")
