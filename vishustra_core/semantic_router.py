@@ -1,425 +1,376 @@
-import asyncio
+import json
 import logging
-from abc import ABC, abstractmethod
-from typing import List, Optional, Tuple, Any
+from typing import List, Optional, Dict, Any, Type
+import asyncio # Used only for example __main__ block
 
-import numpy as np
+from pydantic import BaseModel, Field, ValidationError
 
-# Configure logging for the module
+# Assume these are standard imports within the Vishustra framework
+# vishustra.llm_clients: Module for interacting with various LLM providers
+# vishustra.core.errors: Custom error classes for the framework
+# vishustra.core.prompts: Utilities for managing and formatting prompts
+
+# Placeholder imports for self-contained example.
+# In a real Vishustra setup, these would be actual framework components.
+class BaseLLMClient:
+    """Abstract base class for all LLM clients in Vishustra."""
+    async def generate(self, prompt: str, **kwargs) -> str:
+        raise NotImplementedError("LLM client must implement the 'generate' method.")
+
+class RoutingError(Exception):
+    """Custom exception for errors occurring during semantic routing."""
+    pass
+
+class InvalidRouteConfigurationError(Exception):
+    """Custom exception for invalid configuration of routes."""
+    pass
+
+class PromptTemplate(BaseModel):
+    """Simple prompt template model."""
+    template: str
+    
+    def format(self, **kwargs) -> str:
+        """Formats the template string with provided keyword arguments."""
+        return self.template.format(**kwargs)
+
+# End Placeholder imports
+
 logger = logging.getLogger(__name__)
-# By default, handlers are not set. The user of the library would configure it.
-# We'll set a NullHandler to prevent "No handlers could be found for logger" messages.
-logger.addHandler(logging.NullHandler())
 
-
-class EmbeddingModel(ABC):
+class Route(BaseModel):
     """
-    Abstract Base Class for embedding models.
-
-    Concrete implementations should provide methods to generate vector embeddings
-    for single texts and batches of texts. These embeddings are crucial for
-    calculating semantic similarity.
+    Represents a potential processing route or destination within the Vishustra framework.
+    Each route is defined by a unique name, a detailed description, and optional metadata.
     """
+    name: str = Field(..., description="A unique identifier for the route.")
+    description: str = Field(..., description="A detailed natural language description of what this route handles or represents.")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Arbitrary key-value pairs associated with the route, e.g., target service, required parameters.")
 
-    @abstractmethod
-    async def embed(self, text: str) -> List[float]:
-        """
-        Asynchronously generates a numerical vector embedding for a single text string.
-
-        Args:
-            text: The input text to be embedded.
-
-        Returns:
-            A list of floats representing the embedding vector.
-        """
-        pass
-
-    @abstractmethod
-    async def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        """
-        Asynchronously generates numerical vector embeddings for a batch of text strings.
-
-        Args:
-            texts: A list of input texts to be embedded.
-
-        Returns:
-            A list of lists of floats, where each inner list is an embedding vector
-            corresponding to the input text at the same index.
-        """
-        pass
-
-
-class Route:
+class RouteDecision(BaseModel):
     """
-    Represents a potential routing destination within the Vishustra framework.
-
-    Each route defines a logical path, an explicit target identifier, and
-    a set of example phrases that semantically define when this route should be taken.
+    The outcome of a semantic routing operation, indicating the chosen route
+    and the reasoning behind the decision.
     """
-
-    def __init__(self, name: str, target: str, examples: List[str], description: Optional[str] = None):
-        """
-        Initializes a new Route.
-
-        Args:
-            name: A unique, human-readable name for the route (e.g., "summarize_document").
-            target: An identifier pointing to the actual component to be invoked
-                    when this route is matched (e.g., "llm_chain:summarizer", "agent:customer_support").
-            examples: A list of natural language phrases that exemplify queries
-                      or prompts that should activate this route. These are used
-                      to build the semantic index.
-            description: An optional longer description of what this route does.
-        """
-        if not name or not target:
-            raise ValueError("Route 'name' and 'target' cannot be empty.")
-        if not examples:
-            logger.warning(f"Route '{name}' has no examples. It will never be matched by the SemanticRouter.")
-
-        self.name = name
-        self.target = target
-        self.examples = examples
-        self.description = description
-
-    def __repr__(self):
-        return f"Route(name='{self.name}', target='{self.target}')"
-
-
-class RouteMatch:
-    """
-    Represents a successful match found by the SemanticRouter.
-
-    Contains the matched Route, the similarity score, and the specific example
-    from the route that yielded the highest score.
-    """
-
-    def __init__(self, route: Route, score: float, matched_example: Optional[str] = None):
-        """
-        Initializes a RouteMatch.
-
-        Args:
-            route: The Route object that was matched.
-            score: The similarity score (e.g., cosine similarity) of the match.
-            matched_example: The specific example phrase from the route that had
-                             the highest similarity to the input query.
-        """
-        self.route = route
-        self.score = score
-        self.matched_example = matched_example
-
-    def __repr__(self):
-        return (
-            f"RouteMatch(route_name='{self.route.name}', target='{self.route.target}', "
-            f"score={self.score:.4f}, example='{self.matched_example}')"
-        )
-
+    chosen_route_name: Optional[str] = Field(None, description="The name of the route chosen by the router. 'None' if no suitable route was found.")
+    confidence_score: Optional[float] = Field(None, ge=0.0, le=1.0, description="An optional confidence score (0.0 to 1.0) for the routing decision.")
+    reasoning: Optional[str] = Field(None, description="The LLM's explanation for choosing the particular route or for not finding a suitable one.")
+    raw_llm_output: str = Field(..., description="The raw, unparsed output received directly from the LLM during the routing process.")
 
 class SemanticRouter:
     """
-    A sophisticated routing mechanism for Vishustra, designed to direct user queries
-    or internal prompts to the most semantically relevant processing path (Route).
+    An advanced semantic router designed for Vishustra. This component leverages
+    a Large Language Model (LLM) to intelligently select the most appropriate
+    downstream processing route based on the semantic understanding of a user's
+    input query.
 
-    This router leverages an `EmbeddingModel` to transform textual inputs and
-    predefined route examples into high-dimensional vectors. It then uses
-    cosine similarity to determine the closest match, providing a flexible
-    and robust way to orchestrate complex LLM workflows.
+    The router is highly configurable, supporting various LLM clients and allowing
+    customization of the routing prompt. It ensures robustness through retry
+    mechanisms for parsing LLM responses.
+    """
+    _DEFAULT_ROUTING_PROMPT_TEMPLATE = """
+    You are an intelligent routing agent responsible for directing user queries to the most relevant processing path.
+    Your decision should be based solely on the semantic content of the user's request and the descriptions of the available routes.
+
+    Here are the available routes, each with a clear description of its purpose:
+    {routes_description}
+
+    ---
+    User Query: "{user_query}"
+    ---
+
+    Please analyze the user's query and select the SINGLE BEST route.
+    If no route is suitable, explicitly indicate 'None' as the chosen route.
+
+    Respond STRICTLY with a JSON object. The JSON object MUST contain the following keys:
+    1.  "chosen_route_name": (string) The exact 'name' of the selected route, or "None".
+    2.  "reasoning": (string) A concise explanation of why this route was selected, or why no route was deemed suitable.
+    3.  "confidence_score": (float) A value between 0.0 (very uncertain) and 1.0 (very certain) reflecting your confidence in the chosen route.
+
+    Example for a specific route:
+    {{
+        "chosen_route_name": "data_management_route",
+        "reasoning": "The query explicitly asks to update personal information, which is handled by data management.",
+        "confidence_score": 0.98
+    }}
+
+    Example for no suitable route:
+    {{
+        "chosen_route_name": "None",
+        "reasoning": "The query about a 'purple elephant' does not align with any defined processing routes.",
+        "confidence_score": 0.15
+    }}
+
+    Begin your JSON response now:
     """
 
-    _embeddings: Optional[np.ndarray]  # Stores normalized example embeddings
-    _route_map: List[Tuple[Route, str]]  # Maps (Route, example_text) to index in _embeddings
-
-    def __init__(self,
-                 embedding_model: EmbeddingModel,
-                 routes: List[Route],
-                 similarity_threshold: float = 0.75):
+    def __init__(
+        self,
+        routes: List[Route],
+        llm_client: BaseLLMClient,
+        routing_prompt_template: Optional[PromptTemplate] = None,
+        max_retries: int = 3,
+        parse_retry_delay_seconds: float = 0.5
+    ):
         """
-        Initializes the SemanticRouter.
+        Initializes the SemanticRouter with a set of routes and an LLM client.
 
         Args:
-            embedding_model: An instance of an EmbeddingModel to convert text to vectors.
-            routes: A list of Route objects defining the routing possibilities.
-            similarity_threshold: The minimum cosine similarity score required for a match
-                                  to be considered valid. Scores range from 0 (orthogonal)
-                                  to 1 (identical) for normalized vectors. A higher
-                                  threshold means stricter matching.
+            routes: A list of `Route` objects defining the available routing options.
+            llm_client: An instance of `BaseLLMClient` to power the routing decisions.
+            routing_prompt_template: An optional `PromptTemplate` to override the default
+                                     prompt used for LLM routing. It must support
+                                     `routes_description` and `user_query` variables.
+            max_retries: The maximum number of times to retry parsing the LLM's response
+                         if it fails to conform to the expected JSON format.
+            parse_retry_delay_seconds: Delay in seconds between retries for parsing errors.
+
+        Raises:
+            InvalidRouteConfigurationError: If the provided `routes` list is empty or
+                                            contains non-unique route names.
         """
-        if not isinstance(embedding_model, EmbeddingModel):
-            raise TypeError("embedding_model must be an instance of EmbeddingModel.")
-        if not isinstance(routes, list) or not all(isinstance(r, Route) for r in routes):
-            raise TypeError("routes must be a list of Route objects.")
-        if not 0.0 <= similarity_threshold <= 1.0:
-            logger.warning(
-                f"Similarity threshold {similarity_threshold} is outside the typical [0.0, 1.0] range for "
-                "cosine similarity (where 1 is identical and 0 is orthogonal). Consider adjusting."
-            )
+        if not routes:
+            raise InvalidRouteConfigurationError("SemanticRouter must be initialized with at least one route.")
+        if len(set(r.name for r in routes)) != len(routes):
+            duplicate_names = [name for name, count in Counter(r.name for r in routes).items() if count > 1]
+            raise InvalidRouteConfigurationError(f"Route names must be unique. Duplicates found: {', '.join(duplicate_names)}")
 
-        self._embedding_model = embedding_model
-        self._routes = routes
-        self._similarity_threshold = similarity_threshold
-        self._embeddings = None
-        self._route_map = []
-        self._initialized = False
+        self._routes = {route.name: route for route in routes}
+        self._llm_client = llm_client
+        self._prompt_template = routing_prompt_template or PromptTemplate(template=self._DEFAULT_ROUTING_PROMPT_TEMPLATE)
+        self._max_retries = max_retries
+        self._parse_retry_delay = parse_retry_delay_seconds
 
-    async def initialize(self):
+        logger.info(f"SemanticRouter initialized with {len(routes)} routes: {[r.name for r in routes]}.")
+
+    @property
+    def routes(self) -> List[Route]:
+        """Returns a list of the configured `Route` objects."""
+        return list(self._routes.values())
+
+    def _format_routes_description(self) -> str:
         """
-        Asynchronously builds the internal vector index from all route examples.
-        This method should be called once after instantiation to prepare the router.
+        Generates a formatted string of all route names and their descriptions,
+        suitable for inclusion in the LLM prompt.
         """
-        if self._initialized:
-            logger.debug("Router index already built.")
-            return
+        description_parts = []
+        for route in self._routes.values():
+            description_parts.append(f"- Route Name: '{route.name}'\n  Description: '{route.description}'")
+        return "\n\n".join(description_parts)
 
-        all_example_texts: List[str] = []
-        # Store (route_object, example_text) for each embedding
-        index_to_route_map: List[Tuple[Route, str]] = []
-
-        for route in self._routes:
-            for example in route.examples:
-                all_example_texts.append(example)
-                index_to_route_map.append((route, example))
-
-        if not all_example_texts:
-            logger.warning("No examples provided across all routes. Router will not be able to match any query.")
-            self._initialized = True
-            return
-
-        logger.info(f"Building router index with {len(all_example_texts)} examples...")
-        try:
-            embeddings_list = await self._embedding_model.embed_batch(all_example_texts)
-            raw_embeddings = np.array(embeddings_list, dtype=np.float32)
-
-            # Normalize embeddings. Handle potential zero norms to prevent NaNs.
-            norms = np.linalg.norm(raw_embeddings, axis=1, keepdims=True)
-            self._embeddings = np.where(norms == 0, raw_embeddings, raw_embeddings / norms)
-
-            self._route_map = index_to_route_map
-            self._initialized = True
-            logger.info(f"Router index built successfully with {self._embeddings.shape[0]} embeddings.")
-        except Exception as e:
-            logger.error(f"Failed to build router index: {e}", exc_info=True)
-            raise
-
-    async def route(self, query: str) -> Optional[RouteMatch]:
+    async def route(self, user_query: str) -> RouteDecision:
         """
-        Asynchronously routes a given query to the most semantically similar route.
+        Routes a given user query to the most semantically relevant processing path
+        by consulting the configured LLM.
 
-        If the router has not been initialized, it will attempt to initialize itself.
+        The method constructs a prompt detailing the available routes and the user's
+        query, sends it to the LLM, and parses the LLM's JSON response to determine
+        the routing decision. It includes retry logic for robust parsing.
 
         Args:
-            query: The input query string to be routed.
+            user_query: The input string from the user that needs to be routed.
 
         Returns:
-            A `RouteMatch` object if a suitable route is found above the configured
-            similarity threshold, otherwise `None`.
+            A `RouteDecision` object encapsulating the chosen route's name (or "None"),
+            the LLM's reasoning, and the raw output received from the LLM.
+
+        Raises:
+            RoutingError: If the LLM response cannot be parsed into the expected format
+                          after `max_retries`, or if any other unexpected error occurs
+                          during the routing process.
         """
-        if not self._initialized:
-            logger.warning("Router not initialized. Attempting to initialize now.")
-            await self.initialize()
+        routes_desc = self._format_routes_description()
+        llm_response_content = "" # Initialize for logging in case of early error
 
-        if self._embeddings is None or self._embeddings.shape[0] == 0:
-            logger.warning("Router index is empty. Cannot route query.")
-            return None
+        for attempt in range(self._max_retries):
+            try:
+                prompt_text = self._prompt_template.format(
+                    routes_description=routes_desc,
+                    user_query=user_query
+                )
+                
+                logger.debug(f"Attempt {attempt + 1}/{self._max_retries}: Sending routing prompt to LLM for query: '{user_query[:50]}...'")
+                llm_response_content = await self._llm_client.generate(prompt_text)
+                
+                # Robust parsing: Remove common LLM markdown wrappers if present
+                cleaned_response = llm_response_content.strip()
+                if cleaned_response.startswith("```json"):
+                    cleaned_response = cleaned_response[len("```json"):]
+                if cleaned_response.endswith("```"):
+                    cleaned_response = cleaned_response[:-len("```")]
+                cleaned_response = cleaned_response.strip()
 
-        logger.debug(f"Attempting to route query: '{query}'")
+                response_data = json.loads(cleaned_response)
+                
+                # Use Pydantic to validate the structure and types of the LLM's decision
+                decision = RouteDecision(
+                    chosen_route_name=response_data.get("chosen_route_name"),
+                    confidence_score=response_data.get("confidence_score"),
+                    reasoning=response_data.get("reasoning"),
+                    raw_llm_output=llm_response_content
+                )
+                
+                # Further validation: Ensure the chosen route name (if not 'None') actually exists
+                if decision.chosen_route_name and decision.chosen_route_name != "None" \
+                   and decision.chosen_route_name not in self._routes:
+                    raise RoutingError(
+                        f"LLM suggested non-existent route '{decision.chosen_route_name}'. "
+                        f"Raw LLM output: {llm_response_content}"
+                    )
+                
+                logger.info(f"Routing successful for query '{user_query[:50]}...'. Chosen route: '{decision.chosen_route_name}'. Confidence: {decision.confidence_score:.2f}")
+                return decision
 
-        query_embedding_list = await self._embedding_model.embed(query)
-        query_embedding_np = np.array(query_embedding_list, dtype=np.float32)
+            except (json.JSONDecodeError, KeyError, ValidationError) as e:
+                logger.warning(
+                    f"Attempt {attempt + 1}/{self._max_retries}: Failed to parse LLM response for routing. Error: {type(e).__name__} - {e}. "
+                    f"Raw LLM output (first 200 chars): '{llm_response_content[:200]}...'."
+                )
+                if attempt < self._max_retries - 1:
+                    logger.debug(f"Retrying after {self._parse_retry_delay} seconds...")
+                    await asyncio.sleep(self._parse_retry_delay) # Use asyncio.sleep for async context
+                else:
+                    raise RoutingError(
+                        f"Failed to parse LLM response after {self._max_retries} retries. "
+                        f"Last raw output: {llm_response_content}. Final error: {e}"
+                    ) from e
+            except Exception as e:
+                logger.error(f"An unexpected error occurred during routing for query '{user_query[:50]}...': {e}", exc_info=True)
+                raise RoutingError(f"Unexpected error during routing: {e}") from e
 
-        # Normalize the query embedding
-        query_norm = np.linalg.norm(query_embedding_np)
-        if query_norm == 0:
-            logger.warning(f"Query '{query}' resulted in a zero-norm embedding. Cannot calculate similarity.")
-            return None
-        query_embedding_normalized = query_embedding_np / query_norm
-
-        # Calculate cosine similarities using dot product (since vectors are normalized)
-        # np.dot(A, B) for A (M, N) and B (N,) results in (M,)
-        similarities = np.dot(self._embeddings, query_embedding_normalized)
-
-        # Find the best match
-        best_match_idx = np.argmax(similarities)
-        best_score = similarities[best_match_idx]
-        best_route, matched_example_text = self._route_map[best_match_idx]
-
-        logger.debug(
-            f"Best match candidate: Route='{best_route.name}', Score={best_score:.4f}, "
-            f"Matched example='{matched_example_text}'"
-        )
-
-        if best_score >= self._similarity_threshold:
-            logger.info(f"Query routed to '{best_route.name}' with score {best_score:.4f}.")
-            return RouteMatch(route=best_route, score=best_score, matched_example=matched_example_text)
-        else:
-            logger.info(
-                f"No route found above threshold {self._similarity_threshold:.4f}. "
-                f"Best score was {best_score:.4f} for route '{best_route.name}'."
-            )
-            return None
-
-
-# --- Example Dummy Embedding Model (for demonstration purposes within Vishustra context) ---
-class DummyEmbeddingModel(EmbeddingModel):
-    """
-    A placeholder embedding model for internal testing and demonstration within Vishustra.
-    Generates deterministic, non-semantic embeddings based on a hash of the text.
-    In a production Vishustra deployment, this would be replaced by an actual
-    LLM-based embedding service (e.g., OpenAI, Cohere, HuggingFace Transformers).
-    """
-
-    def __init__(self, vector_dim: int = 128):
-        """
-        Initializes the DummyEmbeddingModel.
-
-        Args:
-            vector_dim: The dimension of the dummy embedding vectors to generate.
-        """
-        self._vector_dim = vector_dim
-        logger.warning(
-            "Using DummyEmbeddingModel. This is for testing only and does not "
-            "provide meaningful semantic embeddings for real-world applications."
-        )
-
-    async def embed(self, text: str) -> List[float]:
-        """
-        Generates a dummy embedding for a single text.
-        The vector is pseudo-random but deterministic for a given text, and normalized.
-        """
-        if not text:
-            return [0.0] * self._vector_dim # Return zero vector for empty text
-        
-        # Use a consistent seed for reproducibility given the same text
-        # Using a hash ensures some variation for different texts
-        seed_val = hash(text) % (2**32 - 1)
-        rng = np.random.default_rng(seed=seed_val)
-        
-        vec = rng.random(self._vector_dim) * 2 - 1  # Values between -1 and 1
-        
-        norm = np.linalg.norm(vec)
-        if norm == 0:
-            return vec.tolist() # Return as is if it's a zero vector
-        return (vec / norm).tolist() # Normalize to a unit vector
-
-    async def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        """
-        Generates dummy embeddings for a batch of texts by calling `embed` for each.
-        """
-        # For a real model, this would be optimized for batch inference.
-        return [await self.embed(text) for text in texts]
+        # This line should logically be unreachable if max_retries is > 0 and exceptions are always raised.
+        raise RoutingError(f"Routing failed for query '{user_query[:50]}...' due to an unhandled internal error.")
 
 
-# Example usage block, demonstrating how Vishustra might use this module
+# Example Usage (for demonstration purposes, not part of the framework itself)
 if __name__ == "__main__":
-    # Setup basic logging for the example to make outputs visible
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    # Set the module's logger to INFO if it's not already configured by basicConfig
-    logger.setLevel(logging.INFO)
+    import asyncio
+    from collections import Counter
+    import sys
 
-    async def run_example():
-        logger.info("Starting SemanticRouter example for Vishustra...")
+    # Configure basic logging for the example
+    logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    logger.setLevel(logging.DEBUG) # Show debug messages for router internals
 
-        # 1. Instantiate an embedding model (e.g., connecting to OpenAI, HuggingFace locally)
-        # For this example, we use the DummyEmbeddingModel.
-        embedding_model = DummyEmbeddingModel(vector_dim=128)
+    # --- Mock Implementations for Demonstration ---
+    class MockLLMClient(BaseLLMClient):
+        """A mock LLM client for testing the SemanticRouter without a real LLM."""
+        def __init__(self):
+            self.call_count = 0
 
-        # 2. Define various 'routes' that Vishustra could take
-        routes = [
-            Route(
-                name="summarize_document",
-                target="llm_chain:summarizer",
-                examples=[
-                    "summarize this document for me",
-                    "give me a summary of the provided text",
-                    "can you condense this information?",
-                    "what's the main idea of this article?"
-                ],
-                description="Routes to an LLM chain optimized for summarizing long documents."
-            ),
-            Route(
-                name="answer_faq",
-                target="agent:faq_agent",
-                examples=[
-                    "what are your operating hours?",
-                    "how do I reset my password?",
-                    "tell me about your return policy",
-                    "where can I find technical support?"
-                ],
-                description="Routes to a dedicated agent for frequently asked questions."
-            ),
-            Route(
-                name="code_generation",
-                target="tool:code_generator",
-                examples=[
-                    "write a python function to sort a list of numbers",
-                    "generate a SQL query to select all active users",
-                    "create a javascript snippet for a button click event"
-                ],
-                description="Routes to a specialized tool for generating code snippets."
-            ),
-            Route(
-                name="sentiment_analysis",
-                target="model:sentiment_classifier",
-                examples=[
-                    "what is the sentiment of this review?",
-                    "is this text positive, negative, or neutral?",
-                    "analyze the emotional tone of this message"
-                ],
-                description="Routes to a fine-tuned model for sentiment analysis."
-            ),
-            Route(
-                name="unknown_query_handler",
-                target="agent:default_fallback_agent",
-                examples=[
-                    "I don't know what to ask",
-                    "can you help me with anything?",
-                    "what else can you do?",
-                    "I am lost"
-                ],
-                description="A fallback route for queries that don't match specific intents."
-            )
-        ]
-
-        # 3. Instantiate the router with the model and routes
-        router = SemanticRouter(
-            embedding_model=embedding_model,
-            routes=routes,
-            similarity_threshold=0.7 # A lower threshold might increase matches with dummy model
-        )
-
-        # 4. Initialize the router (builds the internal vector index)
-        await router.initialize()
-
-        # 5. Test routing with various queries
-        test_queries = [
-            "Please provide a quick summary of the report.",  # -> summarize_document
-            "I need to know how to change my account password.",  # -> answer_faq
-            "Can you write some Java code to reverse a string?",  # -> code_generation
-            "How do you feel about this movie review? Is it positive or negative?",  # -> sentiment_analysis
-            "What is the capital of France?",  # -> likely unknown_query_handler or None
-            "Tell me a joke.",  # -> likely unknown_query_handler or None
-            "I need a summary", # -> summarize_document
-            "Help!" # -> unknown_query_handler
-        ]
-
-        print("\n--- Starting Routing Tests ---")
-        for i, query in enumerate(test_queries):
-            print(f"\nQUERY {i+1}: '{query}'")
-            match = await router.route(query)
-            if match:
-                print(f"  ✅ Routed to: '{match.route.name}' (Target: '{match.route.target}')")
-                print(f"     Score: {match.score:.4f}")
-                print(f"     Matched example: '{match.matched_example}'")
+        async def generate(self, prompt: str, **kwargs) -> str:
+            self.call_count += 1
+            logger.debug(f"Mock LLM Call {self.call_count} received prompt (first 100 chars): {prompt[:100]}...")
+            
+            # Simulate different LLM responses based on keywords
+            if "update my personal information" in prompt:
+                return json.dumps({
+                    "chosen_route_name": "user_data_management",
+                    "reasoning": "The query is about managing user's personal data.",
+                    "confidence_score": 0.98
+                })
+            elif "sentiment analysis" in prompt:
+                return json.dumps({
+                    "chosen_route_name": "text_analysis_service",
+                    "reasoning": "The user explicitly requested sentiment analysis.",
+                    "confidence_score": 0.95
+                })
+            elif "generate a report" in prompt:
+                return json.dumps({
+                    "chosen_route_name": "report_generation_engine",
+                    "reasoning": "The query asks for report creation.",
+                    "confidence_score": 0.90
+                })
+            elif "tell me a joke" in prompt or "general question" in prompt:
+                return json.dumps({
+                    "chosen_route_name": "conversational_ai",
+                    "reasoning": "This is a general conversational query.",
+                    "confidence_score": 0.85
+                })
+            elif "unrelated query xyz" in prompt:
+                return json.dumps({
+                    "chosen_route_name": "None",
+                    "reasoning": "The query does not semantically align with any defined route.",
+                    "confidence_score": 0.25
+                })
+            elif "faulty json test" in prompt:
+                # Simulate an LLM occasionally returning malformed JSON for retry test
+                if self.call_count % 2 == 1: # First retry attempt (or initial call if 1st attempt)
+                    logger.debug("Mock LLM returning malformed JSON for retry test.")
+                    return "```json\n{\"chosen_route_name\": \"conversational_ai\", \"reasoning\": \"Malform", "confidence_score\": 0.7}\n```" # Malformed
+                else: # Subsequent attempts return valid JSON
+                    logger.debug("Mock LLM returning valid JSON after malformed one.")
+                    return json.dumps({
+                        "chosen_route_name": "conversational_ai",
+                        "reasoning": "Defaulting to general chat after initial parsing error.",
+                        "confidence_score": 0.7
+                    })
+            elif "nonexistent route" in prompt:
+                return json.dumps({
+                    "chosen_route_name": "imaginary_route_123", # LLM hallucinates a route
+                    "reasoning": "Thought this might be a new special route.",
+                    "confidence_score": 0.6
+                })
             else:
-                print(f"  ❌ No suitable route found for query '{query}' above threshold {router._similarity_threshold:.4f}.")
-        print("\n--- Routing Tests Complete ---")
+                return json.dumps({
+                    "chosen_route_name": "conversational_ai",
+                    "reasoning": "No specific route found, defaulting to general conversation.",
+                    "confidence_score": 0.6
+                })
+
+    # --- Main example execution ---
+    async def run_example():
+        mock_llm_client = MockLLMClient()
+
+        # Define some sample routes
+        routes_config = [
+            Route(name="user_data_management", description="Handles queries related to user profiles, account settings, privacy, and personal data updates."),
+            Route(name="text_analysis_service", description="Provides natural language processing services like sentiment analysis, entity extraction, and summarization."),
+            Route(name="report_generation_engine", description="Generates custom reports, dashboards, and data visualizations based on specific criteria or datasets."),
+            Route(name="conversational_ai", description="Engages in general conversation, answers common questions, and handles casual chit-chat."),
+        ]
+
+        # Test router initialization with invalid configs
+        try:
+            SemanticRouter(routes=[], llm_client=mock_llm_client)
+        except InvalidRouteConfigurationError as e:
+            logger.error(f"Caught expected configuration error: {e}")
+
+        duplicate_routes = [routes_config[0], routes_config[0]] # Simulate duplicate name
+        try:
+            SemanticRouter(routes=duplicate_routes, llm_client=mock_llm_client)
+        except InvalidRouteConfigurationError as e:
+            logger.error(f"Caught expected configuration error for duplicate routes: {e}")
+
+
+        try:
+            router = SemanticRouter(routes=routes_config, llm_client=mock_llm_client, max_retries=2, parse_retry_delay_seconds=0.1)
+
+            test_queries = [
+                "I need to change my email address and password. How do I do that?",
+                "Can you perform sentiment analysis on this customer review: 'The service was atrocious, utterly disappointing.'",
+                "Please generate a quarterly financial report for Q2 2024, focusing on revenue growth.",
+                "Tell me a fun fact about space!",
+                "What is the capital of France? This is a general question.",
+                "This is a completely unrelated query xyz.",
+                "I have a faulty json test query.", # Should trigger a retry
+                "What if the LLM suggests a nonexistent route?", # Should trigger RoutingError
+            ]
+
+            for i, query in enumerate(test_queries):
+                print(f"\n--- Routing Test {i+1}: Query = '{query}' ---")
+                try:
+                    decision = await router.route(query)
+                    print(f"  Chosen Route: {decision.chosen_route_name or 'N/A'}")
+                    print(f"  Confidence: {decision.confidence_score:.2f}" if decision.confidence_score is not None else "  Confidence: N/A")
+                    print(f"  Reasoning: {decision.reasoning}")
+                    # print(f"  Raw LLM Output (truncated): {decision.raw_llm_output[:150]}...")
+                except RoutingError as e:
+                    print(f"  ERROR: Failed to route query '{query}'. Reason: {e}")
+                except Exception as e:
+                    print(f"  UNEXPECTED ERROR during routing query '{query}': {e}")
+
+        except Exception as e:
+            logger.critical(f"An error occurred during router initialization or overall example execution: {e}")
 
     # Run the asynchronous example
-    try:
-        asyncio.run(run_example())
-    except RuntimeError as e:
-        if "cannot run an asyncio event loop while another loop is running" in str(e):
-            # This handles cases where the script might be run in an environment
-            # (like Jupyter notebooks) where an event loop is already active.
-            import nest_asyncio
-            nest_asyncio.apply()
-            asyncio.get_event_loop().run_until_complete(run_example())
-        else:
-            raise
+    asyncio.run(run_example())
