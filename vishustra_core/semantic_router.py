@@ -1,393 +1,370 @@
-import uuid
-from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional, Tuple
+import asyncio
+import logging
+from typing import List, Dict, Any, Optional
 
 import numpy as np
-from scipy.spatial.distance import cosine
+from pydantic import BaseModel, Field, ValidationError
 
-class EmbeddingModel(ABC):
+# Assume these are core Vishustra components.
+# In a real Vishustra setup, these would be imported from the framework's core modules.
+# For this exercise, we define minimal interfaces or assume their existence.
+
+# --- Vishustra Core Assumptions (for context and integration points) ---
+class BaseComponent(BaseModel):
     """
-    Abstract base class for embedding models used by Vishustra.
-    This interface ensures that the router can work with any compatible embedding service.
+    Base class for all Vishustra pluggable components.
+    Provides a standardized way to identify components within the framework.
     """
-    @abstractmethod
-    async def embed_documents(self, texts: List[str]) -> List[List[float]]:
+    component_id: str = Field(..., description="Unique identifier for the component.")
+
+    class Config:
+        arbitrary_types_allowed = True # Allows non-Pydantic types like EmbeddingsProvider
+
+
+class EmbeddingsProvider:
+    """
+    Simulated service for generating text embeddings within the Vishustra framework.
+    In a production system, this would abstract various embedding models (e.g., OpenAI, HuggingFace, local).
+    """
+    def __init__(self, service_url: str = "http://embeddings-service.vishustra.local"):
+        self._service_url = service_url
+        logging.getLogger(__name__).info(f"Initialized EmbeddingsProvider connecting to {service_url}")
+
+    async def get_embeddings(self, texts: List[str], model_id: str) -> List[List[float]]:
         """
-        Asynchronously embeds a list of documents into vector representations.
+        Asynchronously retrieves embeddings for a list of texts using a specified model ID.
 
         Args:
-            texts: A list of strings, where each string is a document to embed.
+            texts: A list of strings for which to generate embeddings.
+            model_id: The identifier for the embedding model to use (e.g., "openai-ada-002").
 
         Returns:
-            A list of lists of floats, where each inner list is the embedding
-            vector for the corresponding document.
+            A list of lists of floats, where each inner list is an embedding vector
+            corresponding to the input text at the same index.
         """
-        pass
+        logger.debug(f"Getting embeddings for {len(texts)} texts using model '{model_id}'...")
+        # Simulate network delay and actual embedding generation.
+        # In a real system, this would involve an RPC call, HTTP request, or direct model inference.
+        await asyncio.sleep(0.02 * len(texts))
+        # Return dummy embeddings for demonstration purposes.
+        dummy_dim = 768 # Common embedding dimension
+        return [[np.random.rand() * 2 - 1 for _ in range(dummy_dim)] for _ in texts] # Random values between -1 and 1
 
-    @abstractmethod
-    async def embed_query(self, text: str) -> List[float]:
-        """
-        Asynchronously embeds a single query string into a vector representation.
+# Configure a Vishustra-wide logger instance.
+logger = logging.getLogger("vishustra")
+if not logger.handlers:
+    # Basic configuration if no handlers are already set (e.g., for standalone testing).
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    logger.setLevel(logging.INFO)
 
-        Args:
-            text: The query string to embed.
 
-        Returns:
-            A list of floats representing the embedding vector for the query.
-        """
-        pass
+class RoutingError(Exception):
+    """Custom exception raised for errors encountered during semantic routing."""
+    pass
+# --- End Vishustra Core Assumptions ---
 
-    @abstractmethod
-    def dimensionality(self) -> int:
-        """
-        Returns the dimensionality of the embedding vectors produced by this model.
-        """
-        pass
 
-class VectorStoreClient(ABC):
+class RouteDestination(BaseModel):
     """
-    Abstract base class for vector store clients.
-    This interface allows the SemanticRouter to operate with various vector database
-    implementations (e.g., Pinecone, Qdrant, Faiss, ChromaDB) by abstracting
-    away their specific APIs.
+    Defines a potential destination for the SemanticRouter.
+
+    Each destination is characterized by descriptive patterns (phrases, example queries)
+    that semantically indicate when this route should be chosen.
     """
-    @abstractmethod
-    async def add_vectors(self, vectors: List[List[float]], metadatas: Optional[List[Dict[str, Any]]] = None) -> List[str]:
-        """
-        Asynchronously adds vectors to the vector store.
+    destination_id: str = Field(..., description="Unique identifier for this specific route destination.")
+    name: str = Field(..., description="A human-readable name for the destination (e.g., 'Knowledge Base Q&A').")
+    description: str = Field(
+        ...,
+        max_length=500,
+        description="A brief, comprehensive description of what this route handles and its purpose."
+    )
+    patterns: List[str] = Field(
+        ...,
+        min_items=1,
+        description="A list of example phrases or detailed descriptions that semantically define this route. "
+                    "These patterns are used to generate embeddings for similarity comparison with incoming queries."
+    )
+    target_module_id: Optional[str] = Field(
+        None,
+        description="The `component_id` of the Vishustra module or component to route to if this destination is chosen. "
+                    "If `None`, it implies this route is a conceptual destination or requires further interpretation "
+                    "by a subsequent routing stage."
+    )
+    metadata: Dict[str, Any] = Field({}, description="Additional arbitrary metadata associated with this destination.")
 
-        Args:
-            vectors: A list of embedding vectors to add.
-            metadatas: An optional list of dictionaries, where each dictionary
-                       contains metadata associated with the corresponding vector.
-                       Metadata is crucial for retrieving route information after a search.
+    def __hash__(self):
+        """Enable hashing for use in sets/dicts, based on `destination_id`."""
+        return hash(self.destination_id)
 
-        Returns:
-            A list of unique IDs assigned to the added vectors by the vector store.
-        """
-        pass
+    def __eq__(self, other):
+        """Enable equality comparison based on `destination_id`."""
+        if not isinstance(other, RouteDestination):
+            return NotImplemented
+        return self.destination_id == other.destination_id
 
-    @abstractmethod
-    async def similarity_search_with_score(self, query_vector: List[float], k: int = 1) -> List[Tuple[Dict[str, Any], float]]:
-        """
-        Asynchronously performs a similarity search in the vector store using a query vector.
 
-        Args:
-            query_vector: The embedding vector of the query.
-            k: The number of top similar results to retrieve.
-
-        Returns:
-            A list of tuples, where each tuple contains:
-            - A dictionary of metadata for a matched vector.
-            - The similarity score between the query vector and the matched vector.
-            The list is sorted by similarity score in descending order.
-        """
-        pass
-
-    @abstractmethod
-    async def delete_vectors(self, ids: List[str]):
-        """
-        Asynchronously deletes vectors from the store by their unique IDs.
-
-        Args:
-            ids: A list of vector IDs to delete.
-        """
-        pass
-
-    @abstractmethod
-    async def clear(self):
-        """
-        Asynchronously clears all vectors and associated data from the vector store.
-        """
-        pass
-
-class InMemoryEmbeddingModel(EmbeddingModel):
+class SemanticRouterConfig(BaseModel):
     """
-    A lightweight, in-memory dummy embedding model for demonstration and testing purposes.
-    Generates random vectors of a specified dimensionality.
-    In a production environment, this would be replaced by actual LLM embedding providers
-    like OpenAI, Cohere, HuggingFace, etc.
+    Configuration model for the SemanticRouter.
+    Defines parameters controlling the behavior of the semantic routing mechanism.
     """
-    def __init__(self, dim: int = 768):
-        if not isinstance(dim, int) or dim <= 0:
-            raise ValueError("Dimensionality must be a positive integer.")
-        self._dim = dim
+    embedding_model_id: str = Field(
+        ...,
+        description="The ID of the embedding model to use for semantic similarity checks. "
+                    "This ID must be recognized and supported by the Vishustra `EmbeddingsProvider`."
+    )
+    similarity_threshold: float = Field(
+        0.75,
+        ge=0.0,
+        le=1.0,
+        description="Cosine similarity threshold. A route's similarity score must be "
+                    "equal to or exceed this value to be considered a valid match."
+    )
+    top_k_routes: int = Field(
+        1,
+        ge=1,
+        description="The maximum number of top semantically similar routes to return. "
+                    "If `top_k_routes` > 1, the router may return multiple potential destinations, "
+                    "sorted by similarity, that meet the `similarity_threshold`."
+    )
+    fallback_module_id: Optional[str] = Field(
+        None,
+        description="Optional `component_id` of a Vishustra module to route to if no "
+                    "suitable semantic route is found (i.e., no route meets the threshold). "
+                    "If `None`, a `RoutingError` will be raised if no match is found."
+    )
 
-    async def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """Generates random embeddings for a list of documents."""
-        return [self._generate_embedding() for _ in texts]
 
-    async def embed_query(self, text: str) -> List[float]:
-        """Generates a random embedding for a single query."""
-        return self._generate_embedding()
-
-    def dimensionality(self) -> int:
-        """Returns the configured dimensionality."""
-        return self._dim
-
-    def _generate_embedding(self) -> List[float]:
-        """Helper to generate a random normalized embedding vector."""
-        vec = np.random.rand(self._dim)
-        return (vec / np.linalg.norm(vec)).tolist() # Normalize to unit vector
-
-class InMemoryVectorStoreClient(VectorStoreClient):
+class SemanticRouter(BaseComponent):
     """
-    A simple, in-memory vector store client for demonstration and testing.
-    It uses a dictionary to store vectors and performs cosine similarity search.
-    This is not suitable for large-scale production use due to lack of indexing
-    and persistence.
+    The SemanticRouter intelligently directs incoming natural language queries or requests
+    to the most semantically relevant Vishustra module(s) or destination(s).
+
+    It operates by computing the embedding of the input query and comparing it against
+    pre-computed embeddings of defined route destinations. This enables highly flexible,
+    content-aware routing that is resilient to variations in user phrasing, without
+    requiring explicit keyword matching or complex rule sets.
+
+    Usage:
+    1. Instantiate with `component_id`, `config`, `destinations`, and an `EmbeddingsProvider`.
+    2. Call `await initialize()` once to pre-compute destination embeddings.
+    3. Call `await route(query)` for each incoming request.
     """
-    def __init__(self):
-        self._store: Dict[str, Tuple[List[float], Dict[str, Any]]] = {} # {id: (vector, metadata)}
+    config: SemanticRouterConfig = Field(..., description="Configuration settings for this router instance.")
+    destinations: List[RouteDestination] = Field(..., min_items=1, description="List of all possible route destinations.")
 
-    async def add_vectors(self, vectors: List[List[float]], metadatas: Optional[List[Dict[str, Any]]] = None) -> List[str]:
-        """Adds vectors to the in-memory store."""
-        ids = []
-        _metadatas = metadatas if metadatas is not None else [{} for _ in vectors]
-        if len(vectors) != len(_metadatas):
-            raise ValueError("Length of vectors and metadatas must be the same.")
+    # Internal state, marked as exclude=True so Pydantic does not attempt to serialize these.
+    _embeddings_provider: EmbeddingsProvider
+    _destination_embeddings: Dict[str, np.ndarray] = Field(default_factory=dict, exclude=True)
+    _is_initialized: bool = Field(False, exclude=True)
 
-        for i, vector in enumerate(vectors):
-            new_id = str(uuid.uuid4())
-            self._store[new_id] = (vector, _metadatas[i])
-            ids.append(new_id)
-        return ids
-
-    async def similarity_search_with_score(self, query_vector: List[float], k: int = 1) -> List[Tuple[Dict[str, Any], float]]:
-        """
-        Performs a cosine similarity search against all stored vectors.
-        """
-        if not self._store:
-            return []
-
-        results = []
-        query_np = np.array(query_vector)
-
-        for _id, (vec, meta) in self._store.items():
-            vec_np = np.array(vec)
-            # Cosine similarity: 1 - cosine_distance. Higher is better.
-            similarity = 1 - cosine(query_np, vec_np)
-            results.append((meta, similarity))
-
-        results.sort(key=lambda x: x[1], reverse=True)
-        return results[:k]
-
-    async def delete_vectors(self, ids: List[str]):
-        """Deletes vectors by their IDs."""
-        for _id in ids:
-            self._store.pop(_id, None)
-
-    async def clear(self):
-        """Clears all vectors from the store."""
-        self._store.clear()
-
-class Route:
-    """
-    Represents a specific routing path within the Vishustra framework.
-    Each route is defined by a unique name, a natural language description,
-    and a target (which could be an identifier for a chain, tool, agent, or a callable).
-    """
-    def __init__(self, name: str, description: str, target: Any, metadata: Optional[Dict[str, Any]] = None):
-        """
-        Initializes a Route instance.
-
-        Args:
-            name: A unique, human-readable name for the route (e.g., "sales_inquiry_chain").
-            description: A detailed natural language description of what this route handles.
-                         This description is used for semantic matching.
-            target: The actual destination for this route. This can be any type:
-                    - A string identifier (e.g., "sales_chain_id", "calculator_tool").
-                    - A callable function or method.
-                    - An instance of a chain or agent class.
-            metadata: Optional, additional key-value pairs associated with the route.
-        """
-        if not name:
-            raise ValueError("Route name cannot be empty.")
-        if not description:
-            raise ValueError("Route description cannot be empty.")
-
-        self.id: str = str(uuid.uuid4()) # Internal unique identifier for vector store management
-        self.name: str = name
-        self.description: str = description
-        self.target: Any = target
-        self.metadata: Dict[str, Any] = metadata if metadata is not None else {}
-
-    def __repr__(self) -> str:
-        return f"Route(name='{self.name}', description='{self.description[:50]}...', target='{self.target}')"
-
-class SemanticRouter:
-    """
-    The Vishustra SemanticRouter dynamically directs incoming queries or LLM outputs
-    to the most semantically relevant route (e.g., a specific tool, processing chain,
-    or agent) based on their meaning.
-
-    It leverages an embedding model to convert route descriptions and input queries
-    into dense vector representations, and a vector store to efficiently find
-    the best matching route.
-    """
-
-    def __init__(
-        self,
-        embedding_model: EmbeddingModel,
-        vector_store_client: VectorStoreClient,
-        similarity_threshold: float = 0.75,
-        top_k: int = 1,
-    ):
+    def __init__(self, _embeddings_provider: EmbeddingsProvider, **data: Any):
         """
         Initializes the SemanticRouter.
 
         Args:
-            embedding_model: An instance of an `EmbeddingModel` to generate vector
-                             representations for route descriptions and queries.
-            vector_store_client: An instance of a `VectorStoreClient` to store and
-                                 retrieve route embeddings efficiently.
-            similarity_threshold: The minimum cosine similarity score required for a
-                                  route to be considered a valid match. If the highest
-                                  matching route's score falls below this threshold,
-                                  `route()` will return None. Defaults to 0.75.
-            top_k: The number of top similar routes to retrieve from the vector store
-                   before applying the similarity threshold. For basic routing, `top_k=1`
-                   is usually sufficient. Defaults to 1.
+            _embeddings_provider: An instance of `EmbeddingsProvider` used to generate text embeddings.
+                                  This is explicitly passed for dependency injection.
+            **data: Additional keyword arguments passed to the `BaseComponent` and `BaseModel` constructor,
+                    typically including `component_id`, `config`, and `destinations`.
         """
-        if not isinstance(embedding_model, EmbeddingModel):
-            raise TypeError("embedding_model must be an instance of EmbeddingModel.")
-        if not isinstance(vector_store_client, VectorStoreClient):
-            raise TypeError("vector_store_client must be an instance of VectorStoreClient.")
-        if not 0 <= similarity_threshold <= 1:
-            raise ValueError("similarity_threshold must be between 0 and 1.")
-        if not isinstance(top_k, int) or top_k <= 0:
-            raise ValueError("top_k must be a positive integer.")
+        if not isinstance(_embeddings_provider, EmbeddingsProvider):
+            raise TypeError("`_embeddings_provider` must be an instance of `EmbeddingsProvider`.")
+        self._embeddings_provider = _embeddings_provider
+        super().__init__(**data)
 
-        self._embedding_model = embedding_model
-        self._vector_store_client = vector_store_client
-        self._similarity_threshold = similarity_threshold
-        self._top_k = top_k
-        self._routes: Dict[str, Route] = {} # Internal cache of Route objects by their unique ID
-
-    async def add_route(self, route: Route):
+    async def initialize(self) -> None:
         """
-        Adds a new route to the router.
-        The route's description is embedded and stored in the vector store.
-        If a route with the same unique `id` already exists, it will be updated
-        (its old embedding removed and a new one added). If a route with the
-        same `name` but different `id` is added, it's treated as a new route.
-        To explicitly update by name, first `remove_route` then `add_route`.
+        Asynchronously initializes the router by pre-computing and storing embeddings
+        for all defined route destinations. This method should be called once after
+        instantiation and before any routing operations.
+        """
+        if self._is_initialized:
+            logger.warning(f"SemanticRouter '{self.component_id}' is already initialized. Skipping re-initialization.")
+            return
+
+        logger.info(f"Initializing SemanticRouter '{self.component_id}' with {len(self.destinations)} destinations...")
+        all_patterns_to_embed = []
+        # Map each pattern back to its original destination_id.
+        # This handles cases where multiple patterns belong to the same destination.
+        pattern_to_destination_id_map = {}
+
+        for dest in self.destinations:
+            for pattern in dest.patterns:
+                all_patterns_to_embed.append(pattern)
+                pattern_to_destination_id_map[pattern] = dest.destination_id
+
+        if not all_patterns_to_embed:
+            raise RoutingError(
+                f"SemanticRouter '{self.component_id}' cannot initialize: no patterns found across all destinations."
+            )
+
+        try:
+            # Generate embeddings for all unique patterns from all destinations.
+            pattern_embeddings_list = await self._embeddings_provider.get_embeddings(
+                texts=all_patterns_to_embed,
+                model_id=self.config.embedding_model_id
+            )
+            if len(pattern_embeddings_list) != len(all_patterns_to_embed):
+                raise RoutingError(
+                    f"Mismatch in number of patterns ({len(all_patterns_to_embed)}) and "
+                    f"generated embeddings ({len(pattern_embeddings_list)})."
+                )
+
+            # Aggregate and average embeddings per destination_id for robustness.
+            # Using the average embedding for a destination's patterns creates a more general
+            # representation of that destination's semantic space.
+            destination_raw_embeddings: Dict[str, List[np.ndarray]] = {}
+            for i, pattern_embedding in enumerate(pattern_embeddings_list):
+                original_pattern = all_patterns_to_embed[i]
+                destination_id = pattern_to_destination_id_map[original_pattern]
+                if destination_id not in destination_raw_embeddings:
+                    destination_raw_embeddings[destination_id] = []
+                destination_raw_embeddings[destination_id].append(np.array(pattern_embedding))
+
+            for dest_id, embs in destination_raw_embeddings.items():
+                # Compute the mean embedding for each destination.
+                mean_embedding = np.mean(embs, axis=0)
+                # Normalize the mean embedding to unit length for cosine similarity.
+                self._destination_embeddings[dest_id] = mean_embedding / np.linalg.norm(mean_embedding)
+
+            logger.info(
+                f"SemanticRouter '{self.component_id}' initialized successfully. "
+                f"{len(self._destination_embeddings)} unique destination embeddings computed."
+            )
+            self._is_initialized = True
+        except Exception as e:
+            logger.error(f"Failed to initialize SemanticRouter '{self.component_id}': {e}", exc_info=True)
+            raise RoutingError(f"Initialization failed for router '{self.component_id}'.") from e
+
+    async def route(self, query: str) -> List[Dict[str, Any]]:
+        """
+        Asynchronously routes an incoming natural language query to the most semantically
+        similar destination(s) based on pre-computed destination embeddings.
 
         Args:
-            route: The `Route` object to add.
-        """
-        existing_route_id = None
-        for r_id, r in self._routes.items():
-            if r.name == route.name:
-                existing_route_id = r_id
-                break
-
-        if existing_route_id:
-            # If a route with this ID or name already exists, remove it first
-            await self._vector_store_client.delete_vectors(ids=[existing_route_id])
-            del self._routes[existing_route_id]
-            print(f"Removed existing route '{route.name}' (ID: {existing_route_id}) before adding new version.")
-
-        embedding = await self._embedding_model.embed_query(route.description)
-        
-        # Metadata stored in vector store must be serializable.
-        # Store route's ID, name, description, and string representation of target.
-        vector_metadata = {
-            "route_id": route.id,
-            "route_name": route.name,
-            "route_description": route.description,
-            "target_repr": str(route.target), # Store a string representation of target
-            **route.metadata # Include any additional metadata
-        }
-        
-        await self._vector_store_client.add_vectors(
-            vectors=[embedding],
-            metadatas=[vector_metadata]
-        )
-        self._routes[route.id] = route
-        print(f"Route '{route.name}' (ID: {route.id}) added successfully.")
-
-    async def remove_route(self, route_name: str) -> bool:
-        """
-        Removes a route by its name.
-        This operation also removes the associated embedding from the vector store.
-
-        Args:
-            route_name: The `name` of the route to remove.
+            query: The input query string from the user or another component.
 
         Returns:
-            True if the route was found and successfully removed, False otherwise.
+            A list of dictionaries, where each dictionary represents a potential route.
+            Each route dictionary includes:
+            - "destination_id": The unique ID of the chosen `RouteDestination`.
+            - "target_module_id": The `component_id` of the target Vishustra module (if specified).
+            - "similarity": The cosine similarity score between the query and the destination.
+            - "metadata": Any additional metadata associated with the `RouteDestination`.
+            The list is sorted by similarity in descending order, up to `top_k_routes`.
+
+        Raises:
+            RoutingError: If the router is not initialized, if the query is empty and no
+                          fallback is defined, or if no suitable route is found and no
+                          fallback module is configured.
         """
-        route_to_remove: Optional[Route] = None
-        for _id, route in self._routes.items():
-            if route.name == route_name:
-                route_to_remove = route
-                break
+        if not self._is_initialized:
+            raise RoutingError(
+                f"SemanticRouter '{self.component_id}' has not been initialized. "
+                "Call `.initialize()` method before attempting to route queries."
+            )
+        if not query or not query.strip():
+            logger.warning("Received an empty or whitespace-only query for routing. Returning no match.")
+            if self.config.fallback_module_id:
+                return [{
+                    "destination_id": "fallback_empty_query",
+                    "target_module_id": self.config.fallback_module_id,
+                    "similarity": 0.0,
+                    "metadata": {"reason": "empty_query"}
+                }]
+            raise RoutingError("Cannot route an empty query and no fallback defined for router "
+                               f"'{self.component_id}'.")
 
-        if route_to_remove:
-            await self._vector_store_client.delete_vectors(ids=[route_to_remove.id])
-            del self._routes[route_to_remove.id]
-            print(f"Route '{route_name}' (ID: {route_to_remove.id}) removed successfully.")
-            return True
-        print(f"Route '{route_name}' not found. No route removed.")
-        return False
+        logger.debug(f"Attempting to route query: '{query[:100]}{'...' if len(query) > 100 else ''}'")
 
-    async def route(self, query: str) -> Optional[Tuple[Route, float]]:
-        """
-        Determines the most semantically relevant route for a given input query.
+        try:
+            # Get the embedding for the incoming query.
+            query_embedding_list = await self._embeddings_provider.get_embeddings(
+                texts=[query],
+                model_id=self.config.embedding_model_id
+            )
+            if not query_embedding_list or len(query_embedding_list[0]) == 0:
+                raise RoutingError("Failed to obtain a valid embedding for the query.")
 
-        Args:
-            query: The input query string to route.
+            query_embedding = np.array(query_embedding_list[0])
+            # Normalize the query embedding for accurate cosine similarity calculation.
+            query_embedding = query_embedding / np.linalg.norm(query_embedding)
 
-        Returns:
-            A tuple containing the best matching `Route` object and its similarity score,
-            or `None` if no route meets the configured similarity threshold.
-        """
-        if not self._routes:
-            print("No routes defined in the router. Cannot perform routing.")
-            return None
+            similarity_scores = []
+            for dest in self.destinations:
+                dest_emb = self._destination_embeddings.get(dest.destination_id)
+                if dest_emb is None:
+                    logger.warning(f"Embedding for destination '{dest.destination_id}' not found. Skipping.")
+                    continue
 
-        query_embedding = await self._embedding_model.embed_query(query)
-        search_results = await self._vector_store_client.similarity_search_with_score(
-            query_vector=query_embedding,
-            k=self._top_k
-        )
+                # Calculate cosine similarity between query and destination embedding.
+                similarity = np.dot(query_embedding, dest_emb)
+                similarity_scores.append((dest.destination_id, similarity))
 
-        if not search_results:
-            print("No similarity search results found from vector store.")
-            return None
+            # Sort destinations by similarity score in descending order.
+            similarity_scores.sort(key=lambda x: x[1], reverse=True)
 
-        # Take the top match as per _top_k (which is usually 1)
-        best_match_meta, best_match_score = search_results[0]
-        
-        if best_match_score >= self._similarity_threshold:
-            route_id = best_match_meta.get("route_id")
-            if route_id and route_id in self._routes:
-                matched_route = self._routes[route_id]
-                print(f"Query '{query[:30]}...' matched route '{matched_route.name}' "
-                      f"with score: {best_match_score:.4f} (Threshold: {self._similarity_threshold:.2f}).")
-                return matched_route, best_match_score
-            else:
-                # This indicates a potential data inconsistency between _routes cache and vector store
-                print(f"Warning: Matched vector found with ID '{route_id}', but no corresponding Route object in cache. "
-                      "This might indicate an issue or stale vector store entry.")
-                return None
-        else:
-            print(f"No route found above similarity threshold ({self._similarity_threshold:.2f}). "
-                  f"Best match score: {best_match_score:.4f} for route '{best_match_meta.get('route_name', 'N/A')}'.")
-            return None
+            potential_routes: List[Dict[str, Any]] = []
+            # Keep track of destination_ids already added to `potential_routes` to avoid duplicates.
+            matched_destination_ids = set()
 
-    def get_all_routes(self) -> List[Route]:
-        """
-        Returns a list of all currently registered `Route` objects in the router.
-        """
-        return list(self._routes.values())
+            for dest_id, score in similarity_scores:
+                # Only consider routes that meet or exceed the similarity threshold.
+                if score >= self.config.similarity_threshold:
+                    if len(potential_routes) < self.config.top_k_routes:
+                        # Retrieve the full RouteDestination object to get all its properties.
+                        dest_obj = next((d for d in self.destinations if d.destination_id == dest_id), None)
+                        if dest_obj and dest_id not in matched_destination_ids:
+                            potential_routes.append({
+                                "destination_id": dest_obj.destination_id,
+                                "target_module_id": dest_obj.target_module_id,
+                                "similarity": float(score), # Ensure JSON serializable
+                                "metadata": dest_obj.metadata
+                            })
+                            matched_destination_ids.add(dest_id)
+                # Stop if we've found enough top K routes that also meet the threshold.
+                if len(potential_routes) >= self.config.top_k_routes:
+                    break
 
-    async def clear_all_routes(self):
-        """
-        Clears all registered routes from the router and removes their
-        embeddings from the underlying vector store.
-        """
-        await self._vector_store_client.clear()
-        self._routes.clear()
-        print("All routes cleared from router and vector store.")
+            if not potential_routes:
+                logger.info(
+                    f"No suitable semantic route found for query: '{query[:100]}...' "
+                    f"(threshold: {self.config.similarity_threshold})."
+                )
+                if self.config.fallback_module_id:
+                    logger.info(f"Falling back to module '{self.config.fallback_module_id}'.")
+                    return [{
+                        "destination_id": "fallback",
+                        "target_module_id": self.config.fallback_module_id,
+                        "similarity": 0.0,
+                        "metadata": {"reason": "no_semantic_match"}
+                    }]
+                else:
+                    raise RoutingError(
+                        f"No semantic route found for query and no fallback module configured for router "
+                        f"'{self.component_id}': '{query}'"
+                    )
+
+            logger.info(
+                f"Routed query to {len(potential_routes)} destination(s) for '{query[:100]}...': "
+                f"{', '.join([r['destination_id'] for r in potential_routes])}"
+            )
+            return potential_routes
+
+        except ValidationError as e:
+            logger.error(
+                f"Pydantic validation error encountered during routing for '{self.component_id}': {e}",
+                exc_info=True
+            )
+            raise RoutingError(
+                f"Configuration or data validation error during routing for '{self.component_id}'."
+            ) from e
+        except Exception as e:
+            logger.error(
+                f"An unexpected error occurred during routing for '{self.component_id}': {e}",
+                exc_info=True
+            )
+            raise RoutingError(
+                f"An unexpected error occurred during routing for '{self.component_id}'."
+            ) from e
