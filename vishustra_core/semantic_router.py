@@ -1,360 +1,245 @@
-import asyncio
-import json
 import logging
+from typing import Any, Dict, List, Literal, Optional, Protocol, Tuple, Type
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, TypeVar, Generic, Awaitable
 
-from pydantic import BaseModel, Field, ValidationError
-
-# --- Configuration and Pydantic Models ---
+from pydantic import BaseModel, Field, ValidationError, create_model
 
 logger = logging.getLogger(__name__)
 
-class LLMResponse(BaseModel):
-    """Represents a standardized response from an LLM call."""
-    text: str
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+# --- Protocols/Interfaces ---
 
-class LLMClient(ABC):
-    """Abstract base class for LLM clients, enabling modular LLM integration."""
+class LLMProvider(Protocol):
+    """
+    Protocol for an LLM provider capable of generating structured outputs.
 
-    @abstractmethod
-    async def generate(self, prompt: str, **kwargs) -> LLMResponse:
+    This interface ensures that different LLM integrations (e.g., OpenAI, Anthropic, local models)
+    can be swapped out seamlessly, as long as they adhere to the contract of generating
+    a Pydantic-schema-compliant JSON response.
+    """
+    async def generate_structured(self, prompt: str, schema: Type[BaseModel], **kwargs: Any) -> BaseModel:
         """
-        Generates a response from the LLM.
+        Generates a structured output adhering to the provided Pydantic schema.
 
         Args:
-            prompt: The input prompt for the LLM.
-            **kwargs: Additional parameters specific to the LLM provider (e.g., temperature, max_tokens).
+            prompt: The full prompt string to send to the LLM.
+            schema: The Pydantic model type that the LLM's response must conform to.
+            **kwargs: Additional keyword arguments to pass to the underlying LLM client
+                      (e.g., temperature, model_name).
 
         Returns:
-            An LLMResponse object containing the generated text and metadata.
+            An instance of the provided Pydantic schema populated with the LLM's response.
+
+        Raises:
+            Exception: If the LLM call fails or if its output cannot be parsed
+                       into the specified schema.
         """
-        pass
+        ...
 
-    @abstractmethod
-    async def chat(self, messages: List[Dict[str, str]], **kwargs) -> LLMResponse:
-        """
-        Generates a chat completion response from the LLM.
+# --- Data Models ---
 
-        Args:
-            messages: A list of message dictionaries (e.g., [{"role": "user", "content": "..."}]).
-            **kwargs: Additional parameters specific to the LLM provider.
-
-        Returns:
-            An LLMResponse object.
-        """
-        pass
-
-class Route(BaseModel):
+class RouteConfig(BaseModel):
     """
-    Defines a specific routing path within the Vishustra framework.
+    Configuration for a single routing destination within the Vishustra framework.
 
-    Attributes:
-        name: A unique identifier for the route.
-        description: A concise description of what this route handles.
-        destination: The target to route to (e.g., a function, a chain ID, a symbolic name).
-        examples: Optional list of example user queries that should match this route.
+    Each route defines a distinct intent or capability that the system can handle.
     """
-    name: str = Field(..., description="Unique name for the route.")
-    description: str = Field(..., description="Description of what this route handles.")
-    destination: Any = Field(..., description="The target destination (e.g., function, chain ID).")
-    examples: List[str] = Field(default_factory=list, description="Example queries for this route.")
+    name: str = Field(..., description="Unique identifier for this route. E.g., 'document_search', 'weather_query'.")
+    description: str = Field(..., description="A clear, concise description of what this route handles or what its purpose is.")
+    examples: List[str] = Field(default_factory=list,
+                                description="A list of example user queries or phrases that should map to this route. "
+                                            "These examples are used to train the underlying LLM for few-shot intent detection.")
+    # In more advanced versions, 'input_schema' or 'output_schema' could be added
+    # to guide the LLM on parameter extraction or expected response format for this specific route.
 
-class RoutingResult(BaseModel):
+class RouterDecision(BaseModel):
     """
-    Represents the outcome of a semantic routing operation.
+    Represents the output of the SemanticRouter, indicating the chosen route
+    and supplementary information about the decision.
+    """
+    route_name: Optional[str] = Field(None, description="The name of the detected route. None if no route could be confidently determined.")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="A confidence score (0.0 to 1.0) indicating the certainty of the routing decision.")
+    reasoning: str = Field(..., description="A brief explanation provided by the LLM for why this specific route was chosen.")
+    parameters: Dict[str, Any] = Field(default_factory=dict,
+                                       description="Extracted parameters relevant to the detected route. "
+                                                   "Note: Parameter extraction is not implemented in this version "
+                                                   "but is included for future extensibility.")
 
-    Attributes:
-        selected_route_name: The name of the route that was selected.
-        destination: The destination associated with the selected route.
-        confidence_score: A score (0.0 to 1.0) indicating the LLM's confidence in the selection.
-        original_query: The original query that was routed.
-        classification_raw_output: The raw output from the LLM's classification attempt.
-        reasoning: The LLM's explanation for its routing decision.
-    """
-    selected_route_name: str
-    destination: Any
-    confidence_score: float = Field(..., ge=0.0, le=1.0)
-    original_query: str
-    classification_raw_output: str
-    reasoning: Optional[str] = None
-
-class SemanticRouterConfig(BaseModel):
-    """
-    Configuration for the SemanticRouter.
-    """
-    max_retries: int = Field(3, description="Maximum retries for LLM classification if parsing fails.")
-    default_route_name: Optional[str] = Field(None, description="Name of the default route if no match is found.")
-    routing_temperature: float = Field(0.1, ge=0.0, le=2.0, description="Temperature for the internal routing LLM.")
-    routing_model_name: Optional[str] = Field(None, description="Specific model name to use for routing if LLM client supports it.")
-
-# --- SemanticRouter Implementation ---
+# --- Router Implementation ---
 
 class SemanticRouter:
     """
-    An advanced semantic router for Vishustra, capable of intelligently directing
-    user queries to the most appropriate backend destination using an LLM classifier.
+    The Vishustra Semantic Router orchestrates incoming user requests
+    by intelligently detecting their intent and routing them to the
+    most appropriate handler or chain within the framework.
 
-    This router excels in dynamic orchestration scenarios by abstracting away
-    complex conditional logic into semantic descriptions.
-
-    Example Usage (assuming an LLMClient implementation exists, e.g., OpenAIChatClient):
-        import os
-        # from vishustra.llm_clients.openai import OpenAIChatClient # Example LLMClient path
-
-        # --- Mock LLMClient for demonstration purposes ---
-        class MockOpenAIChatClient(LLMClient):
-            async def generate(self, prompt: str, **kwargs) -> LLMResponse:
-                # Mock implementation for generate, not used by this router
-                raise NotImplementedError("Generate not implemented for mock chat client")
-
-            async def chat(self, messages: List[Dict[str, str]], **kwargs) -> LLMResponse:
-                # Simulate LLM response based on query content
-                user_query = messages[-1]["content"] if messages else ""
-                
-                if "weather" in user_query.lower() or "temperature" in user_query.lower():
-                    response_text = '{"selected_route": "weather_query", "confidence_score": 0.95, "reasoning": "Query explicitly asks about weather conditions."}'
-                elif "users" in user_query.lower() or "products" in user_query.lower():
-                    response_text = '{"selected_route": "database_query", "confidence_score": 0.88, "reasoning": "Query seeks specific data from a database."}'
-                else:
-                    response_text = '{"selected_route": "general_chat", "confidence_score": 0.70, "reasoning": "General conversational query, no specific tool needed."}'
-                
-                # Simulate a parsing error occasionally for retry testing
-                if "error" in user_query.lower():
-                    response_text = '{"selected_route": "general_chat", "confidence_score": 0.70, "reasoning": "General conversational query, no specific tool needed."' # Malformed JSON
-
-                await asyncio.sleep(0.1) # Simulate network latency
-                return LLMResponse(text=response_text)
-        # --- End Mock LLMClient ---
-        
-        # llm_client = OpenAIChatClient(api_key=os.getenv("OPENAI_API_KEY")) # Real client
-        llm_client = MockOpenAIChatClient() # Using mock client for runnable example
-
-        routes = [
-            Route(
-                name="weather_query",
-                description="Routes queries asking about current weather or forecasts for a location.",
-                destination="weather_tool_invoke_id",
-                examples=["What's the weather like in London?", "Will it rain tomorrow in Paris?"]
-            ),
-            Route(
-                name="database_query",
-                description="Handles queries requiring information retrieval from a database.",
-                destination="sql_agent_chain_id",
-                examples=["How many users signed up last month?", "List all products in category 'electronics'."]
-            ),
-            Route(
-                name="general_chat",
-                description="For general conversation or questions not covered by other specific routes.",
-                destination="general_llm_chat_chain_id"
-            )
-        ]
-
-        router_config = SemanticRouterConfig(default_route_name="general_chat")
-        router = SemanticRouter(llm_client=llm_client, routes=routes, config=router_config)
-
-        async def run_example():
-            result = await router.route("What's the temperature in New York right now?")
-            print(f"Query: 'What's the temperature in New York right now?'")
-            print(f"Routed to: {result.selected_route_name}, Destination: {result.destination}, Confidence: {result.confidence_score:.2f}")
-
-            result = await router.route("Show me the sales figures for Q3 2023.")
-            print(f"Query: 'Show me the sales figures for Q3 2023.'")
-            print(f"Routed to: {result.selected_route_name}, Destination: {result.destination}, Confidence: {result.confidence_score:.2f}")
-
-            result = await router.route("Tell me a fun fact about space.")
-            print(f"Query: 'Tell me a fun fact about space.'")
-            print(f"Routed to: {result.selected_route_name}, Destination: {result.destination}, Confidence: {result.confidence_score:.2f}")
-
-            # Test with an input that might cause parsing error (mocked)
-            try:
-                result = await router.route("This query should trigger an error in parsing for retry test.")
-                print(f"Query: 'This query should trigger an error in parsing for retry test.'")
-                print(f"Routed to: {result.selected_route_name}, Destination: {result.destination}, Confidence: {result.confidence_score:.2f}")
-            except Exception as e:
-                print(f"Query: 'This query should trigger an error in parsing for retry test.' -> Encountered expected error: {e}")
-
-        # asyncio.run(run_example())
+    It leverages an underlying LLM to perform semantic intent analysis
+    based on predefined route configurations and examples, ensuring
+    flexible and robust request dispatching.
     """
-    
-    def __init__(self, llm_client: LLMClient, routes: List[Route], config: Optional[SemanticRouterConfig] = None):
+    # A special token used internally for the LLM to signal a "default" choice.
+    # This allows the LLM to explicitly say "I don't know" or "fall back" without
+    # needing to know the actual default route's name.
+    _DEFAULT_FALLBACK_TOKEN = "vishustra_default_fallback_route_token"
+
+    def __init__(self, llm: LLMProvider, routes: List[RouteConfig], default_route_name: Optional[str] = None):
         """
-        Initializes the SemanticRouter with an LLM client, a list of routes, and configuration.
+        Initializes the SemanticRouter with a set of predefined routes.
 
         Args:
-            llm_client: An instance of an LLMClient (e.g., OpenAI, Anthropic, local).
-            routes: A list of Route objects defining the available routing paths.
-            config: Optional configuration for the router.
-        """
-        if not isinstance(llm_client, LLMClient):
-            raise TypeError("llm_client must be an instance of LLMClient.")
-        if not routes:
-            raise ValueError("At least one route must be provided.")
-
-        self._llm_client = llm_client
-        self._config = config or SemanticRouterConfig()
-
-        self._routes_map: Dict[str, Route] = {route.name: route for route in routes}
-        if len(self._routes_map) != len(routes):
-            raise ValueError("Route names must be unique.")
-
-        if self._config.default_route_name and self._config.default_route_name not in self._routes_map:
-            raise ValueError(f"Default route '{self._config.default_route_name}' not found in provided routes.")
-
-        logger.info(f"SemanticRouter initialized with {len(routes)} routes. Default: {self._config.default_route_name}")
-        for route in routes:
-            logger.debug(f"  - Route '{route.name}': '{route.description}'")
-
-    def _construct_routing_prompt(self, query: str) -> List[Dict[str, str]]:
-        """
-        Constructs the prompt messages for the LLM to classify the user query.
-        """
-        route_descriptions_str = []
-        for route_name, route in self._routes_map.items():
-            examples_str = ""
-            if route.examples:
-                examples_str = "Example queries:\n" + "\n".join([f"- {ex}" for ex in route.examples])
-            route_descriptions_str.append(
-                f"<route_name>{route.name}</route_name>\n"
-                f"<description>{route.description}</description>\n"
-                f"{examples_str}\n"
-            )
-        
-        # Use a system message to instruct the LLM on its role and output format
-        system_message = (
-            "You are an expert routing assistant for a large language model orchestration framework. "
-            "Your task is to analyze a user's query and classify it into the most appropriate "
-            "predefined route based on its semantic meaning. "
-            "You MUST respond with a JSON object containing the 'selected_route', 'confidence_score' (0.0-1.0), "
-            "and a brief 'reasoning' for your choice. "
-            "If no route is a good fit, select the route that best represents a 'default' or 'general' handling, "
-            "or indicate a lower confidence if no suitable default is available. "
-            "Prioritize routes with examples that closely match the query. "
-            "Ensure the 'selected_route' is one of the provided <route_name> values."
-        )
-
-        user_message_content = (
-            "Here are the available routes:\n\n"
-            + "\n---\n".join(route_descriptions_str) +
-            "\n---\n\n"
-            f"User Query: {query}\n\n"
-            "Please select the best route and provide your reasoning. "
-            "Ensure your response is a valid JSON object with 'selected_route', 'confidence_score', and 'reasoning' keys."
-            "Example JSON: {\"selected_route\": \"weather_query\", \"confidence_score\": 0.9, \"reasoning\": \"Query explicitly asks about weather.\"} "
-            "Make sure 'confidence_score' is a float between 0.0 and 1.0."
-        )
-
-        return [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": user_message_content}
-        ]
-
-    def _parse_llm_output(self, llm_output_text: str, query: str) -> RoutingResult:
-        """
-        Parses the raw LLM output into a structured RoutingResult.
-        Handles JSON parsing errors and assigns default if necessary.
-        """
-        try:
-            parsed_json = json.loads(llm_output_text)
-            selected_route_name = parsed_json.get("selected_route")
-            confidence_score = float(parsed_json.get("confidence_score", 0.0))
-            reasoning = parsed_json.get("reasoning")
-
-            if not isinstance(selected_route_name, str) or selected_route_name not in self._routes_map:
-                logger.warning(
-                    f"LLM selected unknown route '{selected_route_name}' or format error. "
-                    f"Falling back to default or assigning highest confidence to a fallback. Output: {llm_output_text}"
-                )
-                if self._config.default_route_name:
-                    selected_route_name = self._config.default_route_name
-                    # Reduce confidence significantly for an LLM error-induced fallback
-                    confidence_score = min(confidence_score, 0.2) 
-                    reasoning = f"LLM selected unknown route or malformed response; fell back to default: {reasoning}"
-                else:
-                    raise ValueError(f"LLM output could not be parsed into a valid known route and no default route is configured: {llm_output_text}")
-
-            selected_route = self._routes_map[selected_route_name]
-
-            # Ensure confidence score is within valid range
-            confidence_score = max(0.0, min(1.0, confidence_score))
-
-            return RoutingResult(
-                selected_route_name=selected_route.name,
-                destination=selected_route.destination,
-                confidence_score=confidence_score,
-                original_query=query,
-                classification_raw_output=llm_output_text,
-                reasoning=reasoning
-            )
-        except (json.JSONDecodeError, ValueError, TypeError, KeyError) as e:
-            logger.error(f"Failed to parse LLM routing output: {e}. Raw output: '{llm_output_text}'")
-            # Fallback in case of parsing failure
-            if self._config.default_route_name:
-                default_route = self._routes_map[self._config.default_route_name]
-                return RoutingResult(
-                    selected_route_name=default_route.name,
-                    destination=default_route.destination,
-                    confidence_score=0.1,  # Very low confidence for parsing failure fallback
-                    original_query=query,
-                    classification_raw_output=llm_output_text,
-                    reasoning=f"Failed to parse LLM output: {e}. Fell back to default route."
-                )
-            else:
-                raise RuntimeError(
-                    f"Critical parsing error in semantic router and no default route is configured. "
-                    f"Raw LLM output: '{llm_output_text}'"
-                ) from e
-
-    async def route(self, query: str) -> RoutingResult:
-        """
-        Routes a user query to the most appropriate destination using the configured LLM.
-
-        Args:
-            query: The user's input query string.
-
-        Returns:
-            A RoutingResult object detailing the selected route and its destination.
+            llm: An instance of an LLMProvider capable of structured generation.
+                 This LLM will be used for intent detection.
+            routes: A list of `RouteConfig` objects defining the available routing paths.
+            default_route_name: The name of a route to fall back to if no specific
+                                  intent can be confidently detected by the LLM,
+                                  or if the LLM explicitly suggests a fallback.
+                                  Must correspond to a `name` in the `routes` list.
 
         Raises:
-            RuntimeError: If the LLM fails to provide a parseable response after retries,
-                          and no default route is configured.
+            ValueError: If `routes` is empty, or if `default_route_name` is specified
+                        but does not exist in the provided routes.
         """
-        prompt_messages = self._construct_routing_prompt(query)
-        
-        llm_kwargs = {"temperature": self._config.routing_temperature}
-        if self._config.routing_model_name:
-            llm_kwargs["model"] = self._config.routing_model_name
+        if not routes:
+            raise ValueError("SemanticRouter requires at least one route configuration to function.")
 
-        for attempt in range(self._config.max_retries):
-            logger.debug(f"Attempt {attempt + 1}/{self._config.max_retries} to route query: '{query}'")
-            try:
-                llm_response = await self._llm_client.chat(messages=prompt_messages, **llm_kwargs)
-                return self._parse_llm_output(llm_response.text, query)
-            except (json.JSONDecodeError, ValidationError, RuntimeError) as e:
-                logger.warning(f"Routing LLM response parsing failed (attempt {attempt + 1}): {e}. Retrying...")
-                await asyncio.sleep(0.5 * (attempt + 1)) # Exponential backoff
-            except Exception as e:
-                logger.error(f"An unexpected error occurred during LLM routing: {e}")
-                raise
+        self._llm = llm
+        # Store routes in a dictionary for quick lookup by name
+        self._routes: Dict[str, RouteConfig] = {r.name: r for r in routes}
+        self._default_route_name = default_route_name
 
-        # If all retries fail, and a default route is configured, use it. Otherwise, raise.
-        if self._config.default_route_name:
-            default_route = self._routes_map[self._config.default_route_name]
-            logger.error(
-                f"All LLM routing attempts failed for query '{query}'. "
-                f"Falling back to configured default route '{default_route.name}'."
-            )
-            return RoutingResult(
-                selected_route_name=default_route.name,
-                destination=default_route.destination,
-                confidence_score=0.05, # Very low confidence for forced fallback
-                original_query=query,
-                classification_raw_output="LLM routing failed after retries.",
-                reasoning="All LLM attempts failed, falling back to default."
-            )
+        if self._default_route_name and self._default_route_name not in self._routes:
+            raise ValueError(f"Default route '{self._default_route_name}' not found in the provided route configurations.")
+
+        # Dynamically create the Pydantic schema that the LLM is expected to output.
+        # This schema enforces the LLM to select one of the defined route names.
+        self._llm_routing_output_schema = self._create_llm_routing_output_schema()
+        logger.info(f"Initialized SemanticRouter with {len(routes)} routes. Default route: {default_route_name or 'None'}.")
+
+    def _create_llm_routing_output_schema(self) -> Type[BaseModel]:
+        """
+        Dynamically creates a Pydantic schema that specifies the expected JSON structure
+        from the LLM for its routing decision.
+
+        This schema constrains the LLM's output to ensure it provides a valid
+        `route_name` from the configured routes, along with a `confidence` score
+        and `reasoning`.
+        """
+        # Ensure that route names are unique and valid for Literal type
+        route_names = list(self._routes.keys())
+        if not route_names:
+            # Should not happen if __init__ check passed, but for robustness.
+            logger.error("No routes defined when creating LLM routing schema.")
+            raise RuntimeError("Cannot create routing schema without defined routes.")
+
+        # If a default route is configured, allow the LLM to output a special token
+        # to indicate it couldn't find a confident match for any specific route.
+        if self._default_route_name:
+            # The LLM sees the token, we map it back to the actual route name later.
+            route_names.append(self._DEFAULT_FALLBACK_TOKEN)
+
+        # Create a Literal type from the list of available route names (and fallback token)
+        RouteNameLiteral = Literal[tuple(route_names)] # type: ignore
+
+        # Dynamically define the fields for the Pydantic model the LLM should return.
+        dynamic_schema_fields = {
+            "route_name": (RouteNameLiteral, Field(..., description="The name of the most appropriate route, chosen from the available routes. "
+                                                                    f"If no specific route is confidently matched, select `{self._DEFAULT_FALLBACK_TOKEN}` "
+                                                                    "to indicate a fallback to the default route.")),
+            "confidence": (float, Field(..., ge=0.0, le=1.0, description="A confidence score (0.0 to 1.0) for the routing decision.")),
+            "reasoning": (str, Field(..., description="A brief explanation for why this particular route was chosen.")),
+        }
+
+        # Use pydantic.create_model to generate the schema dynamically.
+        return create_model("VishustraRoutingDecisionSchema", **dynamic_schema_fields) # type: ignore
+
+    async def route(self, query: str, **llm_kwargs: Any) -> RouterDecision:
+        """
+        Analyzes a user query using the configured LLM and determines the most suitable
+        route based on the defined `RouteConfig`s.
+
+        Args:
+            query: The incoming user query or message string.
+            **llm_kwargs: Optional keyword arguments to pass directly to the
+                          underlying LLMProvider's `generate_structured` method
+                          (e.g., `temperature=0.0`, `model="gpt-4"`).
+
+        Returns:
+            A `RouterDecision` object containing the chosen route's name,
+            the confidence level, and the LLM's reasoning.
+
+        Raises:
+            ValueError: If the LLM returns an invalid structured response
+                        that does not conform to the expected Pydantic schema.
+            RuntimeError: If an unexpected error occurs during the LLM call
+                          or processing of its response.
+        """
+        prompt_components = [
+            "You are an intelligent routing system, part of the 'Vishustra' LLM orchestration framework.",
+            "Your primary task is to precisely analyze an incoming user query and determine the most appropriate operational route "
+            "from a predefined set of options. Your decision must be based solely on the intent expressed in the user query.",
+            "",
+            "Carefully consider the description and examples for each available route.",
+            "Always aim for the highest confidence in your routing decision.",
+            "",
+            "--- AVAILABLE ROUTES ---",
+        ]
+
+        # Add each route's description and examples to the prompt for few-shot learning.
+        for name, config in self._routes.items():
+            prompt_components.append(f"Route Name: `{config.name}`")
+            prompt_components.append(f"Description: {config.description}")
+            if config.examples:
+                prompt_components.append(f"Examples: {'; '.join(f'\"{ex}\"' for ex in config.examples)}")
+            prompt_components.append("---") # Separator for clarity
+
+        if self._default_route_name:
+            prompt_components.append(f"If, after careful consideration, you cannot confidently match the query "
+                                     f"to any specific route, or if the intent is ambiguous or unknown, "
+                                     f"you MUST select the special token `{self._DEFAULT_FALLBACK_TOKEN}`. "
+                                     f"This indicates a fallback to the general purpose route '{self._default_route_name}'.")
         else:
-            raise RuntimeError(
-                f"Failed to route query '{query}' after {self._config.max_retries} attempts, "
-                "and no default route is configured. Manual intervention or re-evaluation needed."
+            prompt_components.append("It is critical that you always select one of the provided route names, "
+                                     "even if confidence is low. Do not indicate a fallback.")
+
+        prompt_components.append("\n--- USER QUERY ---")
+        prompt_components.append(f"User Query: \"{query}\"")
+        prompt_components.append("\n--- INSTRUCTIONS ---")
+        prompt_components.append("Based on the User Query and the Available Routes, determine the single best route.")
+        prompt_components.append("Your output must be a JSON object, strictly adhering to the specified Pydantic schema.")
+
+        prompt = "\n".join(prompt_components)
+        logger.debug(f"Sending prompt to LLM for routing decision:\n{prompt}")
+
+        try:
+            # Call the LLM with the generated prompt and the dynamic schema.
+            llm_raw_decision = await self._llm.generate_structured(prompt, self._llm_routing_output_schema, **llm_kwargs)
+
+            # Resolve the special fallback token back to the actual default route name.
+            resolved_route_name: Optional[str] = llm_raw_decision.route_name
+            if resolved_route_name == self._DEFAULT_FALLBACK_TOKEN:
+                if self._default_route_name:
+                    resolved_route_name = self._default_route_name
+                    logger.info(f"LLM indicated fallback. Routing to configured default route: '{resolved_route_name}'.")
+                else:
+                    # This case means LLM returned fallback token but no default was configured.
+                    # This implies a potential prompt or LLM issue, or misconfiguration.
+                    # For robustness, we can try to pick a route, or set to None.
+                    logger.warning(f"LLM returned '{self._DEFAULT_FALLBACK_TOKEN}' but no default_route_name was configured. "
+                                   "Returning no specific route. Consider configuring a default or refining routes.")
+                    resolved_route_name = None # Or pick the most confident non-fallback if LLM provided other scores.
+
+            # Construct the final RouterDecision object.
+            # (Note: 'parameters' field is currently empty as parameter extraction
+            # is outside the scope of this initial routing implementation).
+            return RouterDecision(
+                route_name=resolved_route_name,
+                confidence=llm_raw_decision.confidence,
+                reasoning=llm_raw_decision.reasoning,
+                parameters={} # Future extension: populate with extracted parameters if applicable
             )
+        except ValidationError as e:
+            logger.error(f"LLM output failed Pydantic validation for routing decision: {e.errors()}")
+            # Critical error: LLM did not provide a valid structured response.
+            raise ValueError("LLM returned an invalid structured response for routing, likely due to schema mismatch.") from e
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during LLM routing: {type(e).__name__}: {e}")
+            raise RuntimeError("Failed to obtain a routing decision from the LLM due to an internal error.") from e
