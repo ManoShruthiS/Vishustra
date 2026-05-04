@@ -1,245 +1,344 @@
-import logging
-from typing import Any, Dict, List, Literal, Optional, Protocol, Tuple, Type
-from abc import ABC, abstractmethod
+import numpy as np
+from typing import List, Dict, Any, Optional, Protocol, Tuple
+from dataclasses import dataclass
+import asyncio
 
-from pydantic import BaseModel, Field, ValidationError, create_model
+# --- Interfaces (Protocols) for extensibility ---
 
-logger = logging.getLogger(__name__)
-
-# --- Protocols/Interfaces ---
-
-class LLMProvider(Protocol):
+class EmbeddingModel(Protocol):
     """
-    Protocol for an LLM provider capable of generating structured outputs.
+    Protocol for an embedding model.
 
-    This interface ensures that different LLM integrations (e.g., OpenAI, Anthropic, local models)
-    can be swapped out seamlessly, as long as they adhere to the contract of generating
-    a Pydantic-schema-compliant JSON response.
+    Implementations should convert text into dense vector representations.
+    Vectors should ideally be normalized for cosine similarity calculations.
     """
-    async def generate_structured(self, prompt: str, schema: Type[BaseModel], **kwargs: Any) -> BaseModel:
+    def embed_text(self, text: str) -> np.ndarray:
+        """Embeds a single text string into a vector."""
+        ...
+    def embed_texts(self, texts: List[str]) -> List[np.ndarray]:
+        """Embeds a list of text strings into a list of vectors."""
+        ...
+
+class VectorStore(Protocol):
+    """
+    Protocol for a vector store.
+
+    Implementations should manage storage and retrieval of vectors, typically
+    facilitating similarity search operations.
+    """
+    def add_vectors(self, ids: List[str], vectors: List[np.ndarray], metadata: List[Dict[str, Any]]):
         """
-        Generates a structured output adhering to the provided Pydantic schema.
+        Adds vectors to the store.
 
         Args:
-            prompt: The full prompt string to send to the LLM.
-            schema: The Pydantic model type that the LLM's response must conform to.
-            **kwargs: Additional keyword arguments to pass to the underlying LLM client
-                      (e.g., temperature, model_name).
+            ids: Unique identifiers for each vector.
+            vectors: The actual vector embeddings.
+            metadata: Associated metadata for each vector, useful for filtering or retrieval.
+        """
+        ...
+    def search(self, query_vector: np.ndarray, top_k: int = 1) -> List[Tuple[str, float, Dict[str, Any]]]:
+        """
+        Performs a similarity search against the stored vectors.
+
+        Args:
+            query_vector: The vector to search with. Should typically be normalized.
+            top_k: The number of top similar results to return.
 
         Returns:
-            An instance of the provided Pydantic schema populated with the LLM's response.
+            A list of tuples, each containing (id, similarity_score, metadata) for the
+            most similar vectors, sorted by similarity in descending order.
+        """
+        ...
+    def get_by_id(self, id: str) -> Optional[Tuple[np.ndarray, Dict[str, Any]]]:
+        """
+        Retrieves a vector and its metadata by its unique ID.
 
-        Raises:
-            Exception: If the LLM call fails or if its output cannot be parsed
-                       into the specified schema.
+        Args:
+            id: The unique identifier of the vector.
+
+        Returns:
+            A tuple of (vector, metadata) or None if not found.
         """
         ...
 
-# --- Data Models ---
+# --- Data Models for Router Components ---
 
-class RouteConfig(BaseModel):
+@dataclass(frozen=True)
+class RouteDefinition:
     """
-    Configuration for a single routing destination within the Vishustra framework.
+    Defines a routable destination within the Vishustra framework.
 
-    Each route defines a distinct intent or capability that the system can handle.
+    Attributes:
+        name: A unique, human-readable name for the route (e.g., "CustomerSupportAgent").
+        description: A detailed description of what this route handles. This text
+                     will be embedded and used for semantic matching.
+        target_identifier: The actual identifier used by the framework to invoke
+                           this route (e.g., an agent's ID, a chain's name, a tool's function).
     """
-    name: str = Field(..., description="Unique identifier for this route. E.g., 'document_search', 'weather_query'.")
-    description: str = Field(..., description="A clear, concise description of what this route handles or what its purpose is.")
-    examples: List[str] = Field(default_factory=list,
-                                description="A list of example user queries or phrases that should map to this route. "
-                                            "These examples are used to train the underlying LLM for few-shot intent detection.")
-    # In more advanced versions, 'input_schema' or 'output_schema' could be added
-    # to guide the LLM on parameter extraction or expected response format for this specific route.
+    name: str
+    description: str
+    target_identifier: str
 
-class RouterDecision(BaseModel):
+@dataclass
+class InferredRoute:
     """
-    Represents the output of the SemanticRouter, indicating the chosen route
-    and supplementary information about the decision.
-    """
-    route_name: Optional[str] = Field(None, description="The name of the detected route. None if no route could be confidently determined.")
-    confidence: float = Field(..., ge=0.0, le=1.0, description="A confidence score (0.0 to 1.0) indicating the certainty of the routing decision.")
-    reasoning: str = Field(..., description="A brief explanation provided by the LLM for why this specific route was chosen.")
-    parameters: Dict[str, Any] = Field(default_factory=dict,
-                                       description="Extracted parameters relevant to the detected route. "
-                                                   "Note: Parameter extraction is not implemented in this version "
-                                                   "but is included for future extensibility.")
+    Represents a potential route inferred by the SemanticRouter for a given query.
 
-# --- Router Implementation ---
+    Attributes:
+        name: The name of the matched route.
+        description: The description of the matched route.
+        target_identifier: The identifier to use for invoking the matched route.
+        score: The similarity score (e.g., cosine similarity) of the match,
+               indicating confidence.
+    """
+    name: str
+    description: str
+    target_identifier: str
+    score: float
+
+# --- Mock Implementations for Demonstration/Testing ---
+
+class MockEmbeddingModel:
+    """
+    A simple mock embedding model for testing purposes.
+
+    Generates deterministic, normalized random vectors.
+    """
+    _DIMENSION = 128
+
+    def embed_text(self, text: str) -> np.ndarray:
+        """
+        Embeds a single text string by generating a deterministic normalized random vector.
+        """
+        # Use hash for reproducibility and determinism
+        hash_val = hash(text)
+        # Ensure seed is within NumPy's 32-bit integer range
+        np.random.seed(hash_val % (2**32 - 1))
+        vector = np.random.rand(self._DIMENSION).astype(np.float32)
+        norm = np.linalg.norm(vector)
+        return vector / norm if norm > 0 else np.zeros_like(vector)
+    
+    def embed_texts(self, texts: List[str]) -> List[np.ndarray]:
+        """Embeds a list of text strings."""
+        return [self.embed_text(text) for text in texts]
+
+class InMemoryVectorStore:
+    """
+    A simple in-memory vector store implementation for demonstration purposes.
+
+    It stores vectors and their metadata in a dictionary and performs
+    cosine similarity search.
+    """
+    def __init__(self):
+        self._store: Dict[str, Tuple[np.ndarray, Dict[str, Any]]] = {}
+
+    def add_vectors(self, ids: List[str], vectors: List[np.ndarray], metadata: List[Dict[str, Any]]):
+        """Adds vectors and their metadata to the in-memory store."""
+        if not (len(ids) == len(vectors) == len(metadata)):
+            raise ValueError("Lengths of ids, vectors, and metadata must match.")
+        for i, _id in enumerate(ids):
+            self._store[_id] = (vectors[i], metadata[i])
+
+    def search(self, query_vector: np.ndarray, top_k: int = 1) -> List[Tuple[str, float, Dict[str, Any]]]:
+        """
+        Performs a cosine similarity search against stored vectors.
+
+        Assumes query_vector and stored vectors are normalized.
+        """
+        if not self._store:
+            return []
+
+        query_vector_normalized = query_vector / np.linalg.norm(query_vector) \
+                                  if np.linalg.norm(query_vector) > 0 else np.zeros_like(query_vector)
+
+        results = []
+        for _id, (stored_vector, metadata) in self._store.items():
+            # For normalized vectors, dot product is cosine similarity
+            similarity = np.dot(query_vector_normalized, stored_vector)
+            results.append((_id, float(similarity), metadata))
+
+        results.sort(key=lambda x: x[1], reverse=True)
+        return results[:top_k]
+    
+    def get_by_id(self, id: str) -> Optional[Tuple[np.ndarray, Dict[str, Any]]]:
+        """Retrieves a vector and its metadata by ID."""
+        return self._store.get(id)
+
+# --- Main Semantic Router Implementation ---
 
 class SemanticRouter:
     """
-    The Vishustra Semantic Router orchestrates incoming user requests
-    by intelligently detecting their intent and routing them to the
-    most appropriate handler or chain within the framework.
+    Routes an incoming query to the most semantically relevant target within the framework.
 
-    It leverages an underlying LLM to perform semantic intent analysis
-    based on predefined route configurations and examples, ensuring
-    flexible and robust request dispatching.
+    This router leverages an `EmbeddingModel` to vectorize queries and `RouteDefinition` descriptions,
+    and a `VectorStore` to perform efficient similarity searches, identifying the best-fit route.
+    It's designed for high modularity and performance in LLM orchestration.
     """
-    # A special token used internally for the LLM to signal a "default" choice.
-    # This allows the LLM to explicitly say "I don't know" or "fall back" without
-    # needing to know the actual default route's name.
-    _DEFAULT_FALLBACK_TOKEN = "vishustra_default_fallback_route_token"
-
-    def __init__(self, llm: LLMProvider, routes: List[RouteConfig], default_route_name: Optional[str] = None):
+    
+    def __init__(self, 
+                 embedding_model: EmbeddingModel, 
+                 vector_store: VectorStore, 
+                 routes: Optional[List[RouteDefinition]] = None, 
+                 similarity_threshold: float = 0.75):
         """
-        Initializes the SemanticRouter with a set of predefined routes.
+        Initializes the SemanticRouter.
 
         Args:
-            llm: An instance of an LLMProvider capable of structured generation.
-                 This LLM will be used for intent detection.
-            routes: A list of `RouteConfig` objects defining the available routing paths.
-            default_route_name: The name of a route to fall back to if no specific
-                                  intent can be confidently detected by the LLM,
-                                  or if the LLM explicitly suggests a fallback.
-                                  Must correspond to a `name` in the `routes` list.
-
-        Raises:
-            ValueError: If `routes` is empty, or if `default_route_name` is specified
-                        but does not exist in the provided routes.
+            embedding_model: An instance adhering to the `EmbeddingModel` protocol.
+            vector_store: An instance adhering to the `VectorStore` protocol.
+            routes: An optional list of initial `RouteDefinition` objects to register upon initialization.
+            similarity_threshold: The minimum cosine similarity score required for a route
+                                  to be considered a confident match. Matches below this
+                                  threshold will result in `None` being returned by `route_query`.
+                                  Expected to be between 0.0 and 1.0.
         """
-        if not routes:
-            raise ValueError("SemanticRouter requires at least one route configuration to function.")
+        if not (0.0 <= similarity_threshold <= 1.0):
+            raise ValueError("similarity_threshold must be between 0.0 and 1.0.")
 
-        self._llm = llm
-        # Store routes in a dictionary for quick lookup by name
-        self._routes: Dict[str, RouteConfig] = {r.name: r for r in routes}
-        self._default_route_name = default_route_name
+        self._embedding_model = embedding_model
+        self._vector_store = vector_store
+        self._similarity_threshold = similarity_threshold
+        # Stores the actual RouteDefinition objects, keyed by name for quick lookup after search
+        self._registered_routes: Dict[str, RouteDefinition] = {} 
 
-        if self._default_route_name and self._default_route_name not in self._routes:
-            raise ValueError(f"Default route '{self._default_route_name}' not found in the provided route configurations.")
+        if routes:
+            self.add_routes(routes)
 
-        # Dynamically create the Pydantic schema that the LLM is expected to output.
-        # This schema enforces the LLM to select one of the defined route names.
-        self._llm_routing_output_schema = self._create_llm_routing_output_schema()
-        logger.info(f"Initialized SemanticRouter with {len(routes)} routes. Default route: {default_route_name or 'None'}.")
-
-    def _create_llm_routing_output_schema(self) -> Type[BaseModel]:
+    def add_routes(self, routes: List[RouteDefinition]):
         """
-        Dynamically creates a Pydantic schema that specifies the expected JSON structure
-        from the LLM for its routing decision.
+        Registers multiple new routes with the router.
 
-        This schema constrains the LLM's output to ensure it provides a valid
-        `route_name` from the configured routes, along with a `confidence` score
-        and `reasoning`.
-        """
-        # Ensure that route names are unique and valid for Literal type
-        route_names = list(self._routes.keys())
-        if not route_names:
-            # Should not happen if __init__ check passed, but for robustness.
-            logger.error("No routes defined when creating LLM routing schema.")
-            raise RuntimeError("Cannot create routing schema without defined routes.")
-
-        # If a default route is configured, allow the LLM to output a special token
-        # to indicate it couldn't find a confident match for any specific route.
-        if self._default_route_name:
-            # The LLM sees the token, we map it back to the actual route name later.
-            route_names.append(self._DEFAULT_FALLBACK_TOKEN)
-
-        # Create a Literal type from the list of available route names (and fallback token)
-        RouteNameLiteral = Literal[tuple(route_names)] # type: ignore
-
-        # Dynamically define the fields for the Pydantic model the LLM should return.
-        dynamic_schema_fields = {
-            "route_name": (RouteNameLiteral, Field(..., description="The name of the most appropriate route, chosen from the available routes. "
-                                                                    f"If no specific route is confidently matched, select `{self._DEFAULT_FALLBACK_TOKEN}` "
-                                                                    "to indicate a fallback to the default route.")),
-            "confidence": (float, Field(..., ge=0.0, le=1.0, description="A confidence score (0.0 to 1.0) for the routing decision.")),
-            "reasoning": (str, Field(..., description="A brief explanation for why this particular route was chosen.")),
-        }
-
-        # Use pydantic.create_model to generate the schema dynamically.
-        return create_model("VishustraRoutingDecisionSchema", **dynamic_schema_fields) # type: ignore
-
-    async def route(self, query: str, **llm_kwargs: Any) -> RouterDecision:
-        """
-        Analyzes a user query using the configured LLM and determines the most suitable
-        route based on the defined `RouteConfig`s.
+        Embeds each route's description and adds it to the underlying vector store.
+        If a route with the same name already exists, it will be skipped.
 
         Args:
-            query: The incoming user query or message string.
-            **llm_kwargs: Optional keyword arguments to pass directly to the
-                          underlying LLMProvider's `generate_structured` method
-                          (e.g., `temperature=0.0`, `model="gpt-4"`).
+            routes: A list of `RouteDefinition` objects to add.
+        """
+        new_route_ids = []
+        new_route_descriptions = []
+        new_route_metadatas = []
+
+        for route in routes:
+            if route.name in self._registered_routes:
+                # In a production system, one might log a warning or replace the existing route.
+                # For this example, we simply skip.
+                continue 
+            
+            self._registered_routes[route.name] = route
+            new_route_ids.append(route.name) # Use route name as ID in vector store
+            new_route_descriptions.append(route.description)
+            new_route_metadatas.append({
+                "name": route.name, 
+                "description": route.description, 
+                "target_identifier": route.target_identifier
+            })
+        
+        if new_route_descriptions:
+            route_embeddings = self._embedding_model.embed_texts(new_route_descriptions)
+            self._vector_store.add_vectors(new_route_ids, route_embeddings, new_route_metadatas)
+            
+    def add_route(self, route: RouteDefinition):
+        """
+        Registers a single new route with the router.
+
+        Args:
+            route: The `RouteDefinition` object to add.
+        """
+        self.add_routes([route])
+
+    async def route_query(self, query: str) -> Optional[InferredRoute]:
+        """
+        Asynchronously routes an incoming query to the most appropriate target based on semantic similarity.
+
+        Args:
+            query: The incoming query string from the user or another system component.
 
         Returns:
-            A `RouterDecision` object containing the chosen route's name,
-            the confidence level, and the LLM's reasoning.
-
-        Raises:
-            ValueError: If the LLM returns an invalid structured response
-                        that does not conform to the expected Pydantic schema.
-            RuntimeError: If an unexpected error occurs during the LLM call
-                          or processing of its response.
+            An `InferredRoute` object containing the best matching route's details and
+            its similarity score, or `None` if no route meets the configured `similarity_threshold`.
         """
-        prompt_components = [
-            "You are an intelligent routing system, part of the 'Vishustra' LLM orchestration framework.",
-            "Your primary task is to precisely analyze an incoming user query and determine the most appropriate operational route "
-            "from a predefined set of options. Your decision must be based solely on the intent expressed in the user query.",
-            "",
-            "Carefully consider the description and examples for each available route.",
-            "Always aim for the highest confidence in your routing decision.",
-            "",
-            "--- AVAILABLE ROUTES ---",
-        ]
+        if not query:
+            return None
 
-        # Add each route's description and examples to the prompt for few-shot learning.
-        for name, config in self._routes.items():
-            prompt_components.append(f"Route Name: `{config.name}`")
-            prompt_components.append(f"Description: {config.description}")
-            if config.examples:
-                prompt_components.append(f"Examples: {'; '.join(f'\"{ex}\"' for ex in config.examples)}")
-            prompt_components.append("---") # Separator for clarity
+        query_embedding = self._embedding_model.embed_text(query)
+        
+        # Perform a similarity search for the top route
+        search_results = self._vector_store.search(query_embedding, top_k=1)
+        
+        if not search_results:
+            return None # No routes registered or vector store is empty
 
-        if self._default_route_name:
-            prompt_components.append(f"If, after careful consideration, you cannot confidently match the query "
-                                     f"to any specific route, or if the intent is ambiguous or unknown, "
-                                     f"you MUST select the special token `{self._DEFAULT_FALLBACK_TOKEN}`. "
-                                     f"This indicates a fallback to the general purpose route '{self._default_route_name}'.")
+        best_match_id, best_score, _ = search_results[0]
+        
+        if best_score >= self._similarity_threshold:
+            # Retrieve the full RouteDefinition object for the best match using the stored ID
+            best_route_def = self._registered_routes.get(best_match_id)
+            if best_route_def:
+                return InferredRoute(
+                    name=best_route_def.name,
+                    description=best_route_def.description,
+                    target_identifier=best_route_def.target_identifier,
+                    score=best_score
+                )
+            else:
+                # This scenario indicates an inconsistency (route ID in vector store but not in _registered_routes)
+                # Should ideally not happen if add_routes is robust.
+                return None
         else:
-            prompt_components.append("It is critical that you always select one of the provided route names, "
-                                     "even if confidence is low. Do not indicate a fallback.")
+            return None # No confident match found above the similarity threshold
 
-        prompt_components.append("\n--- USER QUERY ---")
-        prompt_components.append(f"User Query: \"{query}\"")
-        prompt_components.append("\n--- INSTRUCTIONS ---")
-        prompt_components.append("Based on the User Query and the Available Routes, determine the single best route.")
-        prompt_components.append("Your output must be a JSON object, strictly adhering to the specified Pydantic schema.")
+# Example Usage (optional, for demonstration of how it would be used)
+async def _example_usage():
+    print("--- SemanticRouter Example Usage ---")
 
-        prompt = "\n".join(prompt_components)
-        logger.debug(f"Sending prompt to LLM for routing decision:\n{prompt}")
+    # 1. Initialize components
+    embedding_model = MockEmbeddingModel()
+    vector_store = InMemoryVectorStore()
+    router = SemanticRouter(
+        embedding_model=embedding_model,
+        vector_store=vector_store,
+        similarity_threshold=0.78 # Adjust threshold for stricter or looser matching
+    )
 
-        try:
-            # Call the LLM with the generated prompt and the dynamic schema.
-            llm_raw_decision = await self._llm.generate_structured(prompt, self._llm_routing_output_schema, **llm_kwargs)
+    # 2. Define and add routes
+    customer_support_route = RouteDefinition(
+        name="CustomerSupport",
+        description="Handles inquiries related to product issues, refunds, order status, or technical support.",
+        target_identifier="CustomerSupportAgent"
+    )
+    sales_inquiry_route = RouteDefinition(
+        name="SalesInquiry",
+        description="Routes questions about new product features, pricing, purchasing, or partnership opportunities.",
+        target_identifier="SalesAgent"
+    )
+    general_chat_route = RouteDefinition(
+        name="GeneralChat",
+        description="For casual conversation, greetings, or off-topic discussions not covered by other agents.",
+        target_identifier="GeneralChatbot"
+    )
+    router.add_routes([customer_support_route, sales_inquiry_route, general_chat_route])
+    print(f"Registered {len(router._registered_routes)} routes.")
 
-            # Resolve the special fallback token back to the actual default route name.
-            resolved_route_name: Optional[str] = llm_raw_decision.route_name
-            if resolved_route_name == self._DEFAULT_FALLBACK_TOKEN:
-                if self._default_route_name:
-                    resolved_route_name = self._default_route_name
-                    logger.info(f"LLM indicated fallback. Routing to configured default route: '{resolved_route_name}'.")
-                else:
-                    # This case means LLM returned fallback token but no default was configured.
-                    # This implies a potential prompt or LLM issue, or misconfiguration.
-                    # For robustness, we can try to pick a route, or set to None.
-                    logger.warning(f"LLM returned '{self._DEFAULT_FALLBACK_TOKEN}' but no default_route_name was configured. "
-                                   "Returning no specific route. Consider configuring a default or refining routes.")
-                    resolved_route_name = None # Or pick the most confident non-fallback if LLM provided other scores.
+    # 3. Test routing with various queries
+    queries = [
+        "My order #12345 hasn't arrived yet. Can you help?",
+        "Tell me more about the new AI features roadmap.",
+        "Hello, how are you today?",
+        "I need help setting up my account.",
+        "What's the price for enterprise license?",
+        "When is the next full moon?", # Should not confidently match
+        "How do I request a refund?",
+    ]
 
-            # Construct the final RouterDecision object.
-            # (Note: 'parameters' field is currently empty as parameter extraction
-            # is outside the scope of this initial routing implementation).
-            return RouterDecision(
-                route_name=resolved_route_name,
-                confidence=llm_raw_decision.confidence,
-                reasoning=llm_raw_decision.reasoning,
-                parameters={} # Future extension: populate with extracted parameters if applicable
-            )
-        except ValidationError as e:
-            logger.error(f"LLM output failed Pydantic validation for routing decision: {e.errors()}")
-            # Critical error: LLM did not provide a valid structured response.
-            raise ValueError("LLM returned an invalid structured response for routing, likely due to schema mismatch.") from e
-        except Exception as e:
-            logger.error(f"An unexpected error occurred during LLM routing: {type(e).__name__}: {e}")
-            raise RuntimeError("Failed to obtain a routing decision from the LLM due to an internal error.") from e
+    for query in queries:
+        print(f"\nRouting query: '{query}'")
+        inferred_route = await router.route_query(query)
+        if inferred_route:
+            print(f"  -> Matched Route: {inferred_route.name}")
+            print(f"     Target: {inferred_route.target_identifier}")
+            print(f"     Score: {inferred_route.score:.4f}")
+        else:
+            print("  -> No confident route found.")
+
+if __name__ == "__main__":
+    asyncio.run(_example_usage())
