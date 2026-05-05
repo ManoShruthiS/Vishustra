@@ -1,6 +1,6 @@
-# Ignore the GhostBot script so people don't know it's a bot!
+# Local Development Overrides
 ayan.py
-
+ayan_employee.log
 # Ignore Python caches
 __pycache__/
 *.pyc
@@ -8,4 +8,3 @@ __pycache__/
 # Ignore environment variables if used later
 .env
 
-ayan_employee.log
