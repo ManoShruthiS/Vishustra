@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Any, Dict, List
 
 from vishustra_core.nodes.base_node import BaseNode
@@ -7,122 +8,214 @@ logger = logging.getLogger(__name__)
 
 class FactCheckerNode(BaseNode):
     """
-    A processing node designed to simulate fact-checking for textual claims.
+    A data processing node designed to simulate fact-checking on textual data.
 
-    This node takes a claim (string) as input and attempts to determine its
-    veracity based on predefined internal heuristics or a placeholder for
-    external verification mechanisms. It outputs a structured dictionary
-    containing the original claim, its verification status, and a summary
-    of the evidence or reasoning.
+    This node takes an input text, identifies potential claims within it, and
+    provides a simulated verification status for each claim. The verification
+    logic is heuristic-based for demonstration purposes; a production system
+    would integrate with external knowledge bases, fact-checking APIs, or
+    sophisticated LLM calls to perform actual verification.
+
+    The node aims to provide a structured output detailing individual claims,
+    their verification status, confidence scores, and a summary of evidence
+    or reasoning for the simulated status.
     """
 
     @property
     def node_name(self) -> str:
         """
-        Returns the descriptive name of this processing node.
+        Returns the unique, descriptive name for this processing node.
         """
-        return "Fact Checker"
+        return "FactCheckerNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes an input claim to determine its factual accuracy.
+        Processes the input data to perform simulated fact-checking.
 
-        This method simulates fact-checking by:
-        1. Validating the input `data` as a string (the claim).
-        2. Applying internal heuristics (keyword matching) to assign a
-           preliminary verification status.
-        3. Constructing a detailed output dictionary with the verification result.
-        In a real-world scenario, this would involve querying external
-        knowledge bases, truth-checking APIs, or leveraging sophisticated
-        natural language inference models.
+        This method expects the `data` parameter to be a dictionary containing
+        a 'text' key, which holds the string content to be fact-checked.
 
         Args:
-            data (Any): The input data, expected to be a string representing the claim to be fact-checked.
+            data (Any): The input data, expected to be a dictionary with a
+                        'text' key (str) containing the content to check.
+                        Example: {"text": "Vishustra is a highly modular framework."}
             context (Dict[str, Any]): A dictionary containing contextual information
-                                       or configuration for the node.
-                                       Optional keys:
-                                       - 'confidence_threshold' (float): Minimum confidence for a claim to be considered verified. (default: 0.7)
-                                       - 'positive_keywords' (List[str]): Keywords indicating truth.
-                                       - 'negative_keywords' (List[str]): Keywords indicating falsehood.
+                                       or configuration parameters. This could include
+                                       API keys, verification thresholds, or flags
+                                       for experimental features.
 
         Returns:
-            Dict[str, Any]: A dictionary containing the fact-checking results:
-                            - 'original_claim' (str): The claim that was processed.
-                            - 'is_verified' (bool): True if the claim is considered true, False if false. None if unverified.
-                            - 'verification_status' (str): "True", "False", or "Unverified".
-                            - 'evidence_summary' (str): A summary of the evidence or reasoning for the status.
-                            - 'confidence_score' (float): A simulated confidence score (0.0 to 1.0).
-                            - 'error' (str, optional): An error message if processing failed.
-        """
-        logger.debug(f"[{self.node_name}] Starting process for data type: {type(data)}")
+            Dict[str, Any]: A dictionary containing the original text, a list of
+                            identified claims with their simulated verification
+                            details, and an overall status for the input text.
+                            Example:
+                            {
+                                "original_text": "Vishustra is a modular framework.",
+                                "claims": [
+                                    {
+                                        "claim_text": "Vishustra is a modular framework.",
+                                        "status": "VERIFIED_TRUE",
+                                        "confidence": 0.95,
+                                        "evidence_summary": "Matches project docs."
+                                    }
+                                ],
+                                "overall_status": "FULLY_VERIFIED_TRUE",
+                                "processing_node": "FactCheckerNode"
+                            }
+                            If input is invalid or an error occurs, it returns
+                            a dictionary with an "error" key and a "FAILED" status.
 
-        if not isinstance(data, str):
-            error_msg = f"[{self.node_name}] Invalid input data type. Expected 'str', got '{type(data).__name__}'."
-            logger.error(error_msg)
+        Raises:
+            TypeError: If the input `data` is not a dictionary or lacks the 'text' key.
+            RuntimeError: For simulated external service failures or unexpected issues
+                          during the verification process.
+        """
+        logger.debug(f"[{self.node_name}] Initiating fact-checking for data of type: {type(data)}")
+
+        if not isinstance(data, dict) or 'text' not in data or not isinstance(data['text'], str):
+            error_msg = (
+                f"[{self.node_name}] Invalid input data. Expected a dictionary "
+                f"with a 'text' key (string). Received: {type(data).__name__}."
+            )
+            logger.error(error_msg + f" Data sample: {str(data)[:100]}...")
             return {
-                "original_claim": data,
-                "is_verified": None,
-                "verification_status": "Error",
-                "evidence_summary": error_msg,
-                "confidence_score": 0.0,
-                "error": error_msg
+                "error": error_msg,
+                "original_input": data,
+                "overall_status": "FAILED",
+                "processing_node": self.node_name
             }
 
-        claim = data.strip()
-        result: Dict[str, Any] = {
-            "original_claim": claim,
-            "is_verified": None,
-            "verification_status": "Unverified",
-            "evidence_summary": "Initial assessment required.",
-            "confidence_score": 0.5
-        }
-
-        # Retrieve configuration from context or use defaults
-        confidence_threshold: float = context.get('confidence_threshold', 0.7)
-        positive_keywords: List[str] = context.get('positive_keywords', ['is a fact', 'is true', 'universally accepted', 'verified claim'])
-        negative_keywords: List[str] = context.get('negative_keywords', ['is not true', 'is false', 'debunked', 'myth', 'fake news'])
+        input_text = data['text']
+        simulated_claims: List[Dict[str, Any]] = []
+        overall_status: str = "UNVERIFIED"
 
         try:
-            # Simulate a basic keyword-based fact check
-            lower_claim = claim.lower()
-            is_true_indicators = sum(1 for kw in positive_keywords if kw in lower_claim)
-            is_false_indicators = sum(1 for kw in negative_keywords if kw in lower_claim)
+            # In a full-fledged system, this would involve NLP techniques,
+            # potentially leveraging an LLM to identify specific, verifiable claims.
+            # For this simulation, we'll use basic sentence splitting.
+            potential_claims = self._extract_potential_claims(input_text)
 
-            if is_true_indicators > is_false_indicators and is_true_indicators > 0:
-                result["is_verified"] = True
-                result["verification_status"] = "True"
-                result["evidence_summary"] = f"Claim contains positive indicators. (e.g., {' '.join(positive_keywords[:2])}...)"
-                result["confidence_score"] = min(0.95, 0.5 + (is_true_indicators * 0.1))
-            elif is_false_indicators > is_true_indicators and is_false_indicators > 0:
-                result["is_verified"] = False
-                result["verification_status"] = "False"
-                result["evidence_summary"] = f"Claim contains negative indicators. (e.g., {' '.join(negative_keywords[:2])}...)"
-                result["confidence_score"] = min(0.95, 0.5 + (is_false_indicators * 0.1))
+            if not potential_claims:
+                overall_status = "NO_CLAIMS_FOUND"
+                logger.info(f"[{self.node_name}] No verifiable claims identified in the text.")
             else:
-                result["is_verified"] = None
-                result["verification_status"] = "Unverified"
-                result["evidence_summary"] = "No strong internal indicators found. Requires external verification."
-                result["confidence_score"] = 0.5
+                for claim_text in potential_claims:
+                    # Simulate the actual verification. This is where external APIs,
+                    # knowledge base lookups, or LLM-based reasoning would occur.
+                    status, confidence, evidence = self._simulate_verification(claim_text, context)
+                    simulated_claims.append({
+                        "claim_text": claim_text,
+                        "status": status,
+                        "confidence": confidence,
+                        "evidence_summary": evidence
+                    })
+                    logger.debug(f"[{self.node_name}] Verified claim: '{claim_text[:80]}...' -> Status: {status}")
 
-            # Apply confidence threshold if applicable
-            if result["is_verified"] is not None and result["confidence_score"] < confidence_threshold:
-                logger.debug(f"[{self.node_name}] Claim '{claim[:50]}...' status downgraded due to low confidence ({result['confidence_score']:.2f} < {confidence_threshold:.2f}).")
-                result["is_verified"] = None
-                result["verification_status"] = "Unverified (Low Confidence)"
-                result["evidence_summary"] += f" Confidence score below threshold ({confidence_threshold})."
+                # Determine overall status based on individual claims
+                if all(c['status'] == "VERIFIED_TRUE" for c in simulated_claims):
+                    overall_status = "FULLY_VERIFIED_TRUE"
+                elif all(c['status'] == "VERIFIED_FALSE" for c in simulated_claims):
+                    overall_status = "FULLY_VERIFIED_FALSE"
+                elif any(c['status'].startswith("VERIFIED_") for c in simulated_claims):
+                    overall_status = "PARTIALLY_VERIFIED"
+                else:
+                    overall_status = "UNVERIFIED_ALL"
 
-            logger.info(f"[{self.node_name}] Processed claim: '{claim[:75]}...' - Status: {result['verification_status']}, Confidence: {result['confidence_score']:.2f}")
+            logger.info(
+                f"[{self.node_name}] Fact-checking completed for text (excerpt): "
+                f"'{input_text[:70]}...' Overall status: {overall_status}"
+            )
+            return {
+                "original_text": input_text,
+                "claims": simulated_claims,
+                "overall_status": overall_status,
+                "processing_node": self.node_name
+            }
 
         except Exception as e:
-            error_msg = f"[{self.node_name}] An unexpected error occurred during fact-checking: {e}"
-            logger.exception(error_msg)
-            result.update({
-                "is_verified": None,
-                "verification_status": "Error",
-                "evidence_summary": f"Processing failed: {e}",
-                "confidence_score": 0.0,
-                "error": error_msg
-            })
+            error_msg = f"[{self.node_name}] An unexpected error occurred during processing: {e}"
+            logger.exception(error_msg) # Log traceback for unexpected errors
+            return {
+                "error": error_msg,
+                "original_text": input_text,
+                "overall_status": "FAILED",
+                "processing_node": self.node_name
+            }
 
-        logger.debug(f"[{self.node_name}] Finished processing. Result: {result}")
-        return result
+    def _extract_potential_claims(self, text: str) -> List[str]:
+        """
+        Helper method to simulate the extraction of individual factual claims from text.
+
+        In a production environment, this would utilize advanced NLP models,
+        like a sentence splitter combined with a claim detection model, to
+        accurately identify discrete statements for verification.
+        For this simulation, a basic sentence split is used.
+
+        Args:
+            text (str): The input text from which to extract claims.
+
+        Returns:
+            List[str]: A list of strings, where each string represents a potential claim.
+        """
+        # A simple regex-based sentence tokenizer. This is illustrative and
+        # would need to be replaced with a robust NLP library (e.g., NLTK, spaCy)
+        # for real-world applications.
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
+        logger.debug(f"[{self.node_name}] Identified {len(sentences)} potential claims for verification.")
+        return sentences
+
+    def _simulate_verification(self, claim: str, context: Dict[str, Any]) -> tuple[str, float, str]:
+        """
+        Helper method to simulate the verification process for a single claim.
+
+        This method applies simple string matching heuristics to determine a
+        simulated status, confidence score, and a summary of the 'evidence'.
+        The `context` dictionary can be used to influence the verification logic,
+        e.g., by enabling experimental feature checks.
+
+        Args:
+            claim (str): The specific claim text to verify.
+            context (Dict[str, Any]): Contextual parameters that might influence
+                                       the verification, such as feature flags.
+
+        Returns:
+            tuple[str, float, str]: A tuple containing:
+                                    - The verification status (e.g., "VERIFIED_TRUE", "VERIFIED_FALSE", "UNVERIFIED").
+                                    - A confidence score (float between 0.0 and 1.0).
+                                    - A short string summarizing the simulated evidence.
+        """
+        claim_lower = claim.lower()
+        status: str
+        confidence: float
+        evidence: str
+
+        # Example heuristics for demonstration
+        if "vishustra" in claim_lower and "modular" in claim_lower and "framework" in claim_lower:
+            status = "VERIFIED_TRUE"
+            confidence = 0.98
+            evidence = "Aligns with Vishustra's core architectural tenets."
+        elif "llm" in claim_lower and "orchestration" in claim_lower and "power" in claim_lower:
+            status = "VERIFIED_TRUE"
+            confidence = 0.90
+            evidence = "Supported by Vishustra's design goals and roadmap."
+        elif "bug" in claim_lower or "error" in claim_lower or "unstable" in claim_lower:
+            status = "VERIFIED_FALSE"
+            confidence = 0.85
+            evidence = "Contradicts recent quality assurance reports and stability metrics."
+        elif "unsupported feature" in claim_lower:
+            # Demonstrate context influence: if experimental features are active,
+            # this might be 'unverified' rather than definitively 'false'.
+            if context.get("experimental_features_enabled", False):
+                status = "UNVERIFIED"
+                confidence = 0.55
+                evidence = "Feature is currently in experimental stage; status is fluid."
+            else:
+                status = "VERIFIED_FALSE"
+                confidence = 0.75
+                evidence = "Feature is not present in the current stable release."
+        else:
+            status = "UNVERIFIED"
+            confidence = 0.40
+            evidence = "No conclusive internal evidence found; requires external validation."
+
+        return status, confidence, evidence
