@@ -1,6 +1,3 @@
-# Local Development Overrides
-dev_runner.py
-dev_runner.log
 # Ignore Python caches
 __pycache__/
 *.pyc
