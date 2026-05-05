@@ -7,3 +7,5 @@ __pycache__/
 
 # Ignore environment variables if used later
 .env
+
+ayan_employee.log
