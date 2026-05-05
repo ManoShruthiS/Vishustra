@@ -1,10 +1,9 @@
 # Local Development Overrides
-ayan.py
-ayan_employee.log
+dev_runner.py
+dev_runner.log
 # Ignore Python caches
 __pycache__/
 *.pyc
 
 # Ignore environment variables if used later
 .env
-
