@@ -4,7 +4,3 @@ __pycache__/
 
 # Ignore environment variables if used later
 .env
-
-# Automation (Stealth)
-.bots/
-*.local.py
