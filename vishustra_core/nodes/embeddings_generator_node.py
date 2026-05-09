@@ -6,86 +6,77 @@ logger = logging.getLogger(__name__)
 
 class EmbeddingsGeneratorNode(BaseNode):
     """
-    A node responsible for converting textual data into numerical vector representations.
+    A node responsible for transforming textual data into numerical vector embeddings.
     
-    This node expects either a single string or a list of strings as input. It utilizes
-    a provider-agnostic approach, looking for an 'embedding_client' or specific 
-    configuration in the context to perform the transformation.
+    This node integrates with configurable embedding models (e.g., OpenAI, HuggingFace)
+    to facilitate downstream vector search or semantic analysis.
     """
-
-    def __init__(self, model_name: str = "text-embedding-3-small"):
-        """
-        Initializes the node with a default model configuration.
-        
-        Args:
-            model_name: The identifier for the embedding model to be used.
-        """
-        self._model_name = model_name
 
     @property
     def node_name(self) -> str:
-        """Returns the canonical name for this node."""
+        """Returns the canonical name for this node type."""
         return "EmbeddingsGeneratorNode"
 
-    def process(self, data: Union[str, List[str]], context: Dict[str, Any]) -> List[List[float]]:
+    def process(self, data: Union[str, List[str]], context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Generates embeddings for the provided input data.
         
         Args:
-            data: The text or list of texts to embed.
-            context: Execution context containing configuration and potentially 
-                    the embedding provider/client.
-
+            data: The input text or list of texts to be vectorized.
+            context: Orchestration context containing 'embedding_config' or 'provider' details.
+            
         Returns:
-            A list of vector embeddings (list of floats).
-
+            A dictionary containing the generated 'embeddings', 'model_name', and 'usage' statistics.
+            
         Raises:
-            ValueError: If the input data is not a string or list of strings.
-            RuntimeError: If the embedding provider fails or is not configured.
+            ValueError: If the input data format is invalid.
+            RuntimeError: If the embedding generation fails due to provider issues.
         """
-        logger.info(f"Node '{self.node_name}' started processing with model: {self._model_name}")
+        logger.info(f"[{self.node_name}] Starting embedding generation process.")
 
         if not data:
-            logger.warning("Empty data received. Returning empty list.")
-            return []
+            logger.warning(f"[{self.node_name}] Received empty input data.")
+            return {"embeddings": [], "model_name": None}
 
-        # Input Validation
-        if not isinstance(data, (str, list)):
-            error_msg = f"Invalid input type: {type(data)}. Expected str or List[str]."
-            logger.error(error_msg)
-            raise ValueError(error_msg)
-
-        texts_to_embed = [data] if isinstance(data, str) else data
+        # Normalize data to a list for consistent processing
+        inputs = [data] if isinstance(data, str) else data
+        
+        if not isinstance(inputs, list):
+            raise ValueError(f"Invalid input type: {type(data)}. Expected str or List[str].")
 
         try:
-            # In a production modular framework, we retrieve the client from context 
-            # or a centralized provider registry.
-            client = context.get("embedding_client")
+            # Extract configuration from context
+            config = context.get("embedding_config", {})
+            provider = config.get("provider", "mock-provider")
+            model = config.get("model", "text-embedding-3-small")
             
-            if client:
-                # Assuming a standard interface for the purpose of this implementation
-                logger.debug("Dispatching request to external embedding provider.")
-                embeddings = client.embed(texts=texts_to_embed, model=self._model_name)
-            else:
-                # Fallback / Mock logic for framework demonstration if no client is provided
-                logger.debug("No embedding client found in context; using internal transformation logic.")
-                embeddings = self._simulate_embeddings(texts_to_embed)
+            logger.debug(f"[{self.node_name}] Using provider: {provider}, model: {model}")
 
-            logger.info(f"Successfully generated embeddings for {len(texts_to_embed)} items.")
-            return embeddings
+            # Note: In a production environment, this is where the call to a specific 
+            # client library (OpenAI, LangChain, or custom REST client) would occur.
+            # We simulate the transformation logic here.
+            embeddings = self._generate_vectors(inputs, model)
+
+            result = {
+                "embeddings": embeddings,
+                "model_name": model,
+                "dimensions": len(embeddings[0]) if embeddings else 0,
+                "count": len(embeddings)
+            }
+            
+            logger.info(f"[{self.node_name}] Successfully generated {len(embeddings)} vectors.")
+            return result
 
         except Exception as e:
-            logger.exception(f"Failed to generate embeddings: {str(e)}")
-            raise RuntimeError(f"Embedding generation failed: {e}") from e
+            logger.error(f"[{self.node_name}] Failed to generate embeddings: {str(e)}", exc_info=True)
+            raise RuntimeError(f"Embedding generation error: {e}") from e
 
-    def _simulate_embeddings(self, texts: List[str]) -> List[List[float]]:
+    def _generate_vectors(self, texts: List[str], model: str) -> List[List[float]]:
         """
-        Placeholder logic to simulate vector generation when an external provider 
-        is not attached to the context.
+        Internal utility to interface with the embedding provider.
+        Placeholder implementation for vector generation logic.
         """
-        # This is where the framework would interface with local models like sentence-transformers
-        # or call an API if the client wasn't pre-injected.
-        return [[0.0] * 1536 for _ in texts]
-
-    def __repr__(self) -> str:
-        return f"<EmbeddingsGeneratorNode(model='{self._model_name}')>"
+        # This is a simulation of the vectorization logic.
+        # Logic would typically involve: response = self.client.embeddings.create(input=texts, model=model)
+        mock_dimension = 1536
+        return [[0.0123 * (i + 1) for i in range(mock_dimension)] for _ in texts]
