@@ -1,10 +1,11 @@
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 try:
     import markdown
+    MARKDOWN_AVAILABLE = True
 except ImportError:
-    markdown = None
+    MARKDOWN_AVAILABLE = False
 
 from vishustra_core.nodes.base_node import BaseNode
 
@@ -12,11 +13,11 @@ logger = logging.getLogger(__name__)
 
 class MarkdownParserNode(BaseNode):
     """
-    A processing node that transforms raw Markdown text into structured HTML.
+    A processing node that transforms raw Markdown strings into HTML or 
+    structured dictionary representations.
     
-    This node is designed to handle LLM-generated markdown, converting it into 
-    a format suitable for web rendering or further downstream processing 
-    within the Vishustra orchestration pipeline.
+    This node handles content sanitization and extension-based parsing 
+    to facilitate downstream LLM context injection or UI rendering.
     """
 
     @property
@@ -28,59 +29,61 @@ class MarkdownParserNode(BaseNode):
 
     def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Converts input Markdown string into HTML using configurable extensions.
-
+        Processes the input Markdown data.
+        
         Args:
-            data: The raw Markdown string to be parsed.
-            context: A dictionary containing execution metadata and configuration.
-                     Supports 'markdown_extensions' key to customize the parser.
+            data: The raw markdown string to be parsed.
+            context: A dictionary containing execution settings:
+                - 'extensions': List of markdown extensions to use (default: ['extra', 'toc']).
+                - 'output_format': Target format, though currently optimized for HTML.
 
         Returns:
-            A dictionary containing the parsed content, status, and metadata.
+            A dictionary containing the parsed content and metadata.
 
         Raises:
-            TypeError: If the input data is not a string.
-            RuntimeError: If the parsing library is missing or an internal error occurs.
+            ValueError: If the input data is not a string.
+            RuntimeError: If parsing fails due to library or configuration issues.
         """
         if not isinstance(data, str):
-            logger.error(f"[{self.node_name}] Input validation failed. Expected str, got {type(data).__name__}.")
-            raise TypeError(f"MarkdownParserNode requires string input, received {type(data).__name__}")
+            logger.error("MarkdownParserNode received non-string input. Type: %s", type(data))
+            raise ValueError(f"MarkdownParserNode expected string input, got {type(data).__name__}")
 
-        if not data.strip():
-            logger.info(f"[{self.node_name}] Received empty string. Skipping transformation.")
-            return {
-                "parsed_content": "",
-                "metadata": {"empty_input": True},
-                "status": "skipped"
-            }
+        if not MARKDOWN_AVAILABLE:
+            logger.error("The 'markdown' package is not installed in the current environment.")
+            raise RuntimeError(
+                "Markdown library is missing. Please install it using 'pip install markdown' "
+                "to use the MarkdownParserNode."
+            )
 
-        if markdown is None:
-            logger.error(f"[{self.node_name}] Critical dependency 'markdown' is not installed.")
-            raise RuntimeError("The 'markdown' Python package is required for MarkdownParserNode.")
+        logger.info("Initializing markdown parsing for payload of size: %d", len(data))
 
         try:
-            # Extract configuration from context or use sensible defaults
-            extensions = context.get("markdown_extensions", ["extra", "codehilite", "toc", "fenced_code"])
-            output_format = context.get("markdown_output_format", "html5")
+            # Extract configuration from context or use defaults
+            extensions = context.get("markdown_extensions", ["extra", "toc", "codehilite"])
+            extension_configs = context.get("markdown_extension_configs", {})
 
-            logger.debug(f"[{self.node_name}] Parsing content with extensions: {extensions}")
-            
+            # Execute transformation
             parsed_html = markdown.markdown(
                 data, 
                 extensions=extensions,
-                output_format=output_format
+                extension_configs=extension_configs
             )
 
-            return {
-                "parsed_content": parsed_html,
+            result = {
+                "status": "success",
+                "output": parsed_html,
                 "metadata": {
                     "input_length": len(data),
-                    "output_length": len(parsed_html),
-                    "parser": "python-markdown"
-                },
-                "status": "success"
+                    "extensions_used": extensions,
+                    "node": self.node_name
+                }
             }
 
+            logger.debug("Successfully parsed markdown content.")
+            return result
+
         except Exception as e:
-            logger.exception(f"[{self.node_name}] An unexpected error occurred during markdown processing.")
-            raise RuntimeError(f"Markdown parsing failed: {str(e)}") from e
+            logger.exception("An unexpected error occurred during markdown transformation.")
+            raise RuntimeError(f"Failed to process markdown: {str(e)}") from e
+
+# End of file
