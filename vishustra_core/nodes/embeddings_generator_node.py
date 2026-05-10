@@ -1,82 +1,101 @@
 import logging
-from typing import Any, Dict, List, Union, Optional
+from typing import Any, Dict, List, Union
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class EmbeddingsGeneratorNode(BaseNode):
     """
-    A node responsible for transforming textual data into numerical vector embeddings.
+    EmbeddingsGeneratorNode handles the transformation of textual data into high-dimensional 
+    vector representations. It supports both single string inputs and batches of text.
     
-    This node integrates with configurable embedding models (e.g., OpenAI, HuggingFace)
-    to facilitate downstream vector search or semantic analysis.
+    This node is designed to interface with various embedding providers, utilizing the 
+    provided context for configuration and model selection.
     """
+
+    def __init__(self, provider: str = "openai", default_model: str = "text-embedding-3-small"):
+        """
+        Initializes the node with a specific provider and default model.
+        """
+        self.provider = provider
+        self.default_model = default_model
 
     @property
     def node_name(self) -> str:
-        """Returns the canonical name for this node type."""
+        """
+        Returns the unique identifier for this node type.
+        """
         return "EmbeddingsGeneratorNode"
 
-    def process(self, data: Union[str, List[str]], context: Dict[str, Any]) -> Dict[str, Any]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Generates embeddings for the provided input data.
+        Processes the input data to generate embeddings.
         
         Args:
-            data: The input text or list of texts to be vectorized.
-            context: Orchestration context containing 'embedding_config' or 'provider' details.
+            data: The text data to be vectorized. Can be a string or a list of strings.
+            context: Orchestration context containing operational metadata, 
+                     API keys, and model overrides.
             
         Returns:
-            A dictionary containing the generated 'embeddings', 'model_name', and 'usage' statistics.
+            A dictionary containing the generated embeddings and execution metadata.
             
         Raises:
-            ValueError: If the input data format is invalid.
-            RuntimeError: If the embedding generation fails due to provider issues.
+            ValueError: If the input data is null or empty.
+            TypeError: If the input data format is not supported.
         """
-        logger.info(f"[{self.node_name}] Starting embedding generation process.")
-
-        if not data:
-            logger.warning(f"[{self.node_name}] Received empty input data.")
-            return {"embeddings": [], "model_name": None}
-
-        # Normalize data to a list for consistent processing
-        inputs = [data] if isinstance(data, str) else data
-        
-        if not isinstance(inputs, list):
-            raise ValueError(f"Invalid input type: {type(data)}. Expected str or List[str].")
-
         try:
-            # Extract configuration from context
-            config = context.get("embedding_config", {})
-            provider = config.get("provider", "mock-provider")
-            model = config.get("model", "text-embedding-3-small")
-            
-            logger.debug(f"[{self.node_name}] Using provider: {provider}, model: {model}")
+            if data is None or (isinstance(data, (str, list)) and len(data) == 0):
+                raise ValueError(f"[{self.node_name}] Input data cannot be empty.")
 
-            # Note: In a production environment, this is where the call to a specific 
-            # client library (OpenAI, LangChain, or custom REST client) would occur.
-            # We simulate the transformation logic here.
-            embeddings = self._generate_vectors(inputs, model)
+            # Extract configuration from context or use defaults
+            model = context.get("embedding_model", self.default_model)
+            api_key = context.get("api_key")
+
+            logger.info(f"Generating embeddings using provider: {self.provider}, model: {model}")
+
+            # Normalize input to a list for consistent processing
+            input_texts = [data] if isinstance(data, str) else data
+            
+            if not isinstance(input_texts, list):
+                raise TypeError(f"[{self.node_name}] Unsupported data type: {type(data)}. Expected str or list.")
+
+            # Simulate the transformation logic
+            # In a production scenario, this would invoke the specific provider client (e.g., OpenAI, HuggingFace)
+            # Example: response = self.client.embeddings.create(input=input_texts, model=model)
+            
+            embedding_results = self._generate_simulated_embeddings(input_texts)
 
             result = {
-                "embeddings": embeddings,
-                "model_name": model,
-                "dimensions": len(embeddings[0]) if embeddings else 0,
-                "count": len(embeddings)
+                "embeddings": embedding_results,
+                "metadata": {
+                    "node": self.node_name,
+                    "provider": self.provider,
+                    "model": model,
+                    "batch_size": len(input_texts),
+                    "dimensions": 1536  # Standard for the default model
+                }
             }
-            
-            logger.info(f"[{self.node_name}] Successfully generated {len(embeddings)} vectors.")
+
+            logger.debug(f"Successfully processed {len(input_texts)} text sequences.")
             return result
 
         except Exception as e:
-            logger.error(f"[{self.node_name}] Failed to generate embeddings: {str(e)}", exc_info=True)
-            raise RuntimeError(f"Embedding generation error: {e}") from e
+            logger.error(f"Critical failure in {self.node_name}: {str(e)}", exc_info=True)
+            raise
 
-    def _generate_vectors(self, texts: List[str], model: str) -> List[List[float]]:
+    def _generate_simulated_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
-        Internal utility to interface with the embedding provider.
-        Placeholder implementation for vector generation logic.
+        Internal utility to simulate vector generation.
+        In integration, this will be replaced by the actual provider SDK call.
         """
-        # This is a simulation of the vectorization logic.
-        # Logic would typically involve: response = self.client.embeddings.create(input=texts, model=model)
-        mock_dimension = 1536
-        return [[0.0123 * (i + 1) for i in range(mock_dimension)] for _ in texts]
+        # Simulated 1536-dimension vector for demonstration purposes
+        return [[0.0123] * 1536 for _ in texts]
+
+if __name__ == "__main__":
+    # Internal component testing block
+    node = EmbeddingsGeneratorNode()
+    sample_context = {"embedding_model": "text-embedding-3-large"}
+    try:
+        output = node.process("Sample text for vectorization.", sample_context)
+    except Exception:
+        pass
