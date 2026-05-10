@@ -1,85 +1,77 @@
 import re
 import logging
-from typing import Any, Dict, List, Pattern
+from typing import Any, Dict, List, Union
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class PIIRedactorNode(BaseNode):
     """
-    A specialized node for the Vishustra framework designed to identify and redact 
-    Personally Identifiable Information (PII) from strings or structured dictionaries.
-    
-    This node utilizes optimized regex patterns to detect common sensitive patterns
-    such as emails, phone numbers, and IPv4 addresses, ensuring data privacy 
-    before passing payloads to LLMs or external logging sinks.
+    A processing node designed to identify and mask Personally Identifiable Information (PII).
+    It scans input data for patterns such as emails, phone numbers, and credit card numbers
+    to ensure data privacy before further downstream processing or LLM consumption.
     """
 
-    # Pre-defined regex patterns for common PII categories
-    PII_PATTERNS: Dict[str, str] = {
-        "email": r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
-        "phone": r"\b(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b",
-        "ipv4": r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
-        "credit_card": r"\b(?:\d[ -]*?){13,16}\b"
+    # Common PII regex patterns
+    PII_PATTERNS = {
+        "EMAIL": r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
+        "PHONE": r"(\+\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}",
+        "CREDIT_CARD": r"\b(?:\d[ -]*?){13,16}\b",
+        "SSN": r"\b\d{3}-\d{2}-\d{4}\b",
+        "IPV4": r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b"
     }
-
-    def __init__(self, default_mask: str = "[REDACTED]"):
-        """
-        Initializes the redactor with compiled patterns for performance.
-        
-        :param default_mask: The string used to replace identified PII.
-        """
-        self._default_mask = default_mask
-        self._compiled_patterns: List[Pattern] = [
-            re.compile(pattern, re.IGNORECASE) for pattern in self.PII_PATTERNS.values()
-        ]
 
     @property
     def node_name(self) -> str:
-        """Returns the unique identifier for this node type."""
-        return "PIIRedactorNode"
+        """Returns the identifier for this node."""
+        return "PII Redactor Node"
+
+    def _redact_string(self, text: str) -> str:
+        """Applies regex substitution to a string based on known PII patterns."""
+        redacted_text = text
+        for label, pattern in self.PII_PATTERNS.items():
+            redacted_text = re.sub(pattern, f"[REDACTED_{label}]", redacted_text)
+        return redacted_text
+
+    def _traverse_and_redact(self, data: Any) -> Any:
+        """Recursively traverses nested structures to find and redact strings."""
+        if isinstance(data, str):
+            return self._redact_string(data)
+        elif isinstance(data, dict):
+            return {k: self._traverse_and_redact(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [self._traverse_and_redact(item) for item in data]
+        return data
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes input data to mask sensitive information.
+        Processes the input data, redacting sensitive information.
         
-        :param data: The input data, expected to be a string, dict, or list.
-        :param context: Execution context, can provide 'custom_mask' to override default.
-        :return: Data of the same structure with PII redacted.
-        """
-        mask = context.get("redaction_mask", self._default_mask)
-        
-        try:
-            return self._traverse_and_redact(data, mask)
-        except Exception as e:
-            logger.error(
-                f"Critical failure in {self.node_name} during data transformation: {str(e)}",
-                exc_info=True
-            )
-            # In a pipeline, we fail-safe by returning the error or raising to halt execution
-            raise RuntimeError(f"Node {self.node_name} failed to process payload safely.") from e
-
-    def _redact_text(self, text: str, mask: str) -> str:
-        """Applies all compiled regex patterns to a single string."""
-        if not isinstance(text, str):
-            return text
+        Args:
+            data: The input data (string, dict, or list) to be processed.
+            context: The orchestration context (unused in this node but required by API).
             
-        redacted = text
-        for pattern in self._compiled_patterns:
-            redacted = pattern.sub(mask, redacted)
-        return redacted
+        Returns:
+            The input data with sensitive patterns replaced by redaction placeholders.
+            
+        Raises:
+            TypeError: If processing encounters an unresolvable type error.
+        """
+        try:
+            if data is None:
+                logger.debug(f"[{self.node_name}] Received null input; skipping redaction.")
+                return None
 
-    def _traverse_and_redact(self, data: Any, mask: str) -> Any:
-        """
-        Recursively traverses nested structures to find and redact strings.
-        """
-        if isinstance(data, str):
-            return self._redact_text(data, mask)
-        
-        if isinstance(data, dict):
-            return {key: self._traverse_and_redact(value, mask) for key, value in data.items()}
-        
-        if isinstance(data, list):
-            return [self._traverse_and_redact(item, mask) for item in data]
-        
-        return data
+            logger.info(f"[{self.node_name}] Executing PII redaction on input data.")
+            
+            result = self._traverse_and_redact(data)
+            
+            logger.info(f"[{self.node_name}] Successfully completed data anonymization.")
+            return result
+
+        except Exception as e:
+            logger.exception(f"[{self.node_name}] An error occurred during the redaction process: {str(e)}")
+            raise RuntimeError(f"PII Redactor node failed to process data: {e}") from e
+
+    def __repr__(self) -> str:
+        return f"<PIIRedactorNode(name='{self.node_name}')>"
