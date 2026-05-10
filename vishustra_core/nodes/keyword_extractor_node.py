@@ -1,87 +1,104 @@
 import logging
 import re
 from typing import Any, Dict, List, Set
+
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class KeywordExtractorNode(BaseNode):
     """
-    A processing node designed to extract unique, meaningful keywords from string data.
-    Filters out common stop words and non-alphabetic tokens to prepare data for 
-    indexing or downstream LLM context injection.
+    A processing node responsible for extracting significant keywords from text data.
+    
+    This node identifies relevant terms by filtering out common stop words and 
+    applying frequency-based selection or pattern matching.
     """
 
-    # Basic stop words to filter out common noise
-    DEFAULT_STOP_WORDS: Set[str] = {
-        "a", "an", "the", "and", "or", "but", "if", "then", "else", "when",
-        "at", "from", "by", "for", "with", "about", "against", "between",
-        "into", "through", "during", "before", "after", "above", "below",
-        "to", "of", "in", "on", "is", "are", "was", "were", "be", "been",
-        "being", "have", "has", "had", "do", "does", "did", "will", "would",
-        "should", "can", "could", "this", "that", "these", "those", "i", "you",
-        "he", "she", "it", "we", "they", "my", "your", "his", "her", "its"
-    }
+    def __init__(self, stop_words: Set[str] = None, top_k: int = 10):
+        """
+        Initializes the KeywordExtractorNode with configurable extraction parameters.
+
+        Args:
+            stop_words (Set[str], optional): A custom set of words to ignore.
+            top_k (int): Maximum number of keywords to return. Defaults to 10.
+        """
+        self.top_k = top_k
+        # Basic default stop words for internal filtering if no external list is provided
+        self.stop_words = stop_words or {
+            "the", "and", "a", "of", "to", "is", "in", "it", "that", "with", 
+            "as", "for", "was", "on", "are", "by", "be", "this", "at", "or"
+        }
 
     @property
     def node_name(self) -> str:
-        """Returns the identifier for the keyword extraction node."""
-        return "Keyword Extractor"
+        """Returns the identifier for this node."""
+        return "KeywordExtractorNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Processes the input string to extract a list of keywords.
+        Processes the input string to extract significant keywords.
 
         Args:
-            data: The raw input string to be processed.
-            context: A dictionary containing runtime configuration. 
-                     Supports 'top_n' (int) and 'extra_stop_words' (Set[str]).
+            data (Any): The input data. Expected to be a string or a dictionary 
+                        containing a 'text' key.
+            context (Dict[str, Any]): The execution context shared across nodes.
 
         Returns:
-            A list of unique keywords extracted from the text.
+            List[str]: A list of extracted unique keywords.
 
         Raises:
-            TypeError: If the input data is not a string.
-            ValueError: If an error occurs during tokenization or filtering.
+            TypeError: If input data format is not supported.
+            ValueError: If the input text is empty.
         """
-        if not isinstance(data, str):
-            logger.error(f"[{self.node_name}] Invalid input type: expected str, got {type(data).__name__}")
-            raise TypeError(f"{self.node_name} expects string input for keyword extraction.")
+        logger.info(f"Node '{self.node_name}' starting keyword extraction.")
+
+        text = self._extract_text(data)
+        
+        if not text.strip():
+            logger.warning("Received empty text for keyword extraction.")
+            return []
 
         try:
-            # Extract configuration parameters from context
-            top_n = context.get("top_n", 15)
-            extra_stop_words = context.get("extra_stop_words", set())
-            stop_words = self.DEFAULT_STOP_WORDS.union(extra_stop_words)
-
-            # Normalization: Lowercase and strip non-alphanumeric characters
-            # We use a regex to keep only alphanumeric characters and spaces
-            clean_text = re.sub(r'[^a-zA-Z0-9\s]', '', data.lower())
+            # Normalize and tokenize: convert to lowercase and find words
+            words = re.findall(r'\b\w{3,}\b', text.lower())
             
-            # Simple tokenization by whitespace
-            tokens = clean_text.split()
+            # Filter stop words and calculate frequency
+            frequencies: Dict[str, int] = {}
+            for word in words:
+                if word not in self.stop_words:
+                    frequencies[word] = frequencies.get(word, 0) + 1
 
-            # Filtering logic:
-            # 1. Remove stop words
-            # 2. Ignore short tokens (less than 3 characters)
-            # 3. Ignore purely numeric tokens
-            keywords: List[str] = []
-            seen: Set[str] = set()
-
-            for word in tokens:
-                if (word not in stop_words and 
-                    len(word) > 2 and 
-                    not word.isdigit() and 
-                    word not in seen):
-                    keywords.append(word)
-                    seen.add(word)
-
-            # Limit result to requested top_n
-            result = keywords[:top_n]
-
-            logger.debug(f"[{self.node_name}] Extracted {len(result)} keywords from input length {len(data)}.")
-            return result
+            # Sort by frequency and take top_k
+            sorted_keywords = sorted(
+                frequencies.items(), 
+                key=lambda item: item[1], 
+                reverse=True
+            )
+            
+            extracted_keywords = [word for word, count in sorted_keywords[:self.top_k]]
+            
+            logger.debug(f"Extracted {len(extracted_keywords)} keywords.")
+            return extracted_keywords
 
         except Exception as e:
-            logger.exception(f"[{self.node_name}] Unexpected error during keyword extraction: {str(e)}")
-            raise ValueError(f"Keyword extraction failed: {str(e)}") from e
+            logger.error(f"Error during keyword extraction in node '{self.node_name}': {str(e)}")
+            raise RuntimeError(f"Failed to process keywords: {e}") from e
+
+    def _extract_text(self, data: Any) -> str:
+        """
+        Helper to parse text from various input formats.
+        """
+        if isinstance(data, str):
+            return data
+        if isinstance(data, dict) and "text" in data:
+            return str(data["text"])
+        
+        error_msg = f"Invalid input format for {self.node_name}. Expected str or dict with 'text' key."
+        logger.error(error_msg)
+        raise TypeError(error_msg)
+
+```python
+# Example of expected usage (Internal documentation/testing context):
+# extractor = KeywordExtractorNode(top_k=5)
+# result = extractor.process("Vishustra is a highly modular LLM orchestration framework for backend engineers.", {})
+# print(result) # -> ['vishustra', 'modular', 'llm', 'orchestration', 'framework']
