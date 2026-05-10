@@ -3,69 +3,66 @@ import logging
 from typing import Any, Dict, List
 from vishustra_core.nodes.base_node import BaseNode
 
+# Initialize logger for the module
 logger = logging.getLogger(__name__)
 
 class URLExtractorNode(BaseNode):
     """
-    A specialized node for scanning text data and extracting all valid URLs.
-    Useful for preprocessing steps in LLM pipelines where external references
-    need to be indexed or validated.
+    A specialized node designed to identify and extract HTTP/HTTPS URLs from raw text data.
+    This node is useful for pre-processing steps where downstream nodes require 
+    specific endpoints for scraping or analysis.
     """
 
-    # Robust URL regex pattern (RFC 3986 compliant variant)
-    URL_PATTERN = re.compile(
-        r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
-    )
+    # RFC 3986 compliant-ish regex for URL discovery
+    URL_PATTERN = r'https?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
 
     @property
     def node_name(self) -> str:
-        """Returns the identifier for this node."""
-        return "URLExtractorNode"
+        """
+        Returns the human-readable identifier for this node.
+        """
+        return "URL Extractor"
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Parses the input data for URLs and returns a unique list of findings.
+        Parses the input data to extract all unique URLs.
 
         Args:
-            data (Any): The input text to be processed. Expected to be a string.
-            context (Dict[str, Any]): The orchestration context, containing 
-                                      metadata or global state.
+            data (Any): The input payload, expected to be a string.
+            context (Dict[str, Any]): Global context dictionary for the pipeline execution.
 
         Returns:
-            List[str]: A list of unique URLs found within the text.
+            List[str]: A list of unique URLs found in the input data.
 
         Raises:
             TypeError: If the input data is not a string.
+            Exception: For unexpected regex processing errors.
         """
+        logger.debug(f"Executing node: {self.node_name}")
+
         if not isinstance(data, str):
-            logger.error(
-                "Node %s received invalid data type: %s. Expected: str.", 
-                self.node_name, 
-                type(data).__name__
-            )
-            raise TypeError(f"{self.node_name} requires a string input.")
+            error_msg = f"URLExtractorNode expected string input, but received: {type(data).__name__}"
+            logger.error(error_msg)
+            raise TypeError(error_msg)
 
         try:
-            logger.debug("Starting URL extraction on input of length %d", len(data))
+            # Extract all matches using the predefined pattern
+            extracted_urls = re.findall(self.URL_PATTERN, data)
             
-            # Find all matches using the pre-compiled regex
-            matches = self.URL_PATTERN.findall(data)
+            # De-duplicate while preserving original order
+            unique_urls = list(dict.fromkeys(extracted_urls))
             
-            # Deduplicate while preserving order if necessary (set is sufficient for standard discovery)
-            unique_urls = list(dict.fromkeys(matches))
-
-            logger.info(
-                "Node %s successfully extracted %d unique URLs.", 
-                self.node_name, 
-                len(unique_urls)
-            )
+            logger.info(f"Extraction complete. Found {len(unique_urls)} unique URLs.")
             
             return unique_urls
 
+        except re.error as e:
+            logger.error(f"Regex compilation or execution error: {str(e)}")
+            raise
         except Exception as e:
-            logger.exception(
-                "Node %s encountered an error during transformation: %s", 
-                self.node_name, 
-                str(e)
-            )
-            raise e
+            logger.exception(f"An unhandled exception occurred during URL extraction: {str(e)}")
+            raise
+
+if __name__ == "__main__":
+    # Internal dev testing - Node should be typically invoked via the Vishustra runner
+    pass
