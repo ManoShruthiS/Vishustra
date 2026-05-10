@@ -1,4 +1,5 @@
 import logging
+import hashlib
 from typing import Any, Dict, Optional
 from vishustra_core.nodes.base_node import BaseNode
 
@@ -6,82 +7,90 @@ logger = logging.getLogger(__name__)
 
 class CacheManagerNode(BaseNode):
     """
-    A node responsible for managing intermediate state and caching results 
-    within the Vishustra orchestration pipeline. It supports retrieval, 
-    storage, and invalidation of data based on context-provided keys.
+    A specialized node within the Vishustra framework designed to handle 
+    memoization of LLM outputs and intermediate pipeline states.
+    
+    This node facilitates 'get', 'set', and 'delete' operations against a 
+    provided storage backend (e.g., Redis, in-memory dict, or disk cache) 
+    passed via the orchestration context.
     """
-
-    def __init__(self, default_ttl: Optional[int] = None):
-        self._internal_cache: Dict[str, Any] = {}
-        self._default_ttl = default_ttl
-        logger.debug("CacheManagerNode initialized with internal storage.")
 
     @property
     def node_name(self) -> str:
-        """Returns the canonical name of the node."""
+        """Returns the unique identifier for the Cache Manager node."""
         return "CacheManagerNode"
+
+    def _generate_deterministic_key(self, data: Any) -> str:
+        """
+        Generates a SHA-256 hash to act as a unique identifier for the 
+        input data if a custom key is not provided.
+        """
+        try:
+            return hashlib.sha256(str(data).encode('utf-8')).hexdigest()
+        except Exception as e:
+            logger.error(f"[{self.node_name}] Key generation failed: {str(e)}")
+            return "default_cache_key"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Coordinates cache operations based on the provided context.
-        
-        Expected context keys:
-            - cache_op: The operation to perform ('get', 'set', 'delete', 'clear').
-            - cache_key: The identifier for the cached object.
-        
-        :param data: The payload to be cached (if operation is 'set').
-        :param context: Metadata containing cache configuration and operation instructions.
-        :return: The cached value, the original data, or a boolean status depending on the operation.
-        """
-        operation = context.get("cache_op", "get").lower()
-        key = context.get("cache_key")
+        Processes the data by interacting with the cache store based on 
+        the specified action in the context.
 
-        if not key and operation in ("get", "set", "delete"):
-            logger.error(f"[{self.node_name}] Missing required 'cache_key' in context for operation: {operation}")
-            raise KeyError("cache_key is required for CacheManagerNode operations.")
+        Args:
+            data: The payload to be cached or the fallback value if retrieval fails.
+            context: Dictionary containing control flags and the storage backend.
+                - 'cache_action': str ('get', 'set', 'evict')
+                - 'cache_key': Optional[str] (explicit key)
+                - 'cache_store': Dict-like object for storage
+                - 'cache_bypass': bool (force skip cache)
+
+        Returns:
+            The cached value on 'get' (if hit), or the input data on 'set'/'evict'.
+        """
+        if context.get("cache_bypass", False):
+            logger.debug(f"[{self.node_name}] Cache bypass enabled.")
+            return data
+
+        # Extract storage and action from context
+        store = context.get("cache_store")
+        action = context.get("cache_action", "get").lower()
+        
+        if store is None:
+            logger.warning(f"[{self.node_name}] No 'cache_store' found in context. Skipping caching logic.")
+            return data
+
+        # Determine the lookup key
+        provided_key = context.get("cache_key")
+        lookup_key = provided_key if provided_key else self._generate_deterministic_key(data)
 
         try:
-            if operation == "get":
-                return self._handle_get(key)
-            elif operation == "set":
-                return self._handle_set(key, data)
-            elif operation == "delete":
-                return self._handle_delete(key)
-            elif operation == "clear":
-                return self._handle_clear()
-            else:
-                logger.warning(f"[{self.node_name}] Unsupported operation: {operation}. Passing through data.")
+            if action == "get":
+                cached_result = store.get(lookup_key)
+                if cached_result is not None:
+                    logger.info(f"[{self.node_name}] Cache hit for key: {lookup_key[:12]}...")
+                    return cached_result
+                
+                logger.info(f"[{self.node_name}] Cache miss for key: {lookup_key[:12]}...")
                 return data
+
+            elif action == "set":
+                # Only store if data is not None to avoid caching empty results
+                if data is not None:
+                    store[lookup_key] = data
+                    logger.info(f"[{self.node_name}] Successfully stored result under key: {lookup_key[:12]}...")
+                return data
+
+            elif action == "evict":
+                if lookup_key in store:
+                    del store[lookup_key]
+                    logger.info(f"[{self.node_name}] Evicted key: {lookup_key[:12]} from store.")
+                return data
+
+            else:
+                logger.error(f"[{self.node_name}] Unsupported cache_action: '{action}'. Returning raw data.")
+                return data
+
         except Exception as e:
-            logger.exception(f"[{self.node_name}] Error during cache operation '{operation}': {str(e)}")
-            raise
-
-    def _handle_get(self, key: str) -> Any:
-        """Retrieves a value from the cache."""
-        if key in self._internal_cache:
-            logger.info(f"[{self.node_name}] Cache HIT for key: {key}")
-            return self._internal_cache[key]
-        
-        logger.info(f"[{self.node_name}] Cache MISS for key: {key}")
-        return None
-
-    def _handle_set(self, key: str, value: Any) -> Any:
-        """Stores a value in the cache."""
-        self._internal_cache[key] = value
-        logger.info(f"[{self.node_name}] Successfully cached data under key: {key}")
-        return value
-
-    def _handle_delete(self, key: str) -> bool:
-        """Removes a specific key from the cache."""
-        if key in self._internal_cache:
-            del self._internal_cache[key]
-            logger.info(f"[{self.node_name}] Evicted key: {key}")
-            return True
-        logger.debug(f"[{self.node_name}] Attempted to delete non-existent key: {key}")
-        return False
-
-    def _handle_clear(self) -> bool:
-        """Purges all entries from the cache."""
-        self._internal_cache.clear()
-        logger.info(f"[{self.node_name}] Cache cleared successfully.")
-        return True
+            logger.exception(f"[{self.node_name}] Critical failure during cache {action} operation: {str(e)}")
+            # Fallback to returning input data to prevent pipeline breakage
+            return data
