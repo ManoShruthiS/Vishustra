@@ -1,70 +1,72 @@
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class JSONFormatterNode(BaseNode):
     """
-    A node responsible for converting input data into a standardized, 
-    formatted JSON string. Supports custom indentation and key sorting 
-    via the processing context.
+    A utility node within the Vishustra framework designed to serialize 
+    Python objects into standardized, human-readable JSON strings.
+    
+    This node handles indentation and key sorting based on the provided 
+    execution context, ensuring downstream nodes or external consumers 
+    receive consistent data formats.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the canonical name of the JSON formatting node."""
+        """
+        Returns the unique identifier for this node type.
+        """
         return "JSONFormatterNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> str:
         """
-        Transforms the input data into a formatted JSON string.
-        
-        The method attempts to parse string input as JSON if it isn't already 
-        a dictionary or list, then re-serializes it based on context parameters.
+        Transforms the input data into a prettified JSON string.
 
         Args:
-            data (Any): The data to be formatted. Expected to be a dict, list, or JSON string.
-            context (Dict[str, Any]): Configuration for formatting. 
-                Supported keys: 
-                - 'indent': int (default: 4)
-                - 'sort_keys': bool (default: True)
-                - 'ensure_ascii': bool (default: False)
+            data (Any): The data structure (dict, list, etc.) to be serialized.
+            context (Dict[str, Any]): Orchestration context. 
+                Supported keys:
+                - 'indent': Integer for JSON indentation (default: 4).
+                - 'sort_keys': Boolean to sort dictionary keys (default: True).
 
         Returns:
-            str: The formatted JSON string.
+            str: A formatted JSON string representation of the input data.
 
         Raises:
-            ValueError: If the input data cannot be serialized to JSON.
+            ValueError: If the input data is not JSON serializable.
         """
-        indent = context.get("indent", 4)
-        sort_keys = context.get("sort_keys", True)
-        ensure_ascii = context.get("ensure_ascii", False)
-
-        processed_data = data
-
-        # If data is a string, attempt to load it first to ensure valid structure
-        if isinstance(data, str):
-            try:
-                processed_data = json.loads(data)
-                logger.debug("Input data identified as string; successfully parsed into JSON object.")
-            except json.JSONDecodeError as e:
-                logger.warning(f"Input data is a string but not valid JSON: {str(e)}. Proceeding with raw string serialization.")
+        indent = context.get("json_indent", 4)
+        sort_keys = context.get("json_sort_keys", True)
 
         try:
+            logger.info(f"Executing {self.node_name}: Serializing input data.")
+            
+            # Perform serialization
             formatted_json = json.dumps(
-                processed_data,
-                indent=indent,
+                data, 
+                indent=indent, 
                 sort_keys=sort_keys,
-                ensure_ascii=ensure_ascii
+                ensure_ascii=False
             )
-            logger.info("Successfully formatted data into JSON.")
+            
+            logger.debug(f"{self.node_name} successfully processed {len(formatted_json)} characters.")
             return formatted_json
 
-        except (TypeError, OverflowError) as e:
-            logger.error(f"Failed to serialize data to JSON in {self.node_name}: {str(e)}")
-            raise ValueError(f"Data provided to {self.node_name} is not JSON serializable: {str(e)}") from e
+        except (TypeError, ValueError) as e:
+            logger.error(
+                f"Serialization failed in {self.node_name}. "
+                f"Data type '{type(data).__name__}' may not be serializable. Error: {str(e)}"
+            )
+            raise ValueError(
+                f"Node '{self.node_name}' failed to process input: {str(e)}"
+            ) from e
 
-    def __repr__(self) -> str:
-        return f"<{self.node_name}()>"
+        except Exception as e:
+            logger.critical(f"Unexpected error in {self.node_name}: {str(e)}")
+            raise
+
+[EOF]
