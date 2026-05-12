@@ -1,86 +1,84 @@
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class TextSummarizerNode(BaseNode):
     """
-    A specialized node within the Vishustra framework designed to condense 
-    large text inputs into succinct summaries while preserving core semantic meaning.
+    A modular node within the Vishustra framework designed to condense text.
     
-    This node expects a string input and utilizes configuration parameters 
-    passed through the context to determine summarization constraints.
+    This node processes raw text input and produces a summarized version based
+    on configuration parameters provided in the execution context.
     """
-
-    def __init__(self, default_max_length: int = 200):
-        """
-        Initializes the TextSummarizerNode with default parameters.
-        
-        Args:
-            default_max_length (int): The default character limit for the summary if not provided in context.
-        """
-        self.default_max_length = default_max_length
 
     @property
     def node_name(self) -> str:
         """
-        Returns the unique identifier for this node type.
+        Returns the unique identifier for this node.
         """
         return "TextSummarizerNode"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> str:
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input string to generate a condensed version.
-
-        In a production LLM orchestration workflow, this node would typically interface 
-        with an LLM provider or a local transformer model. This implementation 
-        simulates the logic of content transformation and validation.
+        Processes the input string to generate a summarized output.
 
         Args:
-            data (Any): The raw text to be summarized.
-            context (Dict[str, Any]): Execution context containing metadata, 
-                                      session state, and configuration overrides 
-                                      such as 'max_length'.
+            data (Any): The text content to be summarized. Must be a string.
+            context (Dict[str, Any]): Orchestration context containing operational 
+                                      parameters such as 'max_length' or 'strict_mode'.
 
         Returns:
-            str: The processed summary.
+            str: The summarized text content.
 
         Raises:
             TypeError: If the input data is not a string.
-            ValueError: If the input data is empty.
-            RuntimeError: If an internal processing error occurs.
+            ValueError: If the summarization logic encounters invalid context parameters.
+            RuntimeError: If an unexpected error occurs during data transformation.
         """
+        if not isinstance(data, str):
+            error_msg = f"[{self.node_name}] Expected string input, received {type(data).__name__}."
+            logger.error(error_msg)
+            raise TypeError(error_msg)
+
+        if not data.strip():
+            logger.warning(f"[{self.node_name}] Received empty or whitespace-only input string.")
+            return ""
+
         try:
-            # Type validation
-            if not isinstance(data, str):
-                logger.error(f"[{self.node_name}] Input data must be a string, received {type(data).__name__}")
-                raise TypeError(f"TextSummarizerNode requires string input, got {type(data).__name__}")
+            # Retrieve configuration from context with sensible defaults
+            max_summary_length = context.get("max_length", 300)
+            preserve_formatting = context.get("preserve_formatting", False)
 
-            # Content validation
-            clean_data = data.strip()
-            if not clean_data:
-                logger.warning(f"[{self.node_name}] Received empty string for summarization.")
-                return ""
+            logger.info(f"[{self.node_name}] Summarizing payload (Input Length: {len(data)})")
 
-            # Extract configuration from context or use defaults
-            max_length = context.get("max_length", self.default_max_length)
-            logger.debug(f"[{self.node_name}] Processing string of length {len(clean_data)} with limit {max_length}")
-
-            # Simulation of text transformation logic
-            # In actual implementation: result = llm_client.summarize(clean_data, max_length=max_length)
-            if len(clean_data) <= max_length:
-                summary = clean_data
+            # Simulation of an extractive summarization transformation.
+            # In a production LLM pipeline, this logic would typically interface with
+            # a Transformer-based model or an external API provider.
+            sentences = [s.strip() for s in data.split('.') if s.strip()]
+            
+            if len(sentences) <= 3:
+                summary = " ".join(sentences)
             else:
-                # Basic heuristic-based truncation for simulation purposes
-                summary = clean_data[:max_length].rsplit(' ', 1)[0] + "..."
+                # Heuristic: Capture the primary context and the concluding result
+                summary_parts = sentences[:2] + [sentences[-1]]
+                summary = ". ".join(summary_parts) + "."
 
-            logger.info(f"[{self.node_name}] Successfully generated summary of length {len(summary)}")
+            # Final truncation and sanitization
+            if len(summary) > max_summary_length:
+                summary = summary[:max_summary_length].rsplit(' ', 1)[0] + "..."
+
+            if not preserve_formatting:
+                summary = summary.replace("\n", " ").strip()
+
+            logger.debug(f"[{self.node_name}] Successfully generated summary of length {len(summary)}.")
             return summary
 
-        except (TypeError, ValueError) as ve:
-            # Re-raise known validation errors
-            raise ve
         except Exception as e:
-            logger.exception(f"[{self.node_name}] Unexpected error during processing: {str(e)}")
-            raise RuntimeError(f"Summarization failed due to an internal error: {e}") from e
+            logger.exception(f"[{self.node_name}] Transformation failed due to an internal error.")
+            raise RuntimeError(f"Node '{self.node_name}' failed to process data: {str(e)}") from e
+
+```python
+# Example usage (not part of the production node file)
+# node = TextSummarizerNode()
+# result = node.process("Long text here...", {"max_length": 100})
