@@ -1,75 +1,70 @@
 import json
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-class JsonFormatterNode(BaseNode):
+class JSONFormatterNode(BaseNode):
     """
-    A utility node designed to format raw input into a standardized JSON string.
-    
-    This node handles dictionary, list, and string inputs. If the input is a string,
-    it attempts to parse it as JSON first to ensure structural integrity before 
-    applying pretty-printing.
+    A node responsible for converting input data into a standardized, 
+    formatted JSON string. Supports custom indentation and key sorting 
+    via the processing context.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the unique identifier for the JSON formatting node."""
-        return "JsonFormatterNode"
+        """Returns the canonical name of the JSON formatting node."""
+        return "JSONFormatterNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> str:
         """
-        Processes input data into a prettified JSON string.
+        Transforms the input data into a formatted JSON string.
+        
+        The method attempts to parse string input as JSON if it isn't already 
+        a dictionary or list, then re-serializes it based on context parameters.
 
         Args:
-            data (Any): The payload to be formatted. Can be a dict, list, or string.
-            context (Dict[str, Any]): Configuration context. 
+            data (Any): The data to be formatted. Expected to be a dict, list, or JSON string.
+            context (Dict[str, Any]): Configuration for formatting. 
                 Supported keys: 
-                - 'indent' (int): Spaces for indentation. Defaults to 4.
-                - 'sort_keys' (bool): Whether to sort dictionary keys. Defaults to True.
+                - 'indent': int (default: 4)
+                - 'sort_keys': bool (default: True)
+                - 'ensure_ascii': bool (default: False)
 
         Returns:
-            str: A formatted JSON string.
+            str: The formatted JSON string.
 
         Raises:
-            ValueError: If the data cannot be serialized to JSON.
+            ValueError: If the input data cannot be serialized to JSON.
         """
-        indent = context.get("json_indent", 4)
-        sort_keys = context.get("json_sort_keys", True)
+        indent = context.get("indent", 4)
+        sort_keys = context.get("sort_keys", True)
+        ensure_ascii = context.get("ensure_ascii", False)
+
+        processed_data = data
+
+        # If data is a string, attempt to load it first to ensure valid structure
+        if isinstance(data, str):
+            try:
+                processed_data = json.loads(data)
+                logger.debug("Input data identified as string; successfully parsed into JSON object.")
+            except json.JSONDecodeError as e:
+                logger.warning(f"Input data is a string but not valid JSON: {str(e)}. Proceeding with raw string serialization.")
 
         try:
-            # If input is a string, verify if it's already a JSON string to avoid double-escaping
-            if isinstance(data, str):
-                try:
-                    processed_data = json.loads(data)
-                    logger.debug("Successfully parsed input string as JSON before re-formatting.")
-                except json.JSONDecodeError:
-                    # Input is a plain string, keep it as is for serialization
-                    logger.debug("Input string is not a JSON object; treating as raw text.")
-                    processed_data = data
-            else:
-                processed_data = data
-
-            # Serialize to formatted string
             formatted_json = json.dumps(
-                processed_data, 
-                indent=indent, 
+                processed_data,
+                indent=indent,
                 sort_keys=sort_keys,
-                ensure_ascii=False
+                ensure_ascii=ensure_ascii
             )
-            
+            logger.info("Successfully formatted data into JSON.")
             return formatted_json
 
         except (TypeError, OverflowError) as e:
-            logger.error(f"Serialization failed in {self.node_name}: {str(e)}")
-            raise ValueError(f"Data provided to {self.node_name} is not JSON serializable: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error in {self.node_name}: {str(e)}")
-            raise RuntimeError(f"An internal error occurred during JSON formatting: {e}")
+            logger.error(f"Failed to serialize data to JSON in {self.node_name}: {str(e)}")
+            raise ValueError(f"Data provided to {self.node_name} is not JSON serializable: {str(e)}") from e
 
-```python
-# Usage Example (Internal Documentation):
-# node = JsonFormatterNode()
-# result = node.process({"key": "value"}, {"json_indent": 2})
+    def __repr__(self) -> str:
+        return f"<{self.node_name}()>"
