@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Any, Dict, List, Set, Union
+from typing import Any, Dict, List, Optional
 
 from vishustra_core.nodes.base_node import BaseNode
 
@@ -8,93 +8,72 @@ logger = logging.getLogger(__name__)
 
 class ProfanityFilterNode(BaseNode):
     """
-    A processing node designed to identify and mask profanity within textual data.
-    
-    This node scans input strings or lists of strings against a configurable list 
-    of prohibited terms and replaces them with a masking character.
+    A moderation node designed to identify and mask profane language within 
+    textual data before passing it to subsequent LLM chain nodes.
     """
 
-    def __init__(self, default_banned_words: List[str] = None):
+    DEFAULT_BANNED_WORDS = [
+        "badword1", "badword2", "offensive_term" 
+    ]  # In a production environment, this would be loaded from an external config or encrypted source.
+
+    def __init__(self, custom_words: Optional[List[str]] = None, replacement: str = "****"):
         """
-        Initializes the node with an optional default list of banned words.
+        Initializes the ProfanityFilterNode.
+
+        :param custom_words: An optional list of additional words to filter.
+        :param replacement: The string used to mask identified profanity.
         """
-        self._default_banned_words = set(default_banned_words) if default_banned_words else set()
+        self._banned_words = set(self.DEFAULT_BANNED_WORDS)
+        if custom_words:
+            self._banned_words.update(custom_words)
+        
+        self._replacement = replacement
+        # Pre-compile regex for performance
+        pattern_str = r'\b(' + '|'.join(map(re.escape, self._banned_words)) + r')\b'
+        self._pattern = re.compile(pattern_str, re.IGNORECASE)
 
     @property
     def node_name(self) -> str:
-        """Returns the unique identifier for this node type."""
-        return "ProfanityFilterNode"
+        """
+        Returns the descriptive name of the node.
+        """
+        return "Profanity Filter Node"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data to sanitize profane content.
-        
-        Args:
-            data (Any): The input data, expected to be a string or a list of strings.
-            context (Dict[str, Any]): Metadata and configuration, including:
-                - 'extra_banned_words': List[str] (Optional)
-                - 'mask_char': str (Optional, defaults to '*')
-                - 'case_sensitive': bool (Optional, defaults to False)
+        Processes the input data, replacing banned words with a replacement mask.
 
-        Returns:
-            Any: The sanitized data in its original structure.
-        
-        Raises:
-            TypeError: If the input data is not a string or list of strings.
+        :param data: The input data, expected to be a string or a dictionary containing text.
+        :param context: Execution context, can be used to override replacement settings dynamically.
+        :return: The sanitized data.
         """
-        logger.debug(f"Executing {self.node_name} processing logic.")
-
         try:
-            if data is None:
-                logger.warning("Received null data in ProfanityFilterNode.")
-                return None
-
-            # Extract configuration from context
-            mask_char = context.get("mask_char", "*")
-            case_sensitive = context.get("case_sensitive", False)
-            extra_words = set(context.get("extra_banned_words", []))
+            replacement = context.get("profanity_replacement", self._replacement)
             
-            # Combine word sets
-            banned_words = self._default_banned_words.union(extra_words)
-            
-            if not banned_words:
-                logger.debug("No banned words defined. Skipping filtering.")
-                return data
-
             if isinstance(data, str):
-                return self._filter_text(data, banned_words, mask_char, case_sensitive)
-            elif isinstance(data, list):
-                return [
-                    self._filter_text(item, banned_words, mask_char, case_sensitive) 
-                    if isinstance(item, str) else item 
-                    for item in data
-                ]
-            else:
-                logger.error(f"Unsupported data type: {type(data)}")
-                raise TypeError(f"ProfanityFilterNode expects str or list, got {type(data)}")
+                return self._sanitize_text(data, replacement)
+            
+            if isinstance(data, dict):
+                return {k: (self._sanitize_text(v, replacement) if isinstance(v, str) else v) 
+                        for k, v in data.items()}
+
+            if isinstance(data, list):
+                return [self._sanitize_text(item, replacement) if isinstance(item, str) else item 
+                        for item in data]
+
+            logger.warning(f"[{self.node_name}] Received unsupported data type: {type(data)}. Skipping transformation.")
+            return data
 
         except Exception as e:
-            logger.exception(f"Error encountered during profanity filtering: {str(e)}")
-            raise
+            logger.error(f"[{self.node_name}] Error during processing: {str(e)}", exc_info=True)
+            raise RuntimeError(f"ProfanityFilterNode failed to process data: {e}")
 
-    def _filter_text(self, text: str, words: Set[str], mask: str, case_sensitive: bool) -> str:
+    def _sanitize_text(self, text: str, replacement: str) -> str:
         """
-        Internal utility to mask words in a single string.
+        Internal helper to execute the regex substitution.
         """
-        flags = 0 if case_sensitive else re.IGNORECASE
-        
-        # Sort words by length descending to prevent partial matches of longer phrases
-        sorted_words = sorted(list(words), key=len, reverse=True)
-        
-        # Build a regex pattern for all banned words
-        # Using word boundaries (\b) to ensure we don't match substrings inside safe words
-        pattern = re.compile(r'\b(' + '|'.join(map(re.escape, sorted_words)) + r')\b', flags=flags)
+        if not text:
+            return text
+        return self._pattern.sub(replacement, text)
 
-        def replace_match(match):
-            word = match.group(0)
-            return mask * len(word)
-
-        return pattern.sub(replace_match, text)
-
-    def __repr__(self) -> str:
-        return f"<{self.node_name}(words_count={len(self._default_banned_words)})>"
+# End of file
