@@ -1,102 +1,86 @@
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from vishustra_core.nodes.base_node import BaseNode
 
+# Initialize logger for the module
 logger = logging.getLogger(__name__)
 
 class SentimentAnalyzerNode(BaseNode):
     """
-    A modular node within the Vishustra framework responsible for performing 
-    sentiment analysis on incoming textual data. It provides polarity 
-    classification and confidence scoring.
+    A specialized node within the Vishustra framework designed to evaluate 
+    the emotional tone of textual data. 
+    
+    This node processes raw strings and returns a structured dictionary 
+    containing the sentiment classification and a confidence score.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the identifier for this node type."""
+        """
+        Returns the unique identifier for this node type.
+        """
         return "SentimentAnalyzer"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Analyzes the sentiment of the input data.
-        
+        Analyzes the input data to determine sentiment.
+
         Args:
-            data: The input to analyze. Can be a raw string or a dictionary 
-                  containing a 'text' key.
-            context: Shared state and configuration for the current pipeline execution.
+            data: The input payload, expected to be a string representing text.
+            context: Shared execution context containing pipeline metadata.
 
         Returns:
-            A dictionary containing the sentiment label, score, and source text.
+            Dict[str, Any]: A dictionary containing:
+                - 'original_text': The input processed.
+                - 'sentiment': 'positive', 'negative', or 'neutral'.
+                - 'confidence': A float representing the heuristic confidence level.
 
         Raises:
-            TypeError: If the input data format is unsupported.
-            Exception: For unexpected processing failures.
+            TypeError: If the input data is not a string.
+            Exception: For unexpected processing errors.
         """
-        logger.info(f"Execution started for node: {self.node_name}")
-        
+        logger.info(f"Node [{self.node_name}] started processing.")
+
+        if not isinstance(data, str):
+            error_msg = f"SentimentAnalyzer expected string input, received {type(data).__name__}."
+            logger.error(error_msg)
+            raise TypeError(error_msg)
+
         try:
-            text = self._extract_text(data)
+            # Clean input data
+            clean_text = data.strip().lower()
             
-            # Simulate sentiment heuristic. In a production environment, this would
-            # likely interface with a local transformer model or a specialized NLP service.
-            analysis_result = self._analyze_polarity(text)
-            
-            output = {
-                "sentiment": analysis_result["label"],
-                "confidence_score": analysis_result["score"],
-                "source_text_snippet": text[:50] + "..." if len(text) > 50 else text,
-                "node_metadata": {
-                    "engine": "Vishustra_Heuristic_v1",
-                    "char_count": len(text)
+            # Simple heuristic-based simulation of sentiment analysis
+            # In production, this would interface with a pre-trained model or LLM service
+            positive_keywords = {"excellent", "great", "good", "happy", "efficient", "robust"}
+            negative_keywords = {"bad", "poor", "error", "slow", "terrible", "failure"}
+
+            pos_count = sum(1 for word in positive_keywords if word in clean_text)
+            neg_count = sum(1 for word in negative_keywords if word in clean_text)
+
+            if pos_count > neg_count:
+                sentiment = "positive"
+                confidence = min(0.5 + (pos_count * 0.1), 0.99)
+            elif neg_count > pos_count:
+                sentiment = "negative"
+                confidence = min(0.5 + (neg_count * 0.1), 0.99)
+            else:
+                sentiment = "neutral"
+                confidence = 0.5
+
+            result = {
+                "original_text": data,
+                "sentiment": sentiment,
+                "confidence": round(confidence, 2),
+                "metadata": {
+                    "processor": self.node_name,
+                    "version": "1.0.0"
                 }
             }
-            
-            logger.debug(f"Successfully processed sentiment: {output['sentiment']}")
-            return output
 
-        except (TypeError, ValueError) as ve:
-            logger.error(f"Data validation error in {self.node_name}: {str(ve)}")
-            raise
+            logger.info(f"Node [{self.node_name}] successfully categorized text as '{sentiment}'.")
+            return result
+
         except Exception as e:
-            logger.exception(f"Critical failure in {self.node_name} processing: {str(e)}")
-            raise
-
-    def _extract_text(self, data: Any) -> str:
-        """Helper to normalize input into a string."""
-        if isinstance(data, str):
-            return data
-        if isinstance(data, dict) and "text" in data:
-            return str(data["text"])
-        
-        raise TypeError(
-            f"Invalid input type '{type(data).__name__}'. "
-            f"{self.node_name} requires a string or a dict with a 'text' key."
-        )
-
-    def _analyze_polarity(self, text: str) -> Dict[str, Any]:
-        """
-        Internal logic for determining text polarity.
-        This provides a baseline implementation for the orchestration framework.
-        """
-        content = text.lower()
-        
-        # Reference keywords for basic polarity detection
-        lexicon = {
-            "positive": {"excellent", "great", "optimal", "success", "efficient", "robust", "happy"},
-            "negative": {"error", "fail", "slow", "poor", "unstable", "bad", "terrible"}
-        }
-        
-        pos_hits = sum(1 for word in lexicon["positive"] if word in content)
-        neg_hits = sum(1 for word in lexicon["negative"] if word in content)
-        
-        if pos_hits > neg_hits:
-            return {"label": "POSITIVE", "score": min(0.5 + (pos_hits * 0.1), 0.99)}
-        elif neg_hits > pos_hits:
-            return {"label": "NEGATIVE", "score": min(0.5 + (neg_hits * 0.1), 0.99)}
-        
-        return {"label": "NEUTRAL", "score": 0.50}
-
-    def __repr__(self) -> str:
-        return f"<SentimentAnalyzerNode(name='{self.node_name}')>"
-
-# End of sentiment_analyzer_node.py
+            logger.exception(f"Unexpected error in {self.node_name} during processing.")
+            raise e
