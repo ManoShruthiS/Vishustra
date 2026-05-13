@@ -6,90 +6,86 @@ logger = logging.getLogger(__name__)
 
 class IntentClassifierNode(BaseNode):
     """
-    Analyzes input text to categorize the user's intent.
-    
-    This node serves as a traffic controller within the Vishustra orchestration
-    pipeline, allowing downstream nodes to branch logic based on the 
-    identified intent (e.g., 'query', 'action', 'greeting', or 'feedback').
+    Analyzes input text to determine the underlying user intent.
+    This node serves as a router within the Vishustra orchestration pipeline,
+    allowing downstream nodes to branch based on semantic classification.
     """
 
-    def __init__(self, categories: Optional[List[str]] = None):
+    def __init__(self, 
+                 categories: Optional[Dict[str, List[str]]] = None, 
+                 default_intent: str = "general_query"):
         """
-        Initializes the IntentClassifierNode.
+        Initializes the classifier with optional custom intent mappings.
         
-        :param categories: Optional list of specific intent labels to prioritize.
+        Args:
+            categories: A dictionary mapping intent labels to lists of keywords/phrases.
+            default_intent: The fallback intent if no specific category is matched.
         """
-        self.categories = categories or ["information_retrieval", "task_execution", "navigation", "general_chat"]
-        self._default_intent = "unclassified"
+        self._default_intent = default_intent
+        self._categories = categories or {
+            "informational": ["what", "how", "explain", "tell me", "meaning"],
+            "transactional": ["buy", "order", "purchase", "subscribe", "pay"],
+            "navigation": ["go to", "find", "show", "where is", "open"],
+            "support": ["help", "error", "issue", "problem", "fix", "wrong"]
+        }
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the unique identifier for this node type.
-        """
-        return "intent_classifier_v1"
+        """Returns the unique identifier for this node type."""
+        return "IntentClassifierNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input data to determine the primary intent.
+        Processes the input data to classify its intent.
         
-        Expects 'data' to be a string representing the user input.
-        Returns a dictionary containing the identified intent and classification confidence.
-        """
-        try:
-            if not isinstance(data, str):
-                logger.error(f"[{self.node_name}] Input data must be a string. Received: {type(data)}")
-                raise TypeError(f"Node '{self.node_name}' requires string input.")
-
-            input_text = data.strip()
-            if not input_text:
-                logger.warning(f"[{self.node_name}] Received empty string for classification.")
-                return self._generate_response(input_text, self._default_intent, 0.0)
-
-            # In a production LLM orchestration framework, this section would typically 
-            # involve an embedding-based lookup or a zero-shot LLM classification call.
-            # Here we simulate the logic for the node's architectural role.
-            detected_intent, confidence = self._perform_classification(input_text)
-
-            logger.info(f"[{self.node_name}] Intent identified: {detected_intent} (conf: {confidence})")
+        Args:
+            data: The input string to be classified.
+            context: The shared orchestration context.
             
-            return self._generate_response(input_text, detected_intent, confidence)
+        Returns:
+            A dictionary containing the original input and the detected intent.
+            
+        Raises:
+            ValueError: If the input data is not a string.
+        """
+        if not isinstance(data, str):
+            logger.error(f"[{self.node_name}] Received invalid data type: {type(data)}. Expected string.")
+            raise ValueError(f"{self.node_name} requires a string input for classification.")
+
+        normalized_input = data.lower().strip()
+        detected_intent = self._default_intent
+
+        try:
+            # Basic keyword-based heuristic classification
+            # Note: In a production LLM pipeline, this might be replaced by a 
+            # few-shot prompt or a zero-shot classifier model call.
+            for intent, keywords in self._categories.items():
+                if any(keyword in normalized_input for keyword in keywords):
+                    detected_intent = intent
+                    break
+
+            logger.info(f"[{self.node_name}] Successfully classified intent as: '{detected_intent}'")
+
+            result = {
+                "original_input": data,
+                "classified_intent": detected_intent,
+                "confidence_score": 1.0 if detected_intent != self._default_intent else 0.5
+            }
+
+            # Persist classification result to context for downstream logic
+            context["classification_metadata"] = result
+            
+            return result
 
         except Exception as e:
-            logger.exception(f"[{self.node_name}] Critical failure during intent classification: {str(e)}")
-            raise RuntimeError(f"IntentClassifierNode failed to process input: {e}") from e
+            logger.error(f"[{self.node_name}] Failed to process intent classification: {str(e)}")
+            raise RuntimeError(f"Internal error in {self.node_name}: {e}") from e
 
-    def _perform_classification(self, text: str) -> (str, float):
-        """
-        Internal logic to simulate classification. 
-        In an integrated Vishustra deployment, this would interface with a 
-        specialized ModelNode or external API.
-        """
-        normalized_text = text.lower()
-        
-        # Simple heuristic mapping for demonstration of the node's output structure
-        if any(kw in normalized_text for kw in ["find", "search", "who", "what", "where"]):
-            return "information_retrieval", 0.92
-        elif any(kw in normalized_text for kw in ["do", "run", "execute", "create", "delete"]):
-            return "task_execution", 0.88
-        elif any(kw in normalized_text for kw in ["go to", "open", "show me"]):
-            return "navigation", 0.85
-        
-        return "general_chat", 0.70
+    def add_category(self, intent: str, keywords: List[str]) -> None:
+        """Dynamically adds or updates an intent category."""
+        self._categories[intent] = [k.lower() for k in keywords]
+        logger.debug(f"[{self.node_name}] Updated category '{intent}' with {len(keywords)} keywords.")
 
-    def _generate_response(self, text: str, intent: str, confidence: float) -> Dict[str, Any]:
-        """
-        Constructs the standardized output payload for the IntentClassifierNode.
-        """
-        return {
-            "input": text,
-            "classification": {
-                "primary_intent": intent,
-                "confidence_score": confidence,
-                "available_labels": self.categories
-            },
-            "metadata": {
-                "node_id": self.node_name,
-                "version": "1.0.4"
-            }
-        }
+    def __repr__(self) -> str:
+        return f"<{self.node_name}(categories={list(self._categories.keys())})>"
+
