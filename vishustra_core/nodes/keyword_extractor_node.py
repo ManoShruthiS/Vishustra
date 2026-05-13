@@ -1,5 +1,6 @@
 import logging
 import re
+from collections import Counter
 from typing import Any, Dict, List, Set
 
 from vishustra_core.nodes.base_node import BaseNode
@@ -9,96 +10,85 @@ logger = logging.getLogger(__name__)
 class KeywordExtractorNode(BaseNode):
     """
     A processing node responsible for extracting significant keywords from text data.
-    
-    This node identifies relevant terms by filtering out common stop words and 
-    applying frequency-based selection or pattern matching.
+    Uses a frequency-based approach with stop-word filtering and regex tokenization.
     """
 
-    def __init__(self, stop_words: Set[str] = None, top_k: int = 10):
-        """
-        Initializes the KeywordExtractorNode with configurable extraction parameters.
-
-        Args:
-            stop_words (Set[str], optional): A custom set of words to ignore.
-            top_k (int): Maximum number of keywords to return. Defaults to 10.
-        """
-        self.top_k = top_k
-        # Basic default stop words for internal filtering if no external list is provided
-        self.stop_words = stop_words or {
-            "the", "and", "a", "of", "to", "is", "in", "it", "that", "with", 
-            "as", "for", "was", "on", "are", "by", "be", "this", "at", "or"
-        }
+    DEFAULT_STOP_WORDS: Set[str] = {
+        "a", "an", "the", "and", "or", "but", "if", "then", "else", "when", "at", "from", 
+        "by", "for", "with", "about", "against", "between", "into", "through", "during", 
+        "before", "after", "above", "below", "to", "from", "up", "down", "in", "out", 
+        "on", "off", "over", "under", "again", "further", "then", "once", "here", "there", 
+        "all", "any", "both", "each", "few", "more", "most", "other", "some", "such", 
+        "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very", "s", 
+        "t", "can", "will", "just", "don", "should", "now", "is", "are", "was", "were",
+        "be", "been", "being", "have", "has", "had", "doing", "do", "does"
+    }
 
     @property
     def node_name(self) -> str:
         """Returns the identifier for this node."""
-        return "KeywordExtractorNode"
+        return "KeywordExtractor"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input string to extract significant keywords.
-
-        Args:
-            data (Any): The input data. Expected to be a string or a dictionary 
-                        containing a 'text' key.
-            context (Dict[str, Any]): The execution context shared across nodes.
-
-        Returns:
-            List[str]: A list of extracted unique keywords.
-
-        Raises:
-            TypeError: If input data format is not supported.
-            ValueError: If the input text is empty.
-        """
-        logger.info(f"Node '{self.node_name}' starting keyword extraction.")
-
-        text = self._extract_text(data)
+        Processes the input string to extract top keywords.
         
-        if not text.strip():
-            logger.warning("Received empty text for keyword extraction.")
-            return []
+        Args:
+            data: The input text to analyze (expected type: str).
+            context: Dictionary containing configuration like 'top_k' or 'min_word_length'.
+            
+        Returns:
+            A dictionary containing the extracted keywords and their frequencies.
+        """
+        logger.info("Starting keyword extraction process.")
+
+        if not isinstance(data, str):
+            error_msg = f"Invalid data type received: {type(data)}. Expected str."
+            logger.error(error_msg)
+            raise TypeError(error_msg)
+
+        if not data.strip():
+            logger.warning("Empty string provided to KeywordExtractorNode.")
+            return {"keywords": [], "metadata": {"status": "empty_input"}}
 
         try:
-            # Normalize and tokenize: convert to lowercase and find words
-            words = re.findall(r'\b\w{3,}\b', text.lower())
+            # Extraction parameters from context
+            top_k = context.get("top_k", 10)
+            min_length = context.get("min_word_length", 3)
+            custom_stop_words = context.get("stop_words", set())
             
-            # Filter stop words and calculate frequency
-            frequencies: Dict[str, int] = {}
-            for word in words:
-                if word not in self.stop_words:
-                    frequencies[word] = frequencies.get(word, 0) + 1
+            combined_stop_words = self.DEFAULT_STOP_WORDS.union(custom_stop_words)
 
-            # Sort by frequency and take top_k
-            sorted_keywords = sorted(
-                frequencies.items(), 
-                key=lambda item: item[1], 
-                reverse=True
-            )
+            # Tokenization: lowercasing and removing non-alphanumeric characters
+            words = re.findall(r'\b\w+\b', data.lower())
             
-            extracted_keywords = [word for word, count in sorted_keywords[:self.top_k]]
+            # Filtering based on length and stop words
+            filtered_words = [
+                word for word in words 
+                if len(word) >= min_length and word not in combined_stop_words
+            ]
+
+            # Frequency analysis
+            counts = Counter(filtered_words)
+            top_keywords = counts.most_common(top_k)
+
+            logger.info(f"Successfully extracted {len(top_keywords)} keywords.")
             
-            logger.debug(f"Extracted {len(extracted_keywords)} keywords.")
-            return extracted_keywords
+            return {
+                "keywords": [
+                    {"word": word, "count": count} 
+                    for word, count in top_keywords
+                ],
+                "metadata": {
+                    "total_tokens": len(words),
+                    "filtered_tokens": len(filtered_words),
+                    "top_k": top_k
+                }
+            }
 
         except Exception as e:
-            logger.error(f"Error during keyword extraction in node '{self.node_name}': {str(e)}")
-            raise RuntimeError(f"Failed to process keywords: {e}") from e
-
-    def _extract_text(self, data: Any) -> str:
-        """
-        Helper to parse text from various input formats.
-        """
-        if isinstance(data, str):
-            return data
-        if isinstance(data, dict) and "text" in data:
-            return str(data["text"])
-        
-        error_msg = f"Invalid input format for {self.node_name}. Expected str or dict with 'text' key."
-        logger.error(error_msg)
-        raise TypeError(error_msg)
-
-```python
-# Example of expected usage (Internal documentation/testing context):
-# extractor = KeywordExtractorNode(top_k=5)
-# result = extractor.process("Vishustra is a highly modular LLM orchestration framework for backend engineers.", {})
-# print(result) # -> ['vishustra', 'modular', 'llm', 'orchestration', 'framework']
+            logger.exception("An error occurred during keyword extraction.")
+            return {
+                "keywords": [],
+                "metadata": {"status": "error", "error_detail": str(e)}
+            }
