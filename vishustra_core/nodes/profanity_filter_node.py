@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from vishustra_core.nodes.base_node import BaseNode
 
@@ -8,72 +8,78 @@ logger = logging.getLogger(__name__)
 
 class ProfanityFilterNode(BaseNode):
     """
-    A moderation node designed to identify and mask profane language within 
-    textual data before passing it to subsequent LLM chain nodes.
+    A processing node designed to sanitize string data by identifying and 
+    masking profanity based on a configurable blocklist.
     """
 
-    DEFAULT_BANNED_WORDS = [
-        "badword1", "badword2", "offensive_term" 
-    ]  # In a production environment, this would be loaded from an external config or encrypted source.
+    DEFAULT_BLOCKLIST = {
+        "badword1", "badword2", "inappropriate", "toxic"
+    }
 
-    def __init__(self, custom_words: Optional[List[str]] = None, replacement: str = "****"):
+    def __init__(self, custom_blocklist: Optional[List[str]] = None, mask_char: str = "*"):
         """
         Initializes the ProfanityFilterNode.
 
-        :param custom_words: An optional list of additional words to filter.
-        :param replacement: The string used to mask identified profanity.
+        Args:
+            custom_blocklist: Optional list of strings to filter.
+            mask_char: The character used to mask detected profanity.
         """
-        self._banned_words = set(self.DEFAULT_BANNED_WORDS)
-        if custom_words:
-            self._banned_words.update(custom_words)
-        
-        self._replacement = replacement
+        self._blocklist: Set[str] = set(custom_blocklist) if custom_blocklist else self.DEFAULT_BLOCKLIST
+        self._mask_char = mask_char
         # Pre-compile regex for performance
-        pattern_str = r'\b(' + '|'.join(map(re.escape, self._banned_words)) + r')\b'
-        self._pattern = re.compile(pattern_str, re.IGNORECASE)
+        self._pattern = re.compile(
+            r'\b(' + '|'.join(map(re.escape, self._blocklist)) + r')\b', 
+            flags=re.IGNORECASE
+        )
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of the node.
-        """
-        return "Profanity Filter Node"
+        """Returns the identifier for this node type."""
+        return "ProfanityFilterNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, replacing banned words with a replacement mask.
+        Processes the input data, applying masking to any detected profanity.
 
-        :param data: The input data, expected to be a string or a dictionary containing text.
-        :param context: Execution context, can be used to override replacement settings dynamically.
-        :return: The sanitized data.
+        Args:
+            data: The input to process. Expected to be a string or a dictionary 
+                  containing text fields.
+            context: Execution context containing metadata or runtime overrides.
+
+        Returns:
+            The sanitized version of the input data.
+
+        Raises:
+            TypeError: If the data format is unsupported.
         """
         try:
-            replacement = context.get("profanity_replacement", self._replacement)
-            
             if isinstance(data, str):
-                return self._sanitize_text(data, replacement)
+                return self._sanitize_text(data)
             
             if isinstance(data, dict):
-                return {k: (self._sanitize_text(v, replacement) if isinstance(v, str) else v) 
-                        for k, v in data.items()}
-
-            if isinstance(data, list):
-                return [self._sanitize_text(item, replacement) if isinstance(item, str) else item 
-                        for item in data]
+                return {
+                    key: self._sanitize_text(value) if isinstance(value, str) else value 
+                    for key, value in data.items()
+                }
 
             logger.warning(f"[{self.node_name}] Received unsupported data type: {type(data)}. Skipping transformation.")
             return data
 
         except Exception as e:
-            logger.error(f"[{self.node_name}] Error during processing: {str(e)}", exc_info=True)
-            raise RuntimeError(f"ProfanityFilterNode failed to process data: {e}")
+            logger.error(f"[{self.node_name}] Error during processing: {str(e)}")
+            raise
 
-    def _sanitize_text(self, text: str, replacement: str) -> str:
+    def _sanitize_text(self, text: str) -> str:
         """
-        Internal helper to execute the regex substitution.
+        Performs regex-based replacement of blocked words.
         """
-        if not text:
-            return text
-        return self._pattern.sub(replacement, text)
+        def replace_match(match: re.Match) -> str:
+            word = match.group(0)
+            return self._mask_char * len(word)
 
-# End of file
+        sanitized, count = self._pattern.subn(replace_match, text)
+        
+        if count > 0:
+            logger.info(f"[{self.node_name}] Masked {count} instances of profanity.")
+            
+        return sanitized
