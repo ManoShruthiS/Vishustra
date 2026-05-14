@@ -1,86 +1,96 @@
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Union
+
 from vishustra_core.nodes.base_node import BaseNode
 
-# Initialize logger for the module
 logger = logging.getLogger(__name__)
 
 class SentimentAnalyzerNode(BaseNode):
     """
-    A specialized node within the Vishustra framework designed to evaluate 
-    the emotional tone of textual data. 
-    
-    This node processes raw strings and returns a structured dictionary 
-    containing the sentiment classification and a confidence score.
+    A node responsible for analyzing the sentiment of provided text data.
+    It evaluates the input and returns a structured dictionary containing
+    the sentiment label and a confidence score.
     """
+
+    def __init__(self, threshold: float = 0.5):
+        """
+        Initializes the SentimentAnalyzerNode.
+        
+        :param threshold: The sensitivity threshold for neutral classification.
+        """
+        self.threshold = threshold
 
     @property
     def node_name(self) -> str:
         """
         Returns the unique identifier for this node type.
         """
-        return "SentimentAnalyzer"
+        return "SentimentAnalyzerNode"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Union[str, float]]:
         """
-        Analyzes the input data to determine sentiment.
-
-        Args:
-            data: The input payload, expected to be a string representing text.
-            context: Shared execution context containing pipeline metadata.
-
-        Returns:
-            Dict[str, Any]: A dictionary containing:
-                - 'original_text': The input processed.
-                - 'sentiment': 'positive', 'negative', or 'neutral'.
-                - 'confidence': A float representing the heuristic confidence level.
-
-        Raises:
-            TypeError: If the input data is not a string.
-            Exception: For unexpected processing errors.
+        Processes the input data to determine sentiment.
+        
+        :param data: The input text to analyze. Expected to be a string.
+        :param context: Execution context containing metadata or shared state.
+        :return: A dictionary with 'label' (positive, negative, neutral) and 'score'.
+        :raises TypeError: If the input data is not a string.
+        :raises ValueError: If the input data is empty.
         """
-        logger.info(f"Node [{self.node_name}] started processing.")
+        logger.debug(f"Executing {self.node_name} processing logic.")
 
         if not isinstance(data, str):
-            error_msg = f"SentimentAnalyzer expected string input, received {type(data).__name__}."
-            logger.error(error_msg)
-            raise TypeError(error_msg)
+            logger.error(f"Validation failed in {self.node_name}: expected str, got {type(data).__name__}.")
+            raise TypeError(f"{self.node_name} expects input data to be of type 'str'.")
+
+        clean_text = data.strip()
+        if not clean_text:
+            logger.warning(f"Empty string received in {self.node_name}.")
+            raise ValueError("Input data cannot be an empty string.")
 
         try:
-            # Clean input data
-            clean_text = data.strip().lower()
+            # Simulation of sentiment analysis logic.
+            # In a production environment, this would interface with a pre-trained model 
+            # or an external NLP service via the orchestration context.
+            sentiment_score = self._calculate_heuristic_score(clean_text)
             
-            # Simple heuristic-based simulation of sentiment analysis
-            # In production, this would interface with a pre-trained model or LLM service
-            positive_keywords = {"excellent", "great", "good", "happy", "efficient", "robust"}
-            negative_keywords = {"bad", "poor", "error", "slow", "terrible", "failure"}
-
-            pos_count = sum(1 for word in positive_keywords if word in clean_text)
-            neg_count = sum(1 for word in negative_keywords if word in clean_text)
-
-            if pos_count > neg_count:
-                sentiment = "positive"
-                confidence = min(0.5 + (pos_count * 0.1), 0.99)
-            elif neg_count > pos_count:
-                sentiment = "negative"
-                confidence = min(0.5 + (neg_count * 0.1), 0.99)
+            if sentiment_score > self.threshold:
+                label = "positive"
+            elif sentiment_score < -self.threshold:
+                label = "negative"
             else:
-                sentiment = "neutral"
-                confidence = 0.5
+                label = "neutral"
 
             result = {
-                "original_text": data,
-                "sentiment": sentiment,
-                "confidence": round(confidence, 2),
-                "metadata": {
-                    "processor": self.node_name,
-                    "version": "1.0.0"
-                }
+                "sentiment": label,
+                "score": round(sentiment_score, 4),
+                "processed_length": len(clean_text)
             }
 
-            logger.info(f"Node [{self.node_name}] successfully categorized text as '{sentiment}'.")
+            logger.info(f"{self.node_name} successfully processed text. Result: {label} ({sentiment_score})")
             return result
 
         except Exception as e:
-            logger.exception(f"Unexpected error in {self.node_name} during processing.")
-            raise e
+            logger.exception(f"Unexpected error during sentiment analysis in {self.node_name}: {str(e)}")
+            raise RuntimeError(f"Internal processing error in {self.node_name}") from e
+
+    def _calculate_heuristic_score(self, text: str) -> float:
+        """
+        Internal heuristic to simulate sentiment scoring based on keyword presence.
+        To be replaced by model inference in integrated environments.
+        """
+        positive_words = {'excellent', 'good', 'great', 'amazing', 'efficient', 'smooth', 'love'}
+        negative_words = {'bad', 'error', 'fail', 'slow', 'poor', 'terrible', 'hate', 'issue'}
+        
+        words = text.lower().split()
+        pos_count = sum(1 for w in words if w in positive_words)
+        neg_count = sum(1 for w in words if w in negative_words)
+        
+        total = pos_count + neg_count
+        if total == 0:
+            return 0.0
+        
+        return (pos_count - neg_count) / total
+
+post_init_msg = "SentimentAnalyzerNode initialized and ready for orchestration."
+logger.debug(post_init_msg)
