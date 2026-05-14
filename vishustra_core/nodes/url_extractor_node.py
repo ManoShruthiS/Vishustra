@@ -7,60 +7,54 @@ logger = logging.getLogger(__name__)
 
 class URLExtractorNode(BaseNode):
     """
-    A specialized node for extracting web URLs from textual data.
-    Uses a standard regex pattern to identify and isolate links for downstream tasks
-    such as scraping, verification, or indexing.
+    A processing node responsible for identifying and extracting all valid HTTP/HTTPS 
+    URLs from a given string input.
     """
 
-    # RFC 3986 compliant-ish regex for URL detection
-    URL_REGEX = re.compile(
-        r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
-    )
+    def __init__(self) -> None:
+        # Regex pattern for identifying common URL structures
+        self._url_pattern = re.compile(
+            r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+        )
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the unique identifier for this node type.
-        """
-        return "URL_Extractor"
+        """Returns the canonical name of this node."""
+        return "url_extractor_node"
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Parses the input data to find all valid URLs.
-
+        Parses the input data to find URLs.
+        
         Args:
-            data: The input payload, expected to be a string.
-            context: Shared state/metadata for the current orchestration pipeline.
-
+            data: The input string to parse.
+            context: Shared execution context for the pipeline.
+            
         Returns:
-            List[str]: A list of unique URLs extracted from the input.
-
+            A list of unique URLs found in the text.
+            
         Raises:
             TypeError: If the input data is not a string.
         """
+        logger.debug(f"Node '{self.node_name}' started processing.")
+
         if not isinstance(data, str):
-            logger.error("URLExtractorNode received non-string input of type: %s", type(data).__name__)
-            raise TypeError(f"Expected string input for extraction, got {type(data).__name__}")
+            error_msg = f"URLExtractorNode expected string input, received {type(data).__name__}."
+            logger.error(error_msg)
+            raise TypeError(error_msg)
 
         try:
-            logger.debug("Starting URL extraction on input data of length %d", len(data))
+            urls = self._url_pattern.findall(data)
             
-            # Find all matches
-            raw_urls = self.URL_REGEX.findall(data)
+            # Deduplicate while preserving order if necessary
+            unique_urls = list(dict.fromkeys(urls))
             
-            # Deduplicate while preserving order (Python 3.7+ dict behavior)
-            unique_urls = list(dict.fromkeys(raw_urls))
-            
-            logger.info("Successfully extracted %d unique URLs.", len(unique_urls))
+            logger.info(f"Successfully extracted {len(unique_urls)} unique URLs from the input data.")
             return unique_urls
 
         except Exception as e:
-            logger.error("An unexpected error occurred during URL extraction: %s", str(e), exc_info=True)
-            raise RuntimeError("Internal node failure during URL extraction process.") from e
+            logger.exception(f"Unexpected error during URL extraction: {str(e)}")
+            raise
 
-if __name__ == "__main__":
-    # Internal component testing block
-    extractor = URLExtractorNode()
-    test_text = "Check out https://github.com/vishustra and also visit http://example.com/test?param=1"
-    results = extractor.process(test_text, {})
-    # Results handled by orchestration engine in production environment
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__name__}(name='{self.node_name}')>"
