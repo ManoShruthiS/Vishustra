@@ -2,101 +2,86 @@ import logging
 from typing import Any, Dict, List, Optional
 from vishustra_core.nodes.base_node import BaseNode
 
+# Initialize logger for the module
 logger = logging.getLogger(__name__)
 
 class FactCheckerNode(BaseNode):
     """
-    FactCheckerNode validates the factual integrity of input text.
+    A specialized node within the Vishustra framework designed to validate 
+    information against a set of references or context-driven truth sources.
     
-    This node processes claims by comparing them against provided evidence or 
-    knowledge sources defined in the context. It identifies contradictions, 
-    supported statements, and potential hallucinations.
+    This node expects an input dictionary containing a 'claim' and optionally 
+    a list of 'reference_texts'.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the canonical name for this node type."""
-        return "fact_checker_node"
+        """
+        Returns the unique identifier for this node type.
+        """
+        return "FactCheckerNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input data to verify claims.
-
-        Args:
-            data: The content to verify (expected to be a string or list of claims).
-            context: Execution context containing 'evidence' or 'reference_docs'.
-
-        Returns:
-            Dict[str, Any]: A report containing verification status, confidence scores,
-                            and flagged contradictions.
+        Validates the integrity of the input data.
         
+        Args:
+            data (Any): Expected to be a Dict with 'claim' (str) and 'references' (List[str]).
+            context (Dict[str, Any]): Global orchestration context containing metadata.
+            
+        Returns:
+            Dict[str, Any]: A verification report containing status, confidence, and flags.
+            
         Raises:
-            ValueError: If the input data format is unsupported.
+            TypeError: If the input data format is invalid.
+            KeyError: If mandatory fields are missing.
         """
         try:
-            if not data:
-                logger.warning(f"[{self.node_name}] Received empty data for processing.")
-                return {"status": "skipped", "reason": "No input data provided"}
+            if not isinstance(data, dict):
+                logger.error("Invalid data type received: expected dict.")
+                raise TypeError(f"FactCheckerNode expects a dictionary, got {type(data).__name__}")
 
-            claims = self._extract_claims(data)
-            evidence = context.get("evidence", context.get("reference_docs", ""))
+            claim = data.get("claim")
+            if not claim:
+                logger.error("Mandatory field 'claim' missing in input data.")
+                raise KeyError("The 'claim' key is required for processing.")
+
+            references: List[str] = data.get("references", [])
+            strict_mode: bool = context.get("strict_fact_checking", False)
+
+            logger.info(f"Processing claim verification for node instance: {self.node_name}")
             
-            logger.info(f"[{self.node_name}] Verifying {len(claims)} claims against context evidence.")
-
-            results = []
-            for claim in claims:
-                verification = self._verify_claim(claim, evidence)
-                results.append(verification)
-
-            # Aggregating metrics
-            overall_score = sum(r["confidence"] for r in results) / len(results) if results else 0.0
+            # Simulation of verification logic. 
+            # In a production environment, this would interface with a cross-reference 
+            # utility or an LLM-backed evaluation chain.
+            verification_status = "verified"
+            confidence_score = 0.0
             
-            output = {
-                "verified_claims": results,
-                "factuality_score": round(overall_score, 4),
-                "is_hallucinated": any(r["verdict"] == "contradicted" for r in results),
-                "metadata": {
-                    "source_count": len(evidence) if isinstance(evidence, list) else 1
-                }
+            if not references:
+                logger.warning(f"No references provided for claim: {claim[:50]}...")
+                verification_status = "unverified" if strict_mode else "uncertain"
+                confidence_score = 0.5
+            else:
+                # Simulated heuristic for verification
+                # Check for keyword overlap or consistency between claim and references
+                verification_status = "verified"
+                confidence_score = 0.85
+
+            result = {
+                "original_claim": claim,
+                "status": verification_status,
+                "confidence": confidence_score,
+                "reference_count": len(references),
+                "is_hallucination_detected": False,
+                "trace_id": context.get("trace_id", "internal_dev")
             }
 
-            return output
+            logger.debug(f"Fact check result: {verification_status} (Score: {confidence_score})")
+            return result
 
+        except (TypeError, KeyError) as e:
+            logger.exception("Validation error in FactCheckerNode")
+            raise
         except Exception as e:
-            logger.error(f"[{self.node_name}] Failed to process node: {str(e)}", exc_info=True)
-            raise RuntimeError(f"FactCheckerNode execution failed: {e}") from e
-
-    def _extract_claims(self, data: Any) -> List[str]:
-        """Helper to normalize input into a list of verifiable claims."""
-        if isinstance(data, str):
-            # Simple heuristic for claim splitting if a long text is provided
-            return [claim.strip() for claim in data.split('.') if len(claim.strip()) > 10]
-        elif isinstance(data, list):
-            return [str(item) for item in data]
-        else:
-            raise ValueError(f"Unsupported data type for FactCheckerNode: {type(data)}")
-
-    def _verify_claim(self, claim: str, evidence: Any) -> Dict[str, Any]:
-        """
-        Logic for verifying a specific claim.
-        In a production environment, this would interface with an LLM 
-        performing Natural Language Inference (NLI) or a retrieval engine.
-        """
-        # Placeholder for verification logic/LLM call
-        # Mocking a positive verification for demonstration
-        if not evidence:
-            return {
-                "claim": claim,
-                "verdict": "uncertain",
-                "confidence": 0.5,
-                "reason": "No evidence provided for verification."
-            }
-
-        # Simulated heuristic: check for keyword overlap as a basic check
-        # In Vishustra, this would typically be replaced by an LLM-based NLI check
-        return {
-            "claim": claim,
-            "verdict": "supported",
-            "confidence": 0.95,
-            "citations": []
-        }
+            logger.exception(f"Unexpected error during fact-checking: {str(e)}")
+            raise RuntimeError(f"FactCheckerNode failed to process data: {e}") from e
