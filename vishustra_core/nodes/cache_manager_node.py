@@ -6,89 +6,83 @@ logger = logging.getLogger(__name__)
 
 class CacheManagerNode(BaseNode):
     """
-    A specialized node for managing transient state and caching intermediate results
-    within the Vishustra orchestration pipeline. 
-    
-    This node facilitates 'get', 'set', and 'evict' operations to optimize 
-    LLM API calls and expensive data transformations.
+    CacheManagerNode handles the persistence and retrieval of intermediate pipeline results.
+    It allows the orchestration framework to skip redundant computations by storing
+    and fetching data based on unique identifiers provided in the execution context.
     """
 
-    def __init__(self):
-        # In a production environment, this would interface with Redis or a similar 
-        # distributed store. For current modularity, we use a controlled internal registry.
-        self._store: Dict[str, Any] = {}
+    def __init__(self, storage_backend: Optional[Dict[str, Any]] = None):
+        """
+        Initializes the CacheManagerNode with an optional storage backend.
+        Defaults to an in-memory dictionary if no backend is provided.
+        """
+        self._storage = storage_backend if storage_backend is not None else {}
+        logger.debug("CacheManagerNode initialized with internal storage.")
 
     @property
     def node_name(self) -> str:
-        """Returns the canonical name of the caching node."""
+        """
+        Returns the unique identifier for this node type.
+        """
         return "CacheManagerNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes cache operations based on directives provided in the context.
+        Processes the input data by interacting with the cache storage.
         
-        Args:
-            data: The payload to be cached or the default return value on a miss.
-            context: Dictionary containing operational metadata:
-                - 'cache_action': Literal['get', 'set', 'evict']
-                - 'cache_key': The unique identifier for the cached object.
-        
-        Returns:
-            The retrieved data on 'get' (if hit), otherwise returns the input 'data'.
-        """
-        action = context.get("cache_action")
-        key = context.get("cache_key")
+        The behavior is dictated by context parameters:
+        - cache_key (str): The unique key to identify the cached item.
+        - cache_action (str): Determines the operation ('get', 'set', 'delete'). 
+                             Defaults to 'get' if not specified.
 
-        if not action or not key:
-            logger.debug("CacheManagerNode: Missing 'cache_action' or 'cache_key' in context. Passing data through.")
+        Returns the cached data if 'get' is successful, otherwise returns the input data.
+        """
+        cache_key = context.get("cache_key")
+        action = context.get("cache_action", "get").lower()
+
+        if not cache_key:
+            logger.warning(
+                f"[{self.node_name}] Operation '{action}' attempted without a 'cache_key'. "
+                "Bypassing cache logic."
+            )
             return data
 
         try:
             if action == "get":
-                return self._retrieve(key, data)
-            elif action == "set":
-                return self._store_data(key, data)
-            elif action == "evict":
-                return self._evict(key, data)
-            else:
-                logger.warning(f"CacheManagerNode: Received unrecognized action '{action}'.")
+                if cache_key in self._storage:
+                    logger.info(f"[{self.node_name}] Cache hit for key: {cache_key}")
+                    return self._storage[cache_key]
+                
+                logger.info(f"[{self.node_name}] Cache miss for key: {cache_key}")
                 return data
-        except KeyError as ke:
-            logger.error(f"CacheManagerNode: Key error during '{action}' operation: {ke}")
-            return data
+
+            elif action == "set":
+                self._storage[cache_key] = data
+                logger.info(f"[{self.node_name}] Successfully stored data under key: {cache_key}")
+                return data
+
+            elif action == "delete":
+                removed_val = self._storage.pop(cache_key, None)
+                if removed_val is not None:
+                    logger.info(f"[{self.node_name}] Evicted key from cache: {cache_key}")
+                return data
+
+            else:
+                logger.error(f"[{self.node_name}] Invalid cache action requested: {action}")
+                return data
+
         except Exception as e:
-            logger.exception(f"CacheManagerNode: Unexpected failure during cache {action}: {str(e)}")
+            logger.error(
+                f"[{self.node_name}] Critical error during cache process for key '{cache_key}': {str(e)}",
+                exc_info=True
+            )
+            # We return data as a fallback to prevent pipeline breakage, 
+            # though depending on strictness, we might re-raise.
             return data
-
-    def _retrieve(self, key: str, fallback: Any) -> Any:
-        """Handles cache lookup logic."""
-        if key in self._store:
-            logger.info(f"Cache Hit: {key}")
-            return self._store[key]
-        
-        logger.info(f"Cache Miss: {key}")
-        return fallback
-
-    def _store_data(self, key: str, value: Any) -> Any:
-        """Handles cache persistence logic."""
-        if value is None:
-            logger.warning(f"CacheManagerNode: Attempted to cache NoneType for key '{key}'. Operation aborted.")
-            return value
-
-        self._store[key] = value
-        logger.info(f"Cache Set: {key}")
-        return value
-
-    def _evict(self, key: str, data: Any) -> Any:
-        """Handles cache invalidation logic."""
-        if key in self._store:
-            del self._store[key]
-            logger.info(f"Cache Evicted: {key}")
-        else:
-            logger.debug(f"Cache Evict: Key {key} not found in store.")
-        return data
 
     def clear_all(self) -> None:
-        """Flushes the entire node cache registry."""
-        self._store.clear()
-        logger.info("CacheManagerNode: Internal store cleared.")
+        """
+        Flushes the entire cache storage.
+        """
+        self._storage.clear()
+        logger.info(f"[{self.node_name}] Internal cache storage cleared.")
