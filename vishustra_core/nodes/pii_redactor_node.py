@@ -1,95 +1,78 @@
 import re
 import logging
-from typing import Any, Dict, List, Pattern
+from typing import Any, Dict, List, Union
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class PIIRedactorNode(BaseNode):
     """
-    A node designed to identify and mask Personally Identifiable Information (PII)
-    within text data using configurable regex patterns.
+    A node responsible for identifying and redacting Personally Identifiable Information (PII)
+    from input strings or dictionaries. Supports common patterns like emails, 
+    phone numbers, and generic credit card formats.
     """
 
-    DEFAULT_PATTERNS = {
-        "email": r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
-        "phone": r"(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}",
-        "ssn": r"\b\d{3}-\d{2}-\d{4}\b",
-        "credit_card": r"\b(?:\d[ -]*?){13,16}\b",
-        "ipv4": r"\b(?:\d{1,3}\.){3}\d{1,3}\b"
-    }
-
-    def __init__(self, custom_patterns: Dict[str, str] = None):
-        """
-        Initializes the redactor with a set of regex patterns.
-        
-        Args:
-            custom_patterns: Optional dictionary of PII labels and their regex strings.
-        """
-        self._compiled_patterns: Dict[str, Pattern] = {}
-        patterns_to_compile = self.DEFAULT_PATTERNS.copy()
-        
-        if custom_patterns:
-            patterns_to_compile.update(custom_patterns)
-
-        for label, regex_str in patterns_to_compile.items():
-            try:
-                self._compiled_patterns[label] = re.compile(regex_str)
-            except re.error as e:
-                logger.error(f"Failed to compile regex for '{label}': {e}")
+    def __init__(self, replacement_text: str = "[REDACTED]"):
+        self._replacement_text = replacement_text
+        # Common regex patterns for PII detection
+        self._patterns = {
+            "email": re.compile(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'),
+            "phone": re.compile(r'\b(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b'),
+            "credit_card": re.compile(r'\b(?:\d[ -]*?){13,16}\b'),
+            "ipv4": re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
+        }
 
     @property
     def node_name(self) -> str:
-        """Returns the canonical name of the node."""
+        """Returns the unique identifier for this node."""
         return "PIIRedactorNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data to redact sensitive information.
+        Redacts PII from the provided data. 
         
         Args:
-            data: The input data, typically a string, list of strings, or nested dict.
-            context: Orchestration context (unused in this node but required by interface).
-            
+            data: The input data, expected to be a string or a dictionary.
+            context: Execution context containing configuration or metadata.
+
         Returns:
-            The input data with PII masked by placeholders.
+            The processed data with sensitive information masked.
         """
-        if data is None:
-            return None
-
         try:
-            return self._apply_redaction(data)
+            if isinstance(data, str):
+                return self._redact_string(data)
+            elif isinstance(data, dict):
+                return self._redact_dict(data)
+            elif isinstance(data, list):
+                return [self.process(item, context) for item in data]
+            else:
+                logger.warning(f"[{self.node_name}] Received unsupported data type: {type(data)}. Returning as is.")
+                return data
         except Exception as e:
-            logger.error(f"Critical error during PII redaction in {self.node_name}: {str(e)}")
-            raise RuntimeError(f"Redaction process failed: {e}") from e
+            logger.error(f"[{self.node_name}] Error during PII redaction: {str(e)}", exc_info=True)
+            raise ValueError(f"PII Redaction failed: {e}") from e
 
-    def _apply_redaction(self, data: Any) -> Any:
-        """
-        Recursively traverses data structures to redact strings.
-        """
-        if isinstance(data, str):
-            return self._redact_text(data)
-        elif isinstance(data, list):
-            return [self._apply_redaction(item) for item in data]
-        elif isinstance(data, dict):
-            return {k: self._apply_redaction(v) for k, v in data.items()}
-        
-        # Return non-string/non-container types as is
-        return data
-
-    def _redact_text(self, text: str) -> str:
-        """
-        Iterates through compiled patterns and replaces matches with labels.
-        """
+    def _redact_string(self, text: str) -> str:
+        """Applies regex patterns to a string to mask PII."""
         redacted_text = text
-        for label, pattern in self._compiled_patterns.items():
-            replacement = f"<{label.upper()}>"
-            redacted_text = pattern.sub(replacement, redacted_text)
-        
+        for pii_type, pattern in self._patterns.items():
+            redacted_text = pattern.sub(self._replacement_text, redacted_text)
         return redacted_text
 
-    def __repr__(self) -> str:
-        return f"<{self.node_name}(patterns={list(self._compiled_patterns.keys())})>"
-
-# Internal note: Consider adding context-aware redaction (e.g., via Spacy/Presidio) 
-# in future iterations if simple regex proves insufficient for specific locales.
+    def _redact_dict(self, data_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """Recursively traverses a dictionary to redact string values."""
+        new_dict = {}
+        for key, value in data_dict.items():
+            if isinstance(value, str):
+                new_dict[key] = self._redact_string(value)
+            elif isinstance(value, dict):
+                new_dict[key] = self._redact_dict(value)
+            elif isinstance(value, list):
+                new_dict[key] = [
+                    self._redact_dict(item) if isinstance(item, dict) 
+                    else (self._redact_string(item) if isinstance(item, str) else item)
+                    for item in value
+                ]
+            else:
+                new_dict[key] = value
+        return new_dict
