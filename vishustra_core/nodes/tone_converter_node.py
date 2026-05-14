@@ -6,65 +6,67 @@ logger = logging.getLogger(__name__)
 
 class ToneConverterNode(BaseNode):
     """
-    A node responsible for modifying the stylistic tone of textual data.
-    
-    This node expects the input data to be a string and looks for a 
-    'target_tone' key within the context to determine the transformation logic.
+    A specialized node within the Vishustra framework designed to transform 
+    the linguistic tone of a given text input based on provided context.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the unique identifier for this node type."""
-        return "ToneConverterNode"
+        """Returns the unique identifier for the tone converter node."""
+        return "tone_converter_node"
 
     def process(self, data: Any, context: Dict[str, Any]) -> str:
         """
-        Processes the input text to match a specified target tone.
+        Transforms the input text into a target tone specified in the context.
         
         Args:
-            data (Any): The input text string to be transformed.
-            context (Dict[str, Any]): Metadata containing 'target_tone'.
+            data (Any): The input string to be transformed.
+            context (Dict[str, Any]): Metadata containing the 'target_tone'.
             
         Returns:
-            str: The processed text with the applied tone shift.
+            str: The text processed with the requested tone.
             
         Raises:
-            ValueError: If the input data is not a string.
-            KeyError: If processing fails due to missing context parameters.
+            TypeError: If the input data is not a string.
+            KeyError: If mandatory configuration is missing from context.
         """
         if not isinstance(data, str):
-            logger.error("ToneConverterNode received non-string data type: %s", type(data).__name__)
-            raise ValueError(f"Invalid data type: expected str, got {type(data).__name__}")
+            logger.error(f"Invalid data type received: {type(data).__name__}. Expected str.")
+            raise TypeError(f"[{self.node_name}] Input data must be a string.")
 
-        target_tone = context.get("target_tone", "neutral").lower()
-        
-        logger.info("Initiating tone conversion to '%s'.", target_tone)
+        target_tone = context.get("target_tone")
+        if not target_tone:
+            logger.warning("No 'target_tone' provided in context. Defaulting to 'professional'.")
+            target_tone = "professional"
+
+        logger.info(f"Initiating tone conversion. Target: {target_tone}")
 
         try:
-            # Simulation of linguistic transformation logic.
-            # In a full Vishustra implementation, this would likely involve 
-            # a prompt template or a call to a specific fine-tuned model.
+            # Implementation logic for tone shifting.
+            # In a production LLM orchestration, this would typically involve 
+            # formatting a prompt or calling a specific adapter.
+            transformed_data = self._simulate_tone_shift(data, target_tone)
             
-            transformation_map = {
-                "professional": "Please be advised: ",
-                "casual": "Hey, just so you know: ",
-                "urgent": "IMMEDIATE ACTION REQUIRED: ",
-                "neutral": ""
-            }
-
-            prefix = transformation_map.get(target_tone, f"[{target_tone.upper()}] ")
-            processed_text = f"{prefix}{data}"
-
-            logger.debug("Successfully transformed text to %s tone.", target_tone)
-            return processed_text
+            logger.debug(f"Successfully converted text to {target_tone} tone.")
+            return transformed_data
 
         except Exception as e:
-            logger.error("An error occurred during tone conversion: %s", str(e), exc_info=True)
-            raise RuntimeError(f"Failed to process node '{self.node_name}': {str(e)}") from e
+            logger.exception(f"Unexpected failure during tone conversion: {e}")
+            raise RuntimeError(f"Node '{self.node_name}' failed to process data.") from e
 
-def _get_node_instance() -> ToneConverterNode:
-    """Helper for node registry initialization."""
-    return ToneConverterNode()
-
-```python
-# End of file
+    def _simulate_tone_shift(self, text: str, tone: str) -> str:
+        """
+        Internal logic to simulate the transformation of text.
+        In the Vishustra ecosystem, this acts as the bridge between raw input 
+        and the desired stylistic output.
+        """
+        # Placeholder for complex NLP logic or LLM inference call
+        modifiers = {
+            "professional": "[Professional] ",
+            "friendly": "[Friendly] ",
+            "sarcastic": "[Sarcastic] ",
+            "urgent": "[Urgent] "
+        }
+        
+        prefix = modifiers.get(tone.lower(), f"[{tone.capitalize()}] ")
+        return f"{prefix}{text}"
