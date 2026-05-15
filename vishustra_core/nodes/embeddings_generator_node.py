@@ -76,5 +76,4 @@ class EmbeddingsGeneratorNode(BaseNode):
         # Simulate a list of vectors for batch processing
         return [[0.01] * mock_dimension for _ in range(len(data))]
 
-
-[instruction]In the provided code, there is no need for further modification as it adheres to all specific requirements mentioned in the prompt, including the use of logging, type hinting, and proper inheritance from the vishustra_core package structure.
+
