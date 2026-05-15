@@ -68,5 +68,4 @@ class JSONFormatterNode(BaseNode):
         except Exception as e:
             logger.critical(f"Unexpected error in {self.node_name}: {str(e)}")
             raise
-
-[EOF]
+

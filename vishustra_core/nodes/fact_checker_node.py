@@ -2,86 +2,117 @@ import logging
 from typing import Any, Dict, List, Optional
 from vishustra_core.nodes.base_node import BaseNode
 
-# Initialize logger for the module
 logger = logging.getLogger(__name__)
 
 class FactCheckerNode(BaseNode):
     """
-    A specialized node within the Vishustra framework designed to validate 
-    information against a set of references or context-driven truth sources.
-    
-    This node expects an input dictionary containing a 'claim' and optionally 
-    a list of 'reference_texts'.
+    A specialized node designed to validate claims within a given text body.
+    It identifies key assertions and cross-references them against a 
+    provided knowledge base or simulates verification via internal logic.
     """
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the unique identifier for this node type.
-        """
+        """Returns the canonical name for this node."""
         return "FactCheckerNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Validates the integrity of the input data.
+        Processes the input data to verify facts.
         
         Args:
-            data (Any): Expected to be a Dict with 'claim' (str) and 'references' (List[str]).
-            context (Dict[str, Any]): Global orchestration context containing metadata.
-            
+            data: The input text or dictionary containing 'content' to verify.
+            context: Execution context containing configuration like 'threshold' 
+                     or 'reference_data'.
+
         Returns:
-            Dict[str, Any]: A verification report containing status, confidence, and flags.
-            
-        Raises:
-            TypeError: If the input data format is invalid.
-            KeyError: If mandatory fields are missing.
+            A dictionary containing verified claims, uncertainty flags, 
+            and an overall veracity score.
         """
         try:
-            if not isinstance(data, dict):
-                logger.error("Invalid data type received: expected dict.")
-                raise TypeError(f"FactCheckerNode expects a dictionary, got {type(data).__name__}")
+            content = self._extract_content(data)
+            reference_source = context.get("reference_data", {})
+            threshold = context.get("confidence_threshold", 0.7)
 
-            claim = data.get("claim")
-            if not claim:
-                logger.error("Mandatory field 'claim' missing in input data.")
-                raise KeyError("The 'claim' key is required for processing.")
+            logger.info(f"Initiating fact-checking process for node: {self.node_name}")
 
-            references: List[str] = data.get("references", [])
-            strict_mode: bool = context.get("strict_fact_checking", False)
-
-            logger.info(f"Processing claim verification for node instance: {self.node_name}")
+            # Simulation of claim extraction and verification logic
+            # In a production scenario, this would interface with an LLM or a Vector DB
+            claims = self._extract_claims(content)
+            results = self._verify_claims(claims, reference_source)
             
-            # Simulation of verification logic. 
-            # In a production environment, this would interface with a cross-reference 
-            # utility or an LLM-backed evaluation chain.
-            verification_status = "verified"
-            confidence_score = 0.0
+            veracity_score = self._calculate_overall_score(results)
             
-            if not references:
-                logger.warning(f"No references provided for claim: {claim[:50]}...")
-                verification_status = "unverified" if strict_mode else "uncertain"
-                confidence_score = 0.5
-            else:
-                # Simulated heuristic for verification
-                # Check for keyword overlap or consistency between claim and references
-                verification_status = "verified"
-                confidence_score = 0.85
+            is_reliable = veracity_score >= threshold
 
-            result = {
-                "original_claim": claim,
-                "status": verification_status,
-                "confidence": confidence_score,
-                "reference_count": len(references),
-                "is_hallucination_detected": False,
-                "trace_id": context.get("trace_id", "internal_dev")
+            output = {
+                "original_content": content,
+                "verified_claims": results,
+                "veracity_score": round(veracity_score, 2),
+                "is_reliable": is_reliable,
+                "metadata": {
+                    "claims_processed": len(claims),
+                    "source_count": len(reference_source)
+                }
             }
 
-            logger.debug(f"Fact check result: {verification_status} (Score: {confidence_score})")
-            return result
+            logger.info(f"Fact-checking completed. Reliability: {is_reliable}")
+            return output
 
-        except (TypeError, KeyError) as e:
-            logger.exception("Validation error in FactCheckerNode")
-            raise
         except Exception as e:
-            logger.exception(f"Unexpected error during fact-checking: {str(e)}")
-            raise RuntimeError(f"FactCheckerNode failed to process data: {e}") from e
+            logger.error(f"Error encountered in FactCheckerNode: {str(e)}", exc_info=True)
+            raise RuntimeError(f"FactCheckerNode failed to process data: {e}")
+
+    def _extract_content(self, data: Any) -> str:
+        """Standardizes input into a string format."""
+        if isinstance(data, str):
+            return data
+        if isinstance(data, dict):
+            return data.get("content") or data.get("text", "")
+        return str(data)
+
+    def _extract_claims(self, text: str) -> List[str]:
+        """Internal helper to parse individual assertions from the text."""
+        # Mock implementation: split by sentences as proxy for claims
+        if not text:
+            return []
+        return [claim.strip() for claim in text.split('.') if len(claim.strip()) > 5]
+
+    def _verify_claims(self, claims: List[str], reference: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Cross-references claims against provided references."""
+        verified_results = []
+        for claim in claims:
+            # Logic would normally involve semantic similarity or lookup
+            # Defaulting to a simulated verification status
+            status = "unverified"
+            confidence = 0.5
+            
+            if any(ref_key.lower() in claim.lower() for ref_key in reference.keys()):
+                status = "verified"
+                confidence = 0.9
+            
+            verified_results.append({
+                "claim": claim,
+                "status": status,
+                "confidence": confidence
+            })
+        return verified_results
+
+    def _calculate_overall_score(self, results: List[Dict[str, Any]]) -> float:
+        """Computes the weighted veracity score based on individual claims."""
+        if not results:
+            return 0.0
+        
+        total_confidence = sum(r["confidence"] for r in results if r["status"] == "verified")
+        return total_confidence / len(results)
+
+if __name__ == "__main__":
+    # Internal diagnostic check
+    node = FactCheckerNode()
+    test_context = {"reference_data": {"Python": "programming language"}}
+    test_data = "Python is a programming language. It was created in the 90s."
+    try:
+        res = node.process(test_data, test_context)
+        # Result handled by logging in production
+    except Exception:
+        pass
