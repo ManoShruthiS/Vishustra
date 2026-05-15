@@ -1,6 +1,6 @@
 import re
 import logging
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
@@ -8,71 +8,76 @@ logger = logging.getLogger(__name__)
 class PIIRedactorNode(BaseNode):
     """
     A node responsible for identifying and redacting Personally Identifiable Information (PII)
-    from input strings or dictionaries. Supports common patterns like emails, 
-    phone numbers, and generic credit card formats.
+    from text data. Uses regex-based patterns to mask sensitive entities like emails, 
+    phone numbers, and credit card patterns to ensure data privacy before further processing.
     """
 
-    def __init__(self, replacement_text: str = "[REDACTED]"):
-        self._replacement_text = replacement_text
-        # Common regex patterns for PII detection
-        self._patterns = {
-            "email": re.compile(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'),
-            "phone": re.compile(r'\b(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b'),
-            "credit_card": re.compile(r'\b(?:\d[ -]*?){13,16}\b'),
-            "ipv4": re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
+    DEFAULT_PATTERNS = {
+        "EMAIL": r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
+        "PHONE": r"\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}",
+        "CREDIT_CARD": r"\b(?:\d[ -]*?){13,16}\b",
+        "SSN": r"\b\d{3}-\d{2}-\d{4}\b",
+        "IPV4": r"\b(?:\d{1,3}\.){3}\d{1,3}\b"
+    }
+
+    def __init__(self, custom_patterns: Optional[Dict[str, str]] = None):
+        """
+        Initializes the redactor with default patterns or extends them with custom ones.
+        """
+        self.patterns = self.DEFAULT_PATTERNS.copy()
+        if custom_patterns:
+            self.patterns.update(custom_patterns)
+        
+        # Pre-compile patterns for performance
+        self._compiled_regex = {
+            label: re.compile(pattern) for label, pattern in self.patterns.items()
         }
 
     @property
     def node_name(self) -> str:
-        """Returns the unique identifier for this node."""
+        """
+        Returns the unique identifier for this node type.
+        """
         return "PIIRedactorNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Redacts PII from the provided data. 
+        Scans the input data for PII and replaces matches with a redacted placeholder.
         
         Args:
-            data: The input data, expected to be a string or a dictionary.
-            context: Execution context containing configuration or metadata.
-
+            data: The input to process. Expected to be a string.
+            context: Execution context containing metadata or configurations.
+            
         Returns:
-            The processed data with sensitive information masked.
+            The redacted string if input was a string, otherwise the original data.
         """
+        if not isinstance(data, str):
+            logger.warning(
+                "Node [%s] received non-string data of type %s. Skipping redaction.",
+                self.node_name, 
+                type(data).__name__
+            )
+            return data
+
         try:
-            if isinstance(data, str):
-                return self._redact_string(data)
-            elif isinstance(data, dict):
-                return self._redact_dict(data)
-            elif isinstance(data, list):
-                return [self.process(item, context) for item in data]
-            else:
-                logger.warning(f"[{self.node_name}] Received unsupported data type: {type(data)}. Returning as is.")
-                return data
+            redacted_text = data
+            for label, regex in self._compiled_regex.items():
+                replacement = f"<{label}_REDACTED>"
+                redacted_text = regex.sub(replacement, redacted_text)
+
+            logger.debug("Successfully performed PII redaction on input string.")
+            return redacted_text
+
         except Exception as e:
-            logger.error(f"[{self.node_name}] Error during PII redaction: {str(e)}", exc_info=True)
-            raise ValueError(f"PII Redaction failed: {e}") from e
+            logger.error(
+                "Node [%s] failed to process data: %s", 
+                self.node_name, 
+                str(e), 
+                exc_info=True
+            )
+            # In a pipeline, we might prefer to fail-safe by returning original or raising
+            # depending on the orchestration policy. Here we raise to notify the orchestrator.
+            raise RuntimeError(f"PII Redaction failed: {e}") from e
 
-    def _redact_string(self, text: str) -> str:
-        """Applies regex patterns to a string to mask PII."""
-        redacted_text = text
-        for pii_type, pattern in self._patterns.items():
-            redacted_text = pattern.sub(self._replacement_text, redacted_text)
-        return redacted_text
-
-    def _redact_dict(self, data_dict: Dict[str, Any]) -> Dict[str, Any]:
-        """Recursively traverses a dictionary to redact string values."""
-        new_dict = {}
-        for key, value in data_dict.items():
-            if isinstance(value, str):
-                new_dict[key] = self._redact_string(value)
-            elif isinstance(value, dict):
-                new_dict[key] = self._redact_dict(value)
-            elif isinstance(value, list):
-                new_dict[key] = [
-                    self._redact_dict(item) if isinstance(item, dict) 
-                    else (self._redact_string(item) if isinstance(item, str) else item)
-                    for item in value
-                ]
-            else:
-                new_dict[key] = value
-        return new_dict
+    def __repr__(self) -> str:
+        return f"<{self.node_name}(patterns={list(self.patterns.keys())})>"
