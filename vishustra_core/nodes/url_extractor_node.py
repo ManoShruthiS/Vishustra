@@ -7,66 +7,61 @@ logger = logging.getLogger(__name__)
 
 class URLExtractorNode(BaseNode):
     """
-    A specialized node designed to parse input text and extract all valid URLs 
-    using regular expression matching. This is useful for pre-processing 
-    steps in web-crawling or information retrieval pipelines.
+    A specialized node for identifying and extracting URLs from unstructured text data.
+    Uses regular expressions to find all HTTP/HTTPS links within the provided input.
     """
 
-    # Comprehensive URL regex pattern to match standard protocols and domains
+    # RFC 3986 compliant-ish regex for standard URL extraction
     _URL_REGEX = re.compile(
         r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
     )
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the unique identifier for this node type.
-        """
-        return "url_extractor_node"
+        """Returns the identifier for this node type."""
+        return "URLExtractorNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
         Scans the input data for URLs.
-        
+
         Args:
-            data (Any): The input data, expected to be a string.
-            context (Dict[str, Any]): The current pipeline execution context.
-            
+            data (Any): The input data to process. Expected to be a string.
+            context (Dict[str, Any]): Pipeline context containing metadata or configurations.
+
         Returns:
-            List[str]: A list of unique URLs discovered in the text. Returns an empty 
-                      list if input is invalid or no matches are found.
+            List[str]: A list of unique URLs extracted from the input text.
+
+        Raises:
+            TypeError: If the input data is not a string.
+            Exception: For unexpected processing failures.
         """
         if not isinstance(data, str):
-            logger.warning(
-                "URLExtractorNode received non-string input of type %s. Skipping extraction.", 
-                type(data).__name__
-            )
-            return []
+            error_msg = f"Node '{self.node_name}' expected string input, but received {type(data).__name__}."
+            logger.error(error_msg)
+            raise TypeError(error_msg)
 
         try:
-            logger.debug("Starting URL extraction on input payload.")
+            logger.debug(f"Starting URL extraction on input of length {len(data)}.")
             
-            # Find all matches based on the regex
-            matches = self._URL_REGEX.findall(data)
+            # Find all matches
+            found_urls = self._URL_REGEX.findall(data)
             
-            # Use dict keys to remove duplicates while preserving original discovery order
-            unique_urls = list(dict.fromkeys(matches))
+            # Deduplicate while preserving order (using dict keys for older Python compatibility/stability)
+            unique_urls = list(dict.fromkeys(found_urls))
             
-            logger.info(
-                "Successfully processed URL extraction. Found %d unique URLs.", 
-                len(unique_urls)
-            )
+            logger.info(f"Extracted {len(unique_urls)} unique URLs.")
             return unique_urls
 
         except Exception as e:
-            logger.error("Failed to extract URLs due to an unexpected error: %s", str(e), exc_info=True)
-            # Return an empty list to maintain pipeline stability
-            return []
+            logger.error(f"Failed to extract URLs in {self.node_name}: {str(e)}", exc_info=True)
+            raise Exception(f"URL extraction failed: {str(e)}") from e
 
-    def __repr__(self) -> str:
-        return f"<{self.__class__.__name__}(name='{self.node_name}')>"
+if __name__ == "__main__":
+    # Internal module testing logic if executed directly
+    logging.basicConfig(level=logging.INFO)
+    test_node = URLExtractorNode()
+    sample_text = "Visit our site at https://example.com or check our docs at http://docs.vishustra.io."
+    results = test_node.process(sample_text, {})
+    logger.info(f"Test Result: {results}")
 
-```python
-# Example usage within the Vishustra framework:
-# node = URLExtractorNode()
-# urls = node.process("Check out https://github.com and http://python.org", {})
