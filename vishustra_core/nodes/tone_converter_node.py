@@ -6,63 +6,61 @@ logger = logging.getLogger(__name__)
 
 class ToneConverterNode(BaseNode):
     """
-    A specialized node within the Vishustra framework designed to transform 
-    the linguistic tone of a given text input based on context parameters.
+    A transformation node responsible for adjusting the linguistic tone of the input text.
+    
+    This node expects a string input and a target tone specification within the context.
+    If no tone is specified, it defaults to a 'professional' tone.
     """
 
-    def process(self, data: Any, context: Dict[str, Any]) -> str:
-        """
-        Processes the input string and applies a tone transformation.
-        
-        Args:
-            data: The raw string content to be transformed.
-            context: A dictionary containing orchestration parameters. 
-                    Expected key: 'target_tone' (e.g., 'professional', 'casual', 'urgent').
-
-        Returns:
-            str: The text processed with the requested stylistic tone.
-
-        Raises:
-            ValueError: If data is not a string or if target_tone is missing from context.
-            RuntimeError: If an error occurs during the transformation process.
-        """
-        try:
-            if not isinstance(data, str):
-                raise ValueError(f"ToneConverterNode expects string data, received: {type(data).__name__}")
-
-            target_tone = context.get("target_tone")
-            if not target_tone:
-                logger.warning("No 'target_tone' provided in context; defaulting to 'neutral'.")
-                target_tone = "neutral"
-
-            logger.info(f"Transforming text tone to: {target_tone}")
-
-            # Simulated transformation logic for the orchestration framework.
-            # In a production environment, this would interface with a specific LLM prompt 
-            # or a specialized fine-tuned model via a provider client.
-            transformed_text = self._apply_transformation(data, target_tone)
-            
-            return transformed_text
-
-        except Exception as e:
-            logger.error(f"Failed to process tone conversion: {str(e)}", exc_info=True)
-            raise
-
-    def _apply_transformation(self, text: str, tone: str) -> str:
-        """
-        Internal logic to simulate text transformation.
-        """
-        # Place-holder for LLM integration logic
-        mapping = {
-            "professional": f"[Professional Tone]: {text}",
-            "casual": f"[Casual Tone]: {text}",
-            "urgent": f"[Urgent Tone]: {text}"
-        }
-        return mapping.get(tone.lower(), f"[Neutral Tone]: {text}")
+    def __init__(self, default_tone: str = "professional"):
+        self._default_tone = default_tone
 
     @property
     def node_name(self) -> str:
+        """Returns the unique identifier for the ToneConverterNode."""
+        return "ToneConverterNode"
+
+    def process(self, data: Any, context: Dict[str, Any]) -> str:
         """
-        Returns the unique identifier for this node type.
+        Processes the input data to simulate a tone transformation.
+        
+        Args:
+            data (Any): The input text to be transformed. Expected to be a string.
+            context (Dict[str, Any]): The orchestration context, potentially containing 'target_tone'.
+            
+        Returns:
+            str: The processed text with the requested tone applied.
+            
+        Raises:
+            ValueError: If the input data is not a string or is empty.
         """
-        return "tone_converter_node"
+        if not isinstance(data, str) or not data.strip():
+            logger.error(f"[{self.node_name}] Invalid input data type. Expected non-empty string, got {type(data).__name__}.")
+            raise ValueError("ToneConverterNode requires a non-empty string as input data.")
+
+        target_tone = context.get("target_tone", self._default_tone)
+        logger.info(f"[{self.node_name}] Transforming text to '{target_tone}' tone.")
+
+        try:
+            # In a production LLM orchestration environment, this would interface 
+            # with a prompt template or a specific fine-tuned model.
+            # Here we simulate the transformation logic.
+            transformed_text = self._apply_tone_logic(data, target_tone)
+            
+            logger.debug(f"[{self.node_name}] Successfully processed text of length {len(data)}.")
+            return transformed_text
+
+        except Exception as e:
+            logger.exception(f"[{self.node_name}] Unexpected error during tone conversion: {str(e)}")
+            raise
+
+    def _apply_tone_logic(self, text: str, tone: str) -> str:
+        """
+        Internal logic to wrap the text with tone-specific metadata or 
+        simulated transformation markers.
+        """
+        # Placeholder for actual NLP logic or LLM call
+        return f"[Tone: {tone}] {text}"
+
+    def __repr__(self) -> str:
+        return f"<{self.node_name}(default_tone='{self._default_tone}')>"

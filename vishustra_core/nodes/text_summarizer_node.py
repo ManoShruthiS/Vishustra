@@ -78,7 +78,3 @@ class TextSummarizerNode(BaseNode):
             logger.exception(f"[{self.node_name}] Transformation failed due to an internal error.")
             raise RuntimeError(f"Node '{self.node_name}' failed to process data: {str(e)}") from e
 
-```python
-# Example usage (not part of the production node file)
-# node = TextSummarizerNode()
-# result = node.process("Long text here...", {"max_length": 100})
