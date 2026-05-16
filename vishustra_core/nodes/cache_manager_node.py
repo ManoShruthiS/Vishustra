@@ -5,6 +5,7 @@ from vishustra_core.nodes.base_node import BaseNode
 logger = logging.getLogger(__name__)
 
 class CacheManagerNode(BaseNode):
+    """
     CacheManagerNode handles the persistence and retrieval of intermediate pipeline results.
     It allows the system to skip redundant computations by storing
     and fetching data based on unique identifiers provided in the execution context.

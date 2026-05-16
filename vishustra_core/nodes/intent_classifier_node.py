@@ -5,6 +5,7 @@ from vishustra_core.nodes.base_node import BaseNode
 logger = logging.getLogger(__name__)
 
 class IntentClassifierNode(BaseNode):
+    """
     Analyzes input text to determine the underlying user intent.
     This node serves as a router within the pipeline,
     allowing downstream logic to branch based on classification.

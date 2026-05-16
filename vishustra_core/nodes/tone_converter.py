@@ -5,6 +5,7 @@ from vishustra_core.nodes.base_node import BaseNode
 logger = logging.getLogger(__name__)
 
 class ToneConverterNode(BaseNode):
+    """
     A specialized node within the Vishustra framework designed to transform 
     the linguistic style of input text based on contextually provided parameters.
     """
