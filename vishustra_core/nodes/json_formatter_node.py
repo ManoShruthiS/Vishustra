@@ -28,7 +28,7 @@ class JSONFormatterNode(BaseNode):
 
         Args:
             data (Any): The data structure (dict, list, etc.) to be serialized.
-            context (Dict[str, Any]): Orchestration context. 
+            context (Dict[str, Any]): Execution context. 
                 Supported keys:
                 - 'indent': Integer for JSON indentation (default: 4).
                 - 'sort_keys': Boolean to sort dictionary keys (default: True).

@@ -25,7 +25,7 @@ class TextSummarizerNode(BaseNode):
 
         Args:
             data (Any): The text content to be summarized. Must be a string.
-            context (Dict[str, Any]): Orchestration context containing operational 
+            context (Dict[str, Any]): Execution context containing operational 
                                       parameters such as 'max_length' or 'strict_mode'.
 
         Returns:
@@ -53,8 +53,6 @@ class TextSummarizerNode(BaseNode):
             logger.info(f"[{self.node_name}] Summarizing payload (Input Length: {len(data)})")
 
             # Simulation of an extractive summarization transformation.
-            # In a production LLM pipeline, this logic would typically interface with
-            # a Transformer-based model or an external API provider.
             sentences = [s.strip() for s in data.split('.') if s.strip()]
             
             if len(sentences) <= 3:

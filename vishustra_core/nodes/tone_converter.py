@@ -5,12 +5,8 @@ from vishustra_core.nodes.base_node import BaseNode
 logger = logging.getLogger(__name__)
 
 class ToneConverterNode(BaseNode):
-    """
     A specialized node within the Vishustra framework designed to transform 
     the linguistic style of input text based on contextually provided parameters.
-    
-    This node acts as a middleware for stylistic adjustment, typically 
-    preceding an LLM generation or following a raw data extraction phase.
     """
 
     @property
@@ -45,8 +41,7 @@ class ToneConverterNode(BaseNode):
         target_tone = context.get("target_tone", "neutral").lower()
         
         try:
-            # In a production environment, this would interface with a fine-tuned 
-            # model or a specific prompt template. Here we simulate the transformation.
+            # Simulation of the transformation.
             transformed_text = self._apply_tone_transformation(data, target_tone)
             
             logger.info(f"Successfully converted text tone to: {target_tone}")

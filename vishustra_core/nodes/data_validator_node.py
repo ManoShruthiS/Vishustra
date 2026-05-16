@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 
 class DataValidatorNode(BaseNode):
     """
-    A robust validation node designed to ensure data integrity within the LLM orchestration pipeline.
+    A robust validation node designed to ensure data integrity.
     It verifies input data against required schemas, types, and custom constraints defined in the context.
     """
 

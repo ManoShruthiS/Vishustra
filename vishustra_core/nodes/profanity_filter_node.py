@@ -24,8 +24,6 @@ class ProfanityFilterNode(BaseNode):
         :param replacement_token: The string used to mask detected profanity.
         :param case_sensitive: Boolean indicating if the filter should respect casing.
         """
-        # In a production environment, this would ideally load from a centralized 
-        # configuration service or an external dictionary file.
         self._blocked_words = blocked_words or ["offensive_term_a", "offensive_term_b"]
         self._replacement_token = replacement_token
         
@@ -70,7 +68,6 @@ class ProfanityFilterNode(BaseNode):
 
         except Exception as e:
             logger.error(f"Failed to process data in {self.node_name}: {e}", exc_info=True)
-            # We raise the exception to ensure the orchestration flow handles the node failure appropriately.
             raise
 
     def _sanitize_text(self, text: str) -> str:

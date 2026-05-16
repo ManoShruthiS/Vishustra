@@ -73,5 +73,4 @@ class PIIRedactorNode(BaseNode):
 
         except Exception as e:
             logger.exception(f"Critical failure in {self.node_name}: {str(e)}")
-            # Raise to allow the orchestration engine to handle the failure state
             raise RuntimeError(f"Node {self.node_name} failed to process data.") from e

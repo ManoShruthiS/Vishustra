@@ -38,7 +38,7 @@ class RegexMatcherNode(BaseNode):
         - 'find_all': (Optional) Boolean to return all matches instead of the first one.
 
         :param data: The input data, expected to be a string or convertible to string.
-        :param context: The orchestration context containing configuration overrides.
+        :param context: The execution context containing configuration overrides.
         :return: A dictionary containing matches, match count, and success status.
         """
         try:

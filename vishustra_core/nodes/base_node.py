@@ -3,7 +3,7 @@ from typing import Any, Dict
 
 class BaseNode(ABC):
     """
-    Base class for all Vishustra AI nodes.
+    Base class for all Vishustra processing nodes.
     Each node must implement the process method.
     """
     

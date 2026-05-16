@@ -50,8 +50,6 @@ class SentimentAnalyzerNode(BaseNode):
 
         try:
             # Simulation of sentiment analysis logic.
-            # In a production environment, this would interface with a pre-trained model 
-            # or an external NLP service via the orchestration context.
             sentiment_score = self._calculate_heuristic_score(clean_text)
             
             if sentiment_score > self.threshold:

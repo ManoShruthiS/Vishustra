@@ -51,7 +51,6 @@ class EmbeddingsNode(BaseNode):
             logger.info(f"[{self.node_name}] Processing {len(inputs)} text items for embedding.")
 
             # Extraction of model configuration from context
-            # In a real-world scenario, this would interface with an LLM provider (OpenAI, HuggingFace, etc.)
             model_name = context.get("embedding_model", "text-embedding-3-small")
             
             # Simulated transformation logic
@@ -74,12 +73,8 @@ class EmbeddingsNode(BaseNode):
     def _generate_embeddings(self, texts: List[str], model: str) -> List[List[float]]:
         """
         Internal helper to simulate interaction with an embedding engine.
-        
-        Note: In production, this method would wrap a client call to a service 
-        like OpenAI, Cohere, or a local Sentence-Transformers instance.
         """
-        # Simulation: Returning a dummy vector of 1536 dimensions for each input
-        # to mirror standard LLM embedding outputs.
+        # Simulation: Returning a dummy vector for each input
         dummy_vector = [0.0] * 1536 
         return [dummy_vector for _ in texts]
 

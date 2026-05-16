@@ -26,7 +26,7 @@ class ToneConverterNode(BaseNode):
         
         Args:
             data (Any): The input text to be transformed. Expected to be a string.
-            context (Dict[str, Any]): The orchestration context, potentially containing 'target_tone'.
+            context (Dict[str, Any]): The execution context, potentially containing 'target_tone'.
             
         Returns:
             str: The processed text with the requested tone applied.
@@ -42,9 +42,7 @@ class ToneConverterNode(BaseNode):
         logger.info(f"[{self.node_name}] Transforming text to '{target_tone}' tone.")
 
         try:
-            # In a production LLM orchestration environment, this would interface 
-            # with a prompt template or a specific fine-tuned model.
-            # Here we simulate the transformation logic.
+            # Simulation of the transformation logic.
             transformed_text = self._apply_tone_logic(data, target_tone)
             
             logger.debug(f"[{self.node_name}] Successfully processed text of length {len(data)}.")
@@ -59,7 +57,7 @@ class ToneConverterNode(BaseNode):
         Internal logic to wrap the text with tone-specific metadata or 
         simulated transformation markers.
         """
-        # Placeholder for actual NLP logic or LLM call
+        # Placeholder for processing logic
         return f"[Tone: {tone}] {text}"
 
     def __repr__(self) -> str:

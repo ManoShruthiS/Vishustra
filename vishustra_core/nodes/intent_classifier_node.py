@@ -5,10 +5,9 @@ from vishustra_core.nodes.base_node import BaseNode
 logger = logging.getLogger(__name__)
 
 class IntentClassifierNode(BaseNode):
-    """
     Analyzes input text to determine the underlying user intent.
-    This node serves as a router within the Vishustra orchestration pipeline,
-    allowing downstream nodes to branch based on semantic classification.
+    This node serves as a router within the pipeline,
+    allowing downstream logic to branch based on classification.
     """
 
     def __init__(self, 
@@ -57,8 +56,6 @@ class IntentClassifierNode(BaseNode):
 
         try:
             # Basic keyword-based heuristic classification
-            # Note: In a production LLM pipeline, this might be replaced by a 
-            # few-shot prompt or a zero-shot classifier model call.
             for intent, keywords in self._categories.items():
                 if any(keyword in normalized_input for keyword in keywords):
                     detected_intent = intent

@@ -44,9 +44,7 @@ class LanguageTranslatorNode(BaseNode):
 
             logger.info("Translating text from %s to %s", source_lang, target_lang)
 
-            # In a production LLM orchestration environment, this would interface with 
-            # a Translation Service API or a local model. 
-            # Here we simulate the successful transformation logic.
+            # Execute transformation logic
             translated_text = self._execute_translation_logic(data, source_lang, target_lang)
 
             logger.debug("Translation successful for node: %s", self.node_name)
@@ -60,7 +58,6 @@ class LanguageTranslatorNode(BaseNode):
         """
         Internal simulation of a translation engine call.
         """
-        # Placeholder for actual integration (e.g., DeepL, Google Translate, or an internal LLM call)
         # For simulation purposes, we return the data wrapped in a translation indicator
         return f"[{target}] {text}"
 

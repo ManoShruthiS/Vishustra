@@ -7,16 +7,11 @@ logger = logging.getLogger(__name__)
 
 class CacheManagerNode(BaseNode):
     """
-    A data processing node responsible for managing cached responses within the Vishustra framework.
+    A data processing node responsible for managing cached responses.
 
-    This node acts as a gateway, checking if a requested item exists in a shared cache store.
-    If a cache hit occurs, it retrieves and returns the cached data, effectively short-circuiting
-    further computation downstream for that specific request. If a cache miss occurs, it signals
-    this by returning the original input data and updating the context, allowing subsequent
-    nodes to generate the required information.
-
-    The node expects a 'cache_store' (a dict-like object) and a 'cache_key' (string)
-    to be present in the shared `context` dictionary.
+    Checks if a requested item exists in a shared cache store.
+    If a cache hit occurs, it retrieves and returns the cached data. 
+    If a cache miss occurs, it returns the original data and updates the context.
     """
 
     @property
@@ -86,11 +81,7 @@ class CacheManagerNode(BaseNode):
                 return cached_result
             else:
                 context['cache_status'] = 'MISS'
-                logger.debug(f"[{self.node_name}] Cache MISS for key: '{cache_key}'. Passing original data downstream.")
-                # When a cache miss occurs, the original data is returned. This signals to
-                # downstream nodes that the content needs to be generated. A separate
-                # CacheWriterNode (or a similar mechanism) would typically store the
-                # generated result back into the cache later in the pipeline.
+                logger.debug(f"[{self.node_name}] Cache MISS for key: '{cache_key}'.")
                 return data
         except Exception as e:
             logger.exception(

@@ -37,7 +37,6 @@ class FactCheckerNode(BaseNode):
             logger.info(f"Initiating fact-checking process for node: {self.node_name}")
 
             # Simulation of claim extraction and verification logic
-            # In a production scenario, this would interface with an LLM or a Vector DB
             claims = self._extract_claims(content)
             results = self._verify_claims(claims, reference_source)
             
