@@ -80,5 +80,3 @@ class ProfanityFilterNode(BaseNode):
     def __repr__(self) -> str:
         return f"<{self.node_name}(words_count={len(self._blocked_words)})>"
 
-```python
-# End of profanity_filter_node.py

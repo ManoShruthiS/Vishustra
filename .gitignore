@@ -4,3 +4,13 @@ __pycache__/
 
 # Ignore environment variables if used later
 .env
+
+# Bot Automation (Ayan/Kael)
+ayan.py
+kael.py
+ayan_employee.log
+ayan_state.json
+.ayan_logs.txt
+.kael_logs.txt
+fix_task.ps1
+ayan_employee.log*
