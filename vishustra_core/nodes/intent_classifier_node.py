@@ -1,89 +1,96 @@
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
+
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class IntentClassifierNode(BaseNode):
     """
-    Analyzes input text to determine the underlying user intent.
-    This node serves as a router within the pipeline,
-    allowing downstream logic to branch based on classification.
-    """
+    A processing node that classifies the intent of a given text input.
 
-    def __init__(self, 
-                 categories: Optional[Dict[str, List[str]]] = None, 
-                 default_intent: str = "general_query"):
-        """
-        Initializes the classifier with optional custom intent mappings.
-        
-        Args:
-            categories: A dictionary mapping intent labels to lists of keywords/phrases.
-            default_intent: The fallback intent if no specific category is matched.
-        """
-        self._default_intent = default_intent
-        self._categories = categories or {
-            "informational": ["what", "how", "explain", "tell me", "meaning"],
-            "transactional": ["buy", "order", "purchase", "subscribe", "pay"],
-            "navigation": ["go to", "find", "show", "where is", "open"],
-            "support": ["help", "error", "issue", "problem", "fix", "wrong"]
-        }
+    This node simulates intent classification based on predefined keywords
+    or patterns. It expects the input 'data' to be a string (the user query)
+    and uses the 'context' to optionally provide an intent mapping.
+
+    Configuration via context:
+    - 'intent_map' (Dict[str, List[str]]): A dictionary where keys are intent
+      names (e.g., "greeting", "purchase") and values are lists of keywords
+      or phrases associated with that intent. If not provided, a sensible
+      default map will be used.
+    - 'default_intent' (str): The intent to return if no explicit match is found.
+      Defaults to "unknown".
+    """
 
     @property
     def node_name(self) -> str:
-        """Returns the unique identifier for this node type."""
+        """Returns the name of the node."""
         return "IntentClassifierNode"
+
+    def _get_default_intent_map(self) -> Dict[str, List[str]]:
+        """Provides a default mapping for common intents."""
+        return {
+            "greeting": ["hello", "hi", "hey", "good morning", "good evening"],
+            "purchase": ["buy", "order", "purchase", "add to cart", "checkout"],
+            "cancellation": ["cancel", "revoke", "stop order", "undo purchase"],
+            "support": ["help", "support", "customer service", "technical issue"],
+            "farewell": ["bye", "goodbye", "see you", "farewell"],
+        }
 
     def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input data to classify its intent.
-        
+        Classifies the intent of the input text data.
+
         Args:
-            data: The input string to be classified.
-            context: The shared orchestration context.
-            
+            data (Any): The input data, expected to be a string representing
+                        the user's query or utterance.
+            context (Dict[str, Any]): A dictionary containing contextual information
+                                     and potential configuration, e.g., 'intent_map'.
+
         Returns:
-            A dictionary containing the original input and the detected intent.
-            
+            Dict[str, Any]: A dictionary containing the classified intent and a
+                            confidence score, e.g., {"intent": "greeting", "confidence": 0.95}.
+
         Raises:
-            ValueError: If the input data is not a string.
+            TypeError: If the input `data` is not a string.
+            ValueError: If the `intent_map` in context is malformed.
         """
         if not isinstance(data, str):
-            logger.error(f"[{self.node_name}] Received invalid data type: {type(data)}. Expected string.")
-            raise ValueError(f"{self.node_name} requires a string input for classification.")
+            logger.error(f"Invalid input data type for {self.node_name}. Expected str, got {type(data)}.")
+            raise TypeError(f"IntentClassifierNode expects string input, but received {type(data)}.")
 
-        normalized_input = data.lower().strip()
-        detected_intent = self._default_intent
+        query = data.lower().strip()
+        classified_intent = context.get("default_intent", "unknown")
+        confidence = 0.5  # Default confidence for unknown intent
 
         try:
-            # Basic keyword-based heuristic classification
-            for intent, keywords in self._categories.items():
-                if any(keyword in normalized_input for keyword in keywords):
-                    detected_intent = intent
-                    break
+            intent_map = context.get("intent_map")
+            if intent_map is None:
+                intent_map = self._get_default_intent_map()
+                logger.info(f"No 'intent_map' provided in context for {self.node_name}. Using default map.")
+            elif not isinstance(intent_map, dict):
+                raise ValueError(f"'intent_map' in context must be a dictionary, got {type(intent_map)}.")
 
-            logger.info(f"[{self.node_name}] Successfully classified intent as: '{detected_intent}'")
+            for intent, keywords in intent_map.items():
+                if not isinstance(keywords, list) or not all(isinstance(k, str) for k in keywords):
+                    raise ValueError(f"Keywords for intent '{intent}' in 'intent_map' must be a list of strings.")
+                
+                for keyword in keywords:
+                    if keyword.lower() in query:
+                        classified_intent = intent
+                        confidence = 0.95  # High confidence for a direct keyword match
+                        logger.debug(f"Query '{data}' matched intent '{intent}' with keyword '{keyword}'.")
+                        return {"intent": classified_intent, "confidence": confidence}
 
-            result = {
-                "original_input": data,
-                "classified_intent": detected_intent,
-                "confidence_score": 1.0 if detected_intent != self._default_intent else 0.5
-            }
+            logger.info(f"No specific intent matched for query: '{data}'. Defaulting to '{classified_intent}'.")
 
-            # Persist classification result to context for downstream logic
-            context["classification_metadata"] = result
-            
-            return result
-
+        except ValueError as e:
+            logger.error(f"Configuration error in IntentClassifierNode: {e}")
+            raise e
         except Exception as e:
-            logger.error(f"[{self.node_name}] Failed to process intent classification: {str(e)}")
-            raise RuntimeError(f"Internal error in {self.node_name}: {e}") from e
-
-    def add_category(self, intent: str, keywords: List[str]) -> None:
-        """Dynamically adds or updates an intent category."""
-        self._categories[intent] = [k.lower() for k in keywords]
-        logger.debug(f"[{self.node_name}] Updated category '{intent}' with {len(keywords)} keywords.")
-
-    def __repr__(self) -> str:
-        return f"<{self.node_name}(categories={list(self._categories.keys())})>"
+            logger.error(f"An unexpected error occurred during intent classification for query '{data}': {e}")
+            # Re-raise or wrap in a custom node-specific exception if needed for higher-level handling
+            raise RuntimeError(f"Failed to classify intent due to internal error: {e}") from e
+            
+        return {"intent": classified_intent, "confidence": confidence}
 
