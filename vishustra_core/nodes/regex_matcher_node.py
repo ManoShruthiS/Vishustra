@@ -1,142 +1,121 @@
 import logging
 import re
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Tuple
 
+# Assuming BaseNode is available at this path relative to the project root
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class RegexMatcherNode(BaseNode):
     """
-    A Vishustra processing node for performing regex pattern matching and extraction
-    on input data.
+    A Vishustra processing node that performs regular expression matching on input data.
 
-    This node offers flexible control over regex operations:
-    - Extracting either the first match or all non-overlapping matches.
-    - Specifying a particular capture group by index or name.
-    - Choosing between `re.search` (find anywhere in string) or `re.match` (find only at string start).
-    - Custom regex flags for advanced matching behavior.
+    This node extracts parts of the input `data` (expected to be a string) based on
+    a provided regular expression pattern and matching mode.
 
-    Context parameters:
-    - 'regex_pattern' (str): The regular expression pattern to use. (Required)
-    - 'return_all_matches' (bool, optional): If `True`, the node uses `re.finditer`
-      to return a list of all non-overlapping matches. If `False` (default), it returns
-      only the first match found.
-    - 'group_index' (int, optional): The index of the capture group to return.
-      Defaults to 0 (the entire match). This parameter is ignored if 'group_name' is provided.
-    - 'group_name' (str, optional): The name of the capture group to return.
-      If provided, it takes precedence over 'group_index'.
-    - 'match_type' (str, optional): Specifies the matching method when
-      'return_all_matches' is `False`. Can be 'search' (default, uses `re.search`)
-      or 'match' (uses `re.match`). This parameter is ignored if 'return_all_matches' is `True`.
-    - 'flags' (int, optional): A bitmask of `re` flags (e.g., `re.IGNORECASE | re.MULTILINE`).
-      Defaults to 0 (no flags).
+    Configuration in context:
+    - 'regex_pattern' (str): The regular expression pattern to match. (Required)
+    - 'regex_mode' (str): The matching mode.
+        - 'findall' (default): Returns a list of all non-overlapping matches.
+          If the pattern contains capturing groups, it returns a list of tuples
+          where each tuple contains the captured groups.
+        - 'search': Returns the first match found. If 'regex_group' is specified,
+          it returns the content of that specific group. Returns None if no match.
+    - 'regex_group' (int): (Only applicable for 'search' mode)
+      The index of the capturing group to return. 0 means the entire match. Defaults to 0.
+      If the specified group index is out of bounds, None is returned.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "RegexMatcher"
+        """Returns the name of the node."""
+        return "RegexMatcherNode"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Union[Optional[str], List[str]]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Union[List[Union[str, Tuple[str, ...]]], str, None]:
         """
-        Processes the input data by applying a regular expression pattern
-        and extracting matched content.
+        Processes the input data by applying a regex pattern defined in the context.
 
         Args:
-            data: The input data to be processed, expected to be a string.
-            context: A dictionary containing configuration parameters for the
-                     regex operation, as described in the class docstring.
+            data (Any): The input data, expected to be a string for regex operations.
+            context (Dict[str, Any]): A dictionary containing node-specific configuration
+                                      and shared context. Must contain 'regex_pattern'.
 
         Returns:
-            - If 'return_all_matches' is `True`: A `List[str]` where each string
-              is an extracted group from a match. Returns an empty list if no matches
-              are found or no groups can be extracted for valid matches.
-            - If 'return_all_matches' is `False`: An `Optional[str]` representing
-              the extracted group from the first match. Returns `None` if no match
-              is found.
-
-        Raises:
-            TypeError: If the input 'data' is not a string.
-            ValueError: If 'regex_pattern' is missing, invalid, or if group
-                        extraction for a single match fails critically.
+            Union[List[Union[str, Tuple[str, ...]]], str, None]:
+                - If 'regex_mode' is 'findall': A list of matching strings or tuples.
+                  Returns an empty list if no matches are found or if input is invalid.
+                - If 'regex_mode' is 'search': The matched string (or a specific group) or None.
+                  Returns None if no match is found or if input/configuration is invalid.
         """
-        if not isinstance(data, str):
-            logger.error(
-                "RegexMatcherNode received non-string data. Expected type 'str', but got '%s'.",
-                type(data).__name__
-            )
-            raise TypeError(f"RegexMatcherNode expects 'data' to be a string, but received {type(data).__name__}.")
+        # Determine the expected empty result based on mode for consistent error returns
+        default_empty_result = [] if context.get('regex_mode', 'findall').lower() == 'findall' else None
 
-        regex_pattern = context.get("regex_pattern")
+        if not isinstance(data, str):
+            logger.warning(
+                f"[{self.node_name}] Input data is not a string. "
+                f"Expected string for regex matching, got {type(data).__name__}. Returning empty result."
+            )
+            return default_empty_result
+
+        regex_pattern = context.get('regex_pattern')
         if not isinstance(regex_pattern, str) or not regex_pattern:
             logger.error(
-                "RegexMatcherNode requires a valid 'regex_pattern' (a non-empty string) in the context. "
-                "Received: '%s'", regex_pattern
+                f"[{self.node_name}] Missing or invalid 'regex_pattern' in context. "
+                "A non-empty string pattern is required. Returning empty result."
             )
-            raise ValueError("Missing or invalid 'regex_pattern' in context.")
+            return default_empty_result
 
-        return_all_matches: bool = context.get("return_all_matches", False)
-        group_index: int = context.get("group_index", 0)
-        group_name: Optional[str] = context.get("group_name")
-        match_type: str = context.get("match_type", "search").lower()
-        flags: int = context.get("flags", 0)
+        regex_mode = context.get('regex_mode', 'findall').lower()
+        regex_group = context.get('regex_group', 0)
+
+        if not isinstance(regex_group, int):
+            logger.warning(
+                f"[{self.node_name}] 'regex_group' in context is not an integer. "
+                f"Falling back to default group 0 for search mode. Got {type(regex_group).__name__}."
+            )
+            regex_group = 0
 
         try:
-            compiled_pattern = re.compile(regex_pattern, flags)
+            compiled_pattern = re.compile(regex_pattern)
         except re.error as e:
-            logger.error("Failed to compile regex pattern '%s': %s", regex_pattern, e)
-            raise ValueError(f"Invalid regex pattern: '{regex_pattern}'. Error: {e}") from e
+            logger.error(
+                f"[{self.node_name}] Invalid regex pattern '{regex_pattern}': {e}. Returning empty result."
+            )
+            return default_empty_result
 
-        if return_all_matches:
-            results: List[str] = []
-            # When 'return_all_matches' is True, re.finditer is used to find all occurrences.
-            # 'match_type' (search/match) is not directly applicable here as `re.match` is
-            # anchored to the beginning of the string, which conflicts with "all matches"
-            # across the string. `re.finditer` effectively performs `re.search` for all matches.
-            for match in compiled_pattern.finditer(data):
-                try:
-                    if group_name is not None:
-                        results.append(match.group(group_name))
-                    else:
-                        results.append(match.group(group_index))
-                except (IndexError, KeyError) as e:
-                    # Log a warning and skip this specific match if its group extraction fails.
-                    # This allows other valid matches to still be returned.
-                    matched_text_snippet = (match.group(0) or "<empty match>")[:50]
-                    logger.warning(
-                        "RegexMatcherNode: Failed to extract group from a match (pattern: '%s', data snippet: '%s...'). "
-                        "Group index/name requested: %s/%s. Error: %s. Skipping this match.",
-                        regex_pattern, matched_text_snippet, group_index, group_name, e
-                    )
-            return results
-        else:
-            # Return only the first match found
-            match = None
-            if match_type == "search":
-                match = compiled_pattern.search(data)
-            elif match_type == "match":
-                match = compiled_pattern.match(data)
-            else:
-                logger.warning(
-                    "Unknown 'match_type' in context: '%s'. Defaulting to 'search' behavior for the first match.",
-                    match_type
-                )
-                match = compiled_pattern.search(data)  # Fallback to re.search
-
+        if regex_mode == 'findall':
+            matches = compiled_pattern.findall(data)
+            logger.debug(
+                f"[{self.node_name}] Performed findall with pattern '{regex_pattern}'. "
+                f"Found {len(matches)} matches."
+            )
+            return matches
+        elif regex_mode == 'search':
+            match = compiled_pattern.search(data)
             if match:
                 try:
-                    if group_name is not None:
-                        return match.group(group_name)
-                    else:
-                        return match.group(group_index)
-                except (IndexError, KeyError) as e:
-                    # If group extraction fails for the single requested match, it's a critical error.
-                    matched_text_snippet = (match.group(0) or "<empty match>")[:50]
-                    logger.error(
-                        "RegexMatcherNode: Failed to extract specified group from the first match "
-                        "(pattern: '%s', data snippet: '%s...'). Group index/name requested: %s/%s. Error: %s",
-                        regex_pattern, matched_text_snippet, group_index, group_name, e
+                    result = match.group(regex_group)
+                    logger.debug(
+                        f"[{self.node_name}] Performed search with pattern '{regex_pattern}', group {regex_group}. "
+                        f"Found match: '{result}'."
                     )
-                    raise ValueError(f"Failed to extract specified group from match: {e}") from e
-            return None
+                    return result
+                except IndexError:
+                    logger.error(
+                        f"[{self.node_name}] Specified regex group {regex_group} is out of bounds "
+                        f"for pattern '{regex_pattern}' and matched text. Returning None."
+                    )
+                    return None
+            else:
+                logger.debug(
+                    f"[{self.node_name}] Performed search with pattern '{regex_pattern}'. "
+                    "No match found. Returning None."
+                )
+                return None
+        else:
+            logger.error(
+                f"[{self.node_name}] Invalid 'regex_mode' '{regex_mode}' in context. "
+                "Supported modes are 'findall' and 'search'. Returning empty result."
+            )
+            return default_empty_result
