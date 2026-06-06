@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from vishustra_core.nodes.base_node import BaseNode
 
@@ -8,145 +8,122 @@ logger = logging.getLogger(__name__)
 
 class CacheManagerNode(BaseNode):
     """
-    A Vishustra processing node designed for managing a data cache.
+    A Vishustra processing node designed for flexible cache operations (get, set, delete).
 
-    This node provides 'get' and 'set' operations for an underlying cache
-    store, which must be supplied through the processing context. It acts
-    as a robust interface for caching common data or intermediate results
-    within an LLM orchestration pipeline, improving performance by reducing
-    redundant computations or external API calls.
+    This node interacts with a cache instance provided in the `context` dictionary
+    under the key 'cache'. The node determines the specific cache action to perform
+    based on the 'cache_action' key in the `context` (e.g., 'get', 'set', 'delete').
 
-    Expected `data` structure for 'get' operation:
-    ```
-    {
-        "operation": "get",
-        "key": "your_cache_key_identifier"
-    }
-    ```
-    Returns: The cached value if found, or `None` if the key is not present.
+    For 'set' operations, the value to be stored must be present in `context['value_to_cache']`.
+    The `data` input to the `process` method is consistently used as the cache key
+    for all supported actions.
 
-    Expected `data` structure for 'set' operation:
-    ```
-    {
-        "operation": "set",
-        "key": "your_cache_key_identifier",
-        "value": "the_data_to_store_in_cache"
-    }
-    ```
-    Returns: `True` if the value was successfully set, `False` otherwise.
+    The cache instance is expected to implement callable methods corresponding to
+    the requested actions (e.g., `get(key)`, `set(key, value)`, `delete(key)`).
 
-    The actual cache storage mechanism (e.g., an in-memory dictionary,
-    a Redis client, an LRU cache, etc.) must be passed into the `context`
-    dictionary under the key `"cache_store"`. This object should support
-    dictionary-like `get()` and item assignment (`[key] = value`).
+    Example context for a 'get' operation:
+    ```python
+    {'cache': my_cache_instance, 'cache_action': 'get'}
+    ```
+
+    Example context for a 'set' operation:
+    ```python
+    {'cache': my_cache_instance, 'cache_action': 'set', 'value_to_cache': 'some_value'}
+    ```
+
+    Example context for a 'delete' operation:
+    ```python
+    {'cache': my_cache_instance, 'cache_action': 'delete'}
+    ```
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of this node."""
+        """Returns the name of the node."""
         return "CacheManager"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Executes caching operations (get or set) using the cache store
-        provided within the context.
+        Executes a specified cache operation (get, set, delete) using a provided cache instance.
 
         Args:
-            data: A dictionary containing the desired 'operation' (str),
-                  'key' (Any), and optionally 'value' (Any) for 'set' operations.
-            context: A dictionary expected to contain 'cache_store', which
-                     should be a dictionary-like object for caching.
+            data: The key for the cache operation. This can be any hashable type.
+            context: A dictionary containing:
+                - 'cache': The cache instance. It must expose callable methods
+                           for 'get', 'set', or 'delete' depending on the action.
+                - 'cache_action': A string specifying the action ('get', 'set', 'delete').
+                - 'value_to_cache' (optional, required for 'set' action):
+                  The value to be stored in the cache.
 
         Returns:
-            For 'get' operations: The cached value (Any) or `None` if the
-                                   key is not found.
-            For 'set' operations: `True` if the value was successfully set,
-                                   `False` on failure.
+            - For 'get' action: The cached value associated with the key, or `None` if not found.
+            - For 'set' action: `True` if the value was successfully stored.
+            - For 'delete' action: `True` if the key was successfully removed (or if it was not present).
 
         Raises:
-            ValueError: If the `data` or `context` inputs are malformed, or
-                        if an unsupported caching operation is requested.
-            KeyError: If required keys like 'operation' or 'key' are missing
-                      from the `data` payload.
-            TypeError: If the 'cache_store' in context is not a dictionary-like object.
+            ValueError: If critical context parameters ('cache', 'cache_action', 'value_to_cache' for 'set')
+                        are missing or if an unknown `cache_action` is specified.
+            TypeError: If the 'cache' object does not implement the required callable method
+                       for the specified action.
+            Exception: Any exception raised by the underlying cache instance during its operation.
         """
-        if not isinstance(data, dict):
-            logger.error("CacheManagerNode received invalid input data type. Expected a dictionary.")
-            raise ValueError("Input 'data' for CacheManagerNode must be a dictionary.")
+        cache_key = data
 
-        operation: Optional[str] = data.get("operation")
-        key: Any = data.get("key")
+        if 'cache' not in context:
+            logger.error("CacheManagerNode: Context missing 'cache' instance.")
+            raise ValueError("Missing 'cache' instance in context for CacheManagerNode.")
 
-        if operation is None:
-            logger.error("Missing 'operation' key in data payload for CacheManagerNode.")
-            raise KeyError("The 'operation' key is required in the 'data' dictionary.")
-        if key is None:
-            logger.error("Missing 'key' key in data payload for CacheManagerNode.")
-            raise KeyError("The 'key' key is required in the 'data' dictionary.")
+        cache_instance = context['cache']
 
-        if "cache_store" not in context:
-            logger.error("Context for CacheManagerNode is missing the 'cache_store' object.")
-            raise ValueError("CacheManagerNode requires a 'cache_store' object in the 'context'.")
+        if 'cache_action' not in context:
+            logger.error("CacheManagerNode: Context missing 'cache_action'.")
+            raise ValueError("Missing 'cache_action' in context for CacheManagerNode.")
 
-        cache_store: Any = context["cache_store"]
-        if not (hasattr(cache_store, 'get') and hasattr(cache_store, '__setitem__')):
-            logger.error(
-                f"Invalid 'cache_store' type in context. Expected a dictionary-like object "
-                f"with 'get' and '__setitem__', got {type(cache_store)}."
-            )
-            raise TypeError("The 'cache_store' in context must be a dictionary-like object.")
+        action = str(context['cache_action']).lower()
+        logger.debug(f"CacheManagerNode initiated with action '{action}' for key '{cache_key}'.")
 
-        if operation == "get":
-            return self._get_from_cache(key, cache_store)
-        elif operation == "set":
-            value: Any = data.get("value")
-            if value is None:
-                logger.error("Missing 'value' key in data payload for 'set' operation.")
-                raise KeyError("The 'value' key is required for a 'set' operation.")
-            return self._set_to_cache(key, value, cache_store)
-        else:
-            logger.warning(f"Unsupported cache operation requested: '{operation}'.")
-            raise ValueError(f"Unsupported operation: '{operation}'. Expected 'get' or 'set'.")
-
-    def _get_from_cache(self, key: Any, cache_store: Any) -> Any:
-        """
-        Helper method to retrieve a value from the cache store.
-
-        Args:
-            key: The key to look up in the cache.
-            cache_store: The cache object.
-
-        Returns:
-            The value associated with the key, or None if not found.
-        """
         try:
-            value = cache_store.get(key)
-            if value is not None:
-                logger.debug(f"Cache hit for key: '{key}'")
+            if action == 'get':
+                if not callable(getattr(cache_instance, 'get', None)):
+                    logger.error(f"Cache instance ({type(cache_instance)}) does not implement a callable 'get' method.")
+                    raise TypeError("Cache instance does not implement a callable 'get' method for 'get' action.")
+                
+                result = cache_instance.get(cache_key)
+                if result is not None:
+                    logger.info(f"Successfully retrieved item for key '{cache_key}' from cache.")
+                else:
+                    logger.debug(f"Item not found for key '{cache_key}' in cache.")
+                return result
+
+            elif action == 'set':
+                if not callable(getattr(cache_instance, 'set', None)):
+                    logger.error(f"Cache instance ({type(cache_instance)}) does not implement a callable 'set' method.")
+                    raise TypeError("Cache instance does not implement a callable 'set' method for 'set' action.")
+                if 'value_to_cache' not in context:
+                    logger.error(f"CacheManagerNode: Context missing 'value_to_cache' for 'set' action with key '{cache_key}'.")
+                    raise ValueError("Missing 'value_to_cache' in context for 'set' action.")
+                
+                value_to_cache = context['value_to_cache']
+                cache_instance.set(cache_key, value_to_cache)
+                logger.info(f"Successfully set item for key '{cache_key}' in cache.")
+                return True
+
+            elif action == 'delete':
+                if not callable(getattr(cache_instance, 'delete', None)):
+                    logger.error(f"Cache instance ({type(cache_instance)}) does not implement a callable 'delete' method.")
+                    raise TypeError("Cache instance does not implement a callable 'delete' method for 'delete' action.")
+                
+                cache_instance.delete(cache_key)
+                logger.info(f"Successfully deleted item for key '{cache_key}' from cache (if present).")
+                return True
+
             else:
-                logger.debug(f"Cache miss for key: '{key}'")
-            return value
+                logger.error(f"CacheManagerNode: Unknown cache action '{action}' provided.")
+                raise ValueError(f"Unknown cache action: '{action}'. Expected 'get', 'set', or 'delete'.")
+
+        except (ValueError, TypeError) as e:
+            # Re-raise explicit validation errors without wrapping, as they are already specific
+            raise e
         except Exception as e:
-            logger.error(f"Failed to retrieve key '{key}' from cache: {e}", exc_info=True)
-            # Re-raise to allow upstream handling if retrieval itself failed (e.g., Redis down)
-            raise
-
-    def _set_to_cache(self, key: Any, value: Any, cache_store: Any) -> bool:
-        """
-        Helper method to store a value in the cache store.
-
-        Args:
-            key: The key under which to store the value.
-            value: The data to store.
-            cache_store: The cache object.
-
-        Returns:
-            True if the value was successfully stored, False otherwise.
-        """
-        try:
-            cache_store[key] = value
-            logger.debug(f"Successfully set key '{key}' in cache.")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to set key '{key}' in cache: {e}", exc_info=True)
-            return False
+            logger.exception(f"An unexpected error occurred during cache operation '{action}' for key '{cache_key}': {e}")
+            raise # Re-raise any other exceptions from the cache instance
