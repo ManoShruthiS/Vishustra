@@ -1,132 +1,111 @@
 import logging
-from typing import Any, Dict, List, Union
+from typing import Any, Dict
 
+# Assuming BaseNode is available at this path within the Vishustra project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class FactCheckerNode(BaseNode):
     """
-    A processing node designed to simulate fact-checking statements against a predefined
-    set of known facts. This node helps in verifying the truthfulness of textual data
-    within the Vishustra pipeline.
+    A processing node designed to simulate fact-checking of input textual statements.
+    It attempts to determine the veracity of a given statement based on internal
+    heuristics or mocked external checks and provides a corresponding justification.
 
-    The node expects input `data` to be a string (representing a single statement)
-    or a list of strings (for multiple statements). It queries a set of `known_facts`
-    expected in the `context` dictionary and returns a verification status for each statement.
+    In a production environment, this node would integrate with real-time fact-checking
+    APIs, knowledge graphs, or fine-tuned NLP models for claim verification.
     """
-
-    def __init__(self):
-        """
-        Initializes the FactCheckerNode.
-        This simulated version does not require specific configuration at initialization,
-        as the "known facts" for verification are intended to be provided dynamically
-        via the `context` during the `process` call.
-        """
-        super().__init__()
-        logger.debug("FactCheckerNode initialized, awaiting statements and known facts.")
 
     @property
     def node_name(self) -> str:
         """Returns the descriptive name of the node."""
-        return "FactCheckerNode"
+        return "FactChecker"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> List[Dict[str, Union[str, bool, None]]]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input data by attempting to fact-check the provided statement(s).
-
-        The input `data` can be a single string statement or a list of string statements.
-        The `context` dictionary is critical and should optionally contain a 'known_facts' key.
-        This 'known_facts' value is expected to be a dictionary where keys are statements
-        (strings) and values are their boolean truth values (e.g., `{"The sky is blue": True}`).
+        Processes the input data, attempting to verify its factual accuracy.
 
         Args:
-            data: The statement(s) to be fact-checked. Expected type is `str` or `List[str]`.
-            context: A dictionary containing operational context, which *should* include
-                     'known_facts' for effective verification.
+            data: The input data, expected to be a string representing a statement
+                  to be fact-checked.
+            context: A dictionary containing contextual information. This could include
+                     configurations, external API clients, or mock services needed for
+                     fact-checking in a real-world implementation.
 
         Returns:
-            A list of dictionaries, where each dictionary represents a processed statement
-            and its corresponding verification status. Each result dictionary contains:
-            - "statement": The original statement string that was processed.
-            - "is_fact": `True` if the statement is verified as true, `False` if verified
-                         as false, or `None` if the statement could not be verified
-                         (e.g., no matching known fact was found).
-            - "reason": A brief string explaining the verification status.
+            A dictionary containing the original statement, its determined veracity status,
+            and a justification for that status. The 'veracity' can be one of
+            "TRUE", "FALSE", or "UNVERIFIED".
+
+            Example of return format:
+            {
+                "original_statement": "The Earth is flat.",
+                "veracity": "FALSE",
+                "justification": "Scientific consensus and empirical evidence confirm the Earth is an oblate spheroid."
+            }
 
         Raises:
-            TypeError: If the input `data` is not a string or a list of strings.
-            ValueError: If any item within a list of `data` is not a string.
+            TypeError: If the input 'data' is not a string.
+            ValueError: If a critical error occurs during the fact-checking process
+                        that prevents a verifiable outcome.
         """
-        processed_results: List[Dict[str, Union[str, bool, None]]] = []
-        statements_to_check: List[str] = []
-
-        # --- Input Data Validation and Normalization ---
-        if isinstance(data, str):
-            statements_to_check.append(data)
-        elif isinstance(data, list):
-            for i, item in enumerate(data):
-                if not isinstance(item, str):
-                    logger.error(
-                        f"FactCheckerNode received non-string item at index {i} in data list. "
-                        f"Type found: {type(item).__name__}, value: {item!r}."
-                    )
-                    raise ValueError(f"All items in 'data' list must be strings. Found type "
-                                     f"{type(item).__name__} at index {i}.")
-                statements_to_check.append(item)
-        else:
-            logger.error(
-                f"FactCheckerNode received invalid input data type: {type(data).__name__}. "
-                f"Expected str or List[str]."
+        if not isinstance(data, str):
+            error_msg = (
+                f"FactCheckerNode expects 'data' to be a string, "
+                f"but received type: {type(data).__name__}"
             )
-            raise TypeError(f"Input 'data' must be a string or a list of strings, "
-                            f"but got {type(data).__name__}.")
+            logger.error(error_msg)
+            raise TypeError(error_msg)
 
-        if not statements_to_check:
-            logger.warning("FactCheckerNode received an empty list of statements to process. Returning empty results.")
-            return []
+        original_statement = data.strip()
+        veracity = "UNVERIFIED"
+        justification = "Unable to determine veracity with available internal heuristics."
 
-        # --- Retrieve Known Facts from Context ---
-        # In a production environment, this might involve calling an external microservice
-        # or querying a dedicated knowledge base. Here, we simulate with a dictionary from context.
-        known_facts: Dict[str, bool] = context.get("known_facts", {})
-        if not known_facts:
-            logger.warning(
-                "FactCheckerNode operating without 'known_facts' in the context. "
-                "All statements will be marked as 'UNVERIFIABLE'."
-            )
+        logger.info(f"Initiating fact-check for statement: '{original_statement}'")
 
-        logger.info(f"FactCheckerNode starting processing for {len(statements_to_check)} statement(s).")
+        try:
+            # --- SIMULATED FACT-CHECKING LOGIC ---
+            # This section simulates the core logic of a fact-checker.
+            # In a fully implemented system, this would involve:
+            # 1. API calls to external fact-checking services (e.g., custom knowledge bases, trusted news sources).
+            # 2. Queries against a structured knowledge graph.
+            # 3. Leveraging pre-trained NLP models for natural language inference and claim verification.
+            # 4. Dynamic evaluation based on the 'context' for domain-specific or real-time data.
 
-        # --- Simulate Fact-Checking Process ---
-        for statement in statements_to_check:
-            result: Dict[str, Union[str, bool, None]] = {
-                "statement": statement,
-                "is_fact": None,  # Default to None (unverifiable)
-                "reason": "Unverifiable: No matching known fact found in context."
-            }
-            # Simple normalization for lookup: trim whitespace and convert to lower case
-            normalized_statement_for_lookup = statement.strip().lower()
+            # For this simulation, we employ simple, deterministic heuristic rules
+            # based on keywords to demonstrate the concept.
+            lower_statement = original_statement.lower()
 
-            found_match = False
-            for known_stmt, truth_value in known_facts.items():
-                if known_stmt.strip().lower() == normalized_statement_for_lookup:
-                    result["is_fact"] = truth_value
-                    result["reason"] = (
-                        f"Verified as {'TRUE' if truth_value else 'FALSE'} "
-                        f"against supplied known facts."
-                    )
-                    found_match = True
-                    break
-            
-            # If no direct match in known_facts, the result remains 'UNVERIFIABLE' as per default.
-            
-            processed_results.append(result)
-            log_msg_statement = statement[:100] + ("..." if len(statement) > 100 else "")
-            logger.debug(
-                f"Statement '{log_msg_statement}' processed: "
-                f"Status: {result['is_fact']} | Reason: {result['reason']}"
-            )
+            if "water boils at 100 degrees celsius" in lower_statement or \
+               "earth orbits the sun" in lower_statement or \
+               "gravity pulls objects down" in lower_statement:
+                veracity = "TRUE"
+                justification = "Statement aligns with widely accepted scientific and common knowledge facts."
 
-        logger.info(f"FactCheckerNode finished processing {len(processed_results)} statement(s).")
-        return processed_results
+            elif "humans can fly without aid" in lower_statement or \
+                 "the sky is purple" in lower_statement or \
+                 "pigs can talk" in lower_statement:
+                veracity = "FALSE"
+                justification = "Statement contradicts common knowledge, physical laws, or biological realities."
+
+            elif "stock market will rise tomorrow" in lower_statement or \
+                 "aliens visited earth last week" in lower_statement:
+                veracity = "UNVERIFIED"
+                justification = "Statement requires highly speculative analysis, future prediction, or verifiable evidence not readily available."
+
+            logger.debug(f"Fact-checking completed for '{original_statement}': Veracity={veracity}")
+
+        except Exception as e:
+            # Catching broad exceptions during the simulation to ensure robustness.
+            # In a real system, specific exceptions from API calls or model inferences
+            # would be handled more granularly.
+            error_msg = f"An unexpected error occurred during fact-checking simulation for '{original_statement}': {e}"
+            logger.exception(error_msg) # Logs the full traceback for debugging
+            # Re-raise as a ValueError to indicate a failure in the node's core operation
+            raise ValueError(f"Fact-checking failed for statement '{original_statement}'. Details: {e}") from e
+
+        return {
+            "original_statement": original_statement,
+            "veracity": veracity,
+            "justification": justification
+        }
