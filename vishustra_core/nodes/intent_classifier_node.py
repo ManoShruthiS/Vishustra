@@ -1,96 +1,91 @@
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict
 
-from vishustra_core.nodes.base_node import BaseNode
+# Assuming BaseNode is available at this path as per project structure
+from vishustra_core.nodes.base_node import BaseNode 
 
 logger = logging.getLogger(__name__)
 
 class IntentClassifierNode(BaseNode):
     """
-    A processing node that classifies the intent of a given text input.
-
-    This node simulates intent classification based on predefined keywords
-    or patterns. It expects the input 'data' to be a string (the user query)
-    and uses the 'context' to optionally provide an intent mapping.
-
-    Configuration via context:
-    - 'intent_map' (Dict[str, List[str]]): A dictionary where keys are intent
-      names (e.g., "greeting", "purchase") and values are lists of keywords
-      or phrases associated with that intent. If not provided, a sensible
-      default map will be used.
-    - 'default_intent' (str): The intent to return if no explicit match is found.
-      Defaults to "unknown".
+    A Vishustra node that classifies the intent of a given text input.
+    This node simulates intent classification based on simple keyword matching.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
-        return "IntentClassifierNode"
-
-    def _get_default_intent_map(self) -> Dict[str, List[str]]:
-        """Provides a default mapping for common intents."""
-        return {
-            "greeting": ["hello", "hi", "hey", "good morning", "good evening"],
-            "purchase": ["buy", "order", "purchase", "add to cart", "checkout"],
-            "cancellation": ["cancel", "revoke", "stop order", "undo purchase"],
-            "support": ["help", "support", "customer service", "technical issue"],
-            "farewell": ["bye", "goodbye", "see you", "farewell"],
-        }
+        """Returns the descriptive name of the node."""
+        return "IntentClassifier"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Classifies the intent of the input text data.
+        Classifies the intent of the input data based on predefined rules.
 
         Args:
-            data (Any): The input data, expected to be a string representing
-                        the user's query or utterance.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                     and potential configuration, e.g., 'intent_map'.
+            data: The input data, expected to be a string representing a user query
+                  or a piece of text requiring intent classification.
+            context: A dictionary containing contextual information for processing.
+                     While this specific node implementation doesn't directly use
+                     the context for classification, it is passed through as part
+                     of the node's output to maintain framework consistency.
 
         Returns:
-            Dict[str, Any]: A dictionary containing the classified intent and a
-                            confidence score, e.g., {"intent": "greeting", "confidence": 0.95}.
+            A dictionary containing:
+            - "input": The original input data.
+            - "classified_intent": A string representing the identified intent.
+            - "context": The original context dictionary.
+
+            Example: {"input": "What's the weather like?", "classified_intent": "utility.weather", "context": {...}}
 
         Raises:
-            TypeError: If the input `data` is not a string.
-            ValueError: If the `intent_map` in context is malformed.
+            TypeError: If the input 'data' is not a string, which is required for text classification.
+            ValueError: If an unexpected error occurs during the classification process.
         """
-        if not isinstance(data, str):
-            logger.error(f"Invalid input data type for {self.node_name}. Expected str, got {type(data)}.")
-            raise TypeError(f"IntentClassifierNode expects string input, but received {type(data)}.")
+        classified_intent: str = "general.unknown"
 
-        query = data.lower().strip()
-        classified_intent = context.get("default_intent", "unknown")
-        confidence = 0.5  # Default confidence for unknown intent
+        logger.debug(f"[{self.node_name}] Starting intent classification for input type: {type(data).__name__}")
+
+        if not isinstance(data, str):
+            logger.error(f"[{self.node_name}] Invalid input type. Expected 'str', but received '{type(data).__name__}'.")
+            raise TypeError(
+                f"IntentClassifierNode expects string input for classification, "
+                f"but received {type(data).__name__}."
+            )
+
+        if not data.strip():
+            logger.info(f"[{self.node_name}] Received empty or whitespace-only string for classification. Assigning 'general.unknown'.")
+            return {"input": data, "classified_intent": classified_intent, "context": context}
 
         try:
-            intent_map = context.get("intent_map")
-            if intent_map is None:
-                intent_map = self._get_default_intent_map()
-                logger.info(f"No 'intent_map' provided in context for {self.node_name}. Using default map.")
-            elif not isinstance(intent_map, dict):
-                raise ValueError(f"'intent_map' in context must be a dictionary, got {type(intent_map)}.")
+            lower_data = data.lower().strip()
 
-            for intent, keywords in intent_map.items():
-                if not isinstance(keywords, list) or not all(isinstance(k, str) for k in keywords):
-                    raise ValueError(f"Keywords for intent '{intent}' in 'intent_map' must be a list of strings.")
-                
+            # A simple, extensible mapping of keywords to intents.
+            # In a real-world scenario, this would be backed by a sophisticated ML model.
+            intent_keywords = {
+                "ecommerce.purchase": ["buy", "order", "purchase", "shop for", "add to cart"],
+                "customer_service.support": ["help", "support", "issue", "problem", "assist me", "troubleshoot"],
+                "general.greeting": ["hello", "hi", "hey", "good morning", "good evening", "how are you"],
+                "utility.weather": ["weather", "forecast", "temperature", "climate", "is it raining"],
+                "information.query": ["what is", "how to", "tell me about", "who is", "where is", "explain"],
+                "booking.reservation": ["book", "reserve", "appointment", "schedule", "make a booking"],
+                "navigation.direction": ["directions to", "how do I get to", "route for"],
+            }
+
+            for intent, keywords in intent_keywords.items():
                 for keyword in keywords:
-                    if keyword.lower() in query:
+                    if keyword in lower_data:
                         classified_intent = intent
-                        confidence = 0.95  # High confidence for a direct keyword match
-                        logger.debug(f"Query '{data}' matched intent '{intent}' with keyword '{keyword}'.")
-                        return {"intent": classified_intent, "confidence": confidence}
-
-            logger.info(f"No specific intent matched for query: '{data}'. Defaulting to '{classified_intent}'.")
-
-        except ValueError as e:
-            logger.error(f"Configuration error in IntentClassifierNode: {e}")
-            raise e
-        except Exception as e:
-            logger.error(f"An unexpected error occurred during intent classification for query '{data}': {e}")
-            # Re-raise or wrap in a custom node-specific exception if needed for higher-level handling
-            raise RuntimeError(f"Failed to classify intent due to internal error: {e}") from e
+                        break
+                if classified_intent != "general.unknown":
+                    break
             
-        return {"intent": classified_intent, "confidence": confidence}
+            # Log a truncated version of the input for clarity and to prevent excessively long log lines
+            log_input = data if len(data) <= 100 else f"{data[:97]}..."
+            logger.info(f"[{self.node_name}] Classified intent for input '{log_input}' as '{classified_intent}'.")
+            
+            return {"input": data, "classified_intent": classified_intent, "context": context}
 
+        except Exception as e:
+            # Catch any unexpected errors during the classification logic
+            logger.exception(f"[{self.node_name}] An unexpected error occurred during intent classification for input: '{data}'.")
+            raise ValueError(f"Error classifying intent: {e}") from e
