@@ -1,127 +1,131 @@
+
 import logging
-from typing import Any, Dict, List, Callable
+from typing import Any, Dict, List, Union
 
-# Attempt to import BaseNode from the project's core structure.
-# A fallback is provided for environments where vishustra_core is not yet installed,
-# allowing for standalone testing or initial development.
-try:
-    from vishustra_core.nodes.base_node import BaseNode
-except ImportError:
-    # This block provides a mock BaseNode for development/testing outside the
-    # full Vishustra framework context. In a deployed Vishustra environment,
-    # the primary import path should succeed.
-    logging.warning(
-        "Could not import BaseNode from 'vishustra_core.nodes.base_node'. "
-        "Using a local mock BaseNode for development purposes. "
-        "Ensure 'vishustra_core' is correctly installed for production."
-    )
-    from abc import ABC, abstractmethod
-    class BaseNode(ABC):
-        @abstractmethod
-        def process(self, data: Any, context: Dict[str, Any]) -> Any:
-            pass
-        @property
-        @abstractmethod
-        def node_name(self) -> str:
-            pass
+from vishustra_core.nodes.base_node import BaseNode
+
+logger = logging.getLogger(__name__)
 
 
-class ValidationError(Exception):
-    """Custom exception raised when data fails validation within the DataValidatorNode."""
+class DataValidationException(ValueError):
+    """
+    Custom exception raised when data fails validation rules defined in the context.
+    """
     pass
 
-# A type alias for a validation rule. A rule is a callable that takes any data
-# and raises an exception (e.g., ValidationError, ValueError) if the data is invalid.
-# If the data is valid, the callable should simply return or do nothing.
-ValidationRule = Callable[[Any], None]
 
 class DataValidatorNode(BaseNode):
     """
-    A processing node designed to validate input data against a predefined set of rules.
+    A processing node that validates input data against a set of rules
+    provided in the execution context.
 
-    This node is crucial for ensuring data integrity and correctness at various
-    stages of an LLM orchestration pipeline. Each rule provided to the validator
-    is a callable that, when executed, should raise an exception if the data
-    fails its specific validation criterion. If no exception is raised by a rule,
-    the data is considered valid according to that rule.
+    The node expects validation rules to be present in the `context` dictionary
+    under the key 'validation_rules'. If no rules are found, the data
+    is considered valid and passed through.
+
+    Supported validation rules (as a dict under 'validation_rules'):
+    - 'required_keys': A list of strings, enforcing the presence of keys in dict data.
+    - 'min_length': A dict where keys are field names (str) and values are
+                    minimum required lengths (int) for string fields.
+    - 'allowed_values': A dict where keys are field names (str) and values are
+                        lists of allowed values for that field.
+    - 'min_string_length': An integer representing the minimum length for the
+                           entire input if `data` is a string.
     """
-
-    def __init__(self, rules: List[ValidationRule]):
-        """
-        Initializes the DataValidatorNode with a collection of validation rules.
-
-        Args:
-            rules (List[ValidationRule]): A list of callable validation rules.
-                                          Each rule should accept `data: Any` as its
-                                          single argument. If validation fails, the rule
-                                          is expected to raise an exception (e.g.,
-                                          `ValidationError`, `ValueError`). If the data
-                                          is valid, the rule should complete without
-                                          raising an exception.
-        """
-        self._rules = rules
-        self._logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
-        self._logger.debug(
-            "DataValidatorNode initialized with %d validation rules.", len(self._rules)
-        )
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """Returns the name of the node."""
         return "DataValidator"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Executes all configured validation rules against the input data.
-
-        This method iterates through each validation rule. If any rule raises
-        an exception, the failure is recorded. After attempting all rules, if
-        there were any failures, a comprehensive `ValidationError` is raised
-        containing details of all individual validation failures. If all rules
-        pass, the original (unmodified) data is returned, signifying successful
-        validation.
+        Processes the input data, validating it against rules specified in the context.
 
         Args:
-            data (Any): The data payload to be validated. This could be any Python
-                        object, such as a dictionary, list, string, or a custom object.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                       relevant to the current pipeline execution. While
-                                       not directly used by the generic `DataValidator`
-                                       logic itself, it's part of the standard node
-                                       signature and can be leveraged by custom rules
-                                       if context-dependent validation is required.
+            data: The input data to be validated. This can be any type.
+            context: A dictionary containing execution context, including
+                     'validation_rules' for this node.
 
         Returns:
-            Any: The original `data` if it successfully passes all validation rules.
+            The original data if it passes all validation checks.
 
         Raises:
-            ValidationError: If one or more validation rules fail, encapsulating
-                             all detected error messages.
+            DataValidationException: If the data fails any of the specified
+                                     validation rules.
+            TypeError: If the validation rules themselves are malformed.
         """
-        self._logger.info("Initiating data validation for input data (type: %s).", type(data).__name__)
-        failed_validations: List[str] = []
+        logger.debug(f"[{self.node_name}] Starting data validation for incoming data.")
 
-        for i, rule in enumerate(self._rules):
-            try:
-                # Execute the validation rule. A successful rule returns without
-                # raising an exception.
-                rule(data)
-                self._logger.debug("Validation rule %d passed successfully.", i + 1)
-            except Exception as e:
-                # Catching a broad Exception here to ensure all rule-raised errors
-                # are captured, then re-packaging them into our custom ValidationError.
-                error_message = f"Validation rule {i + 1} failed: {type(e).__name__} - {e}"
-                self._logger.warning(error_message, exc_info=True) # Log exception details for debugging
-                failed_validations.append(error_message)
+        validation_rules: Dict[str, Any] = context.get('validation_rules', {})
 
-        if failed_validations:
-            # Aggregate all error messages into a single, comprehensive ValidationError.
-            aggregate_error_message = (
-                f"Data validation failed with {len(failed_validations)} errors:\n  "
-                + "\n  ".join(failed_validations)
-            )
-            self._logger.error(aggregate_error_message)
-            raise ValidationError(aggregate_error_message)
-        else:
-            self._logger.info("Data successfully passed all validation rules.")
+        if not validation_rules:
+            logger.info(f"[{self.node_name}] No validation rules found in context. Data will pass without explicit checks.")
             return data
+
+        try:
+            # --- Rule: Validate dictionary data ---
+            if isinstance(data, dict):
+                # Required keys check
+                required_keys: List[str] = validation_rules.get('required_keys', [])
+                if not isinstance(required_keys, list):
+                    raise TypeError(f"Validation rule 'required_keys' must be a list, got {type(required_keys).__name__}.")
+                for key in required_keys:
+                    if not isinstance(key, str):
+                        raise TypeError(f"Elements in 'required_keys' must be strings, got {type(key).__name__}.")
+                    if key not in data:
+                        error_msg = f"Validation failed: Missing required key '{key}' in data."
+                        logger.error(f"[{self.node_name}] {error_msg}")
+                        raise DataValidationException(error_msg)
+
+                # Minimum length for string fields check
+                min_length_rules: Dict[str, int] = validation_rules.get('min_length', {})
+                if not isinstance(min_length_rules, dict):
+                    raise TypeError(f"Validation rule 'min_length' must be a dictionary, got {type(min_length_rules).__name__}.")
+                for key, min_len in min_length_rules.items():
+                    if not isinstance(key, str) or not isinstance(min_len, int):
+                        raise TypeError(f"Keys in 'min_length' must be strings and values integers, got key type {type(key).__name__}, value type {type(min_len).__name__}.")
+                    if key in data and isinstance(data[key], str) and len(data[key]) < min_len:
+                        error_msg = f"Validation failed: Field '{key}' has length {len(data[key])}, which is less than required minimum {min_len}."
+                        logger.error(f"[{self.node_name}] {error_msg}")
+                        raise DataValidationException(error_msg)
+
+                # Allowed values for fields check
+                allowed_values_rules: Dict[str, List[Any]] = validation_rules.get('allowed_values', {})
+                if not isinstance(allowed_values_rules, dict):
+                    raise TypeError(f"Validation rule 'allowed_values' must be a dictionary, got {type(allowed_values_rules).__name__}.")
+                for key, allowed_list in allowed_values_rules.items():
+                    if not isinstance(key, str) or not isinstance(allowed_list, list):
+                        raise TypeError(f"Keys in 'allowed_values' must be strings and values lists, got key type {type(key).__name__}, value type {type(allowed_list).__name__}.")
+                    if key in data and data[key] not in allowed_list:
+                        error_msg = f"Validation failed: Field '{key}' has value '{data[key]}', which is not in allowed values {allowed_list}."
+                        logger.error(f"[{self.node_name}] {error_msg}")
+                        raise DataValidationException(error_msg)
+
+            # --- Rule: Validate string data ---
+            elif isinstance(data, str):
+                min_str_length: int = validation_rules.get('min_string_length', 0)
+                if not isinstance(min_str_length, int):
+                    raise TypeError(f"Validation rule 'min_string_length' must be an integer, got {type(min_str_length).__name__}.")
+                if len(data) < min_str_length:
+                    error_msg = f"Validation failed: Input string has length {len(data)}, which is less than required minimum {min_str_length}."
+                    logger.error(f"[{self.node_name}] {error_msg}")
+                    raise DataValidationException(error_msg)
+
+            else:
+                # Log that specific validation isn't implemented for this type,
+                # but doesn't necessarily mean it's invalid if no general rules apply.
+                logger.debug(f"[{self.node_name}] No specific validation rules applied for data type: {type(data).__name__}.")
+
+        except (KeyError, TypeError) as e:
+            error_msg = f"Malformed validation rules provided in context: {e}"
+            logger.error(f"[{self.node_name}] {error_msg}")
+            raise DataValidationException(error_msg) from e
+        except Exception as e:
+            error_msg = f"An unexpected error occurred during validation: {type(e).__name__}: {e}"
+            logger.critical(f"[{self.node_name}] {error_msg}")
+            raise DataValidationException(error_msg) from e
+
+        logger.info(f"[{self.node_name}] Data successfully validated and passed through.")
+        return data
+
