@@ -1,7 +1,6 @@
-
-import re
 import logging
-from typing import Any, Dict, List, Union, Iterable, Set
+import re
+from typing import Any, Dict, List, Set
 
 from vishustra_core.nodes.base_node import BaseNode
 
@@ -9,75 +8,76 @@ logger = logging.getLogger(__name__)
 
 class URLExtractorNode(BaseNode):
     """
-    A Vishustra processing node that extracts URLs from text data.
+    A Vishustra node that extracts URLs from text data using a robust regular expression.
 
-    This node utilizes a robust regular expression to find and extract URLs
-    (supporting http, https, and www prefixes) from a given string or an
-    iterable of strings. It ensures that only unique URLs are returned.
+    This node identifies URLs that start with 'http://', 'https://', or 'www.',
+    including various domain structures, paths, and query parameters, while
+    attempting to correctly handle common trailing punctuation.
     """
 
-    # Comprehensive regular expression for identifying URLs.
-    # This regex is designed to capture URLs starting with http(s):// or www.
-    # It covers common URL structures, including various allowed characters in
-    # paths, query parameters, and anchors, while aiming to minimize false positives.
-    # The pattern is based on widely adopted robust URL matching techniques.
+    # A comprehensive regex pattern to match URLs.
+    # It covers:
+    # - Optional scheme (http:// or https://)
+    # - Optional 'www.' subdomain
+    # - Domain name with alphanumeric characters and hyphens, followed by a TLD (2-6 chars)
+    # - Optional path, query, and fragment parts, handling various special characters
+    #   and attempting to exclude common trailing punctuation marks like '.', ',', ')'
     _URL_REGEX = re.compile(
-        r"(?i)\b((?:https?://|www\d{0,3}[.]|[a-z0-9.\-]+[.][a-z]{2,4}/)(?:[^\s()<>]+|\(([^\s()<>]+|(\([^\s()<>]+\)))*\))+(?:\(([^\s()<>]+|(\([^\s()<>]+\)))*\)|[^\s`!()\[\]{};:'\".,<>?«»“”‘’]))"
+        r'\b(?:https?://|www\.)'  # Start with http(s):// or www.
+        r'(?:[a-zA-Z0-9-]+\.)+'   # One or more domain parts (e.g., example.)
+        r'[a-zA-Z]{2,6}'          # Top-level domain (e.g., com, org, net)
+        r'(?:'                    # Start of optional path/query/fragment group
+        r'/?'                     # Optional leading slash for path
+        r'[^\s`!()\[\]{};:\'\".,<>?«»“”‘’]*' # Path characters, excluding common delimiters
+        r'[^\s`!()\[\]{};:\'\".,<>?«»“”‘’]' # Ensure it doesn't end with a delimiter
+        r')?'                     # End of optional path/query/fragment group
+        r'\b'                     # Word boundary to prevent partial matches
     )
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """Returns the name of the node."""
         return "URL Extractor"
 
-    def process(self, data: Union[str, Iterable[str], Any], context: Dict[str, Any]) -> List[str]:
+    def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Processes the input data to extract unique URLs.
+        Extracts unique URLs from the input data.
 
-        The `data` input can be a single string or an iterable of strings.
-        Non-string elements within an iterable will be skipped with a debug log.
-        If the primary `data` input itself is not a string or an iterable, a warning
-        is logged, and an empty list is returned.
+        The node expects the input `data` to be a string. If `data` is not a string,
+        a warning is logged, and an empty list is returned.
 
         Args:
-            data: The input data, expected to be a string or an iterable of strings,
-                  from which URLs are to be extracted.
-            context: A dictionary containing contextual information for the processing
-                     pipeline (not directly utilized by this node, but passed along).
+            data (Any): The input data, expected to be a string containing text
+                        from which URLs should be extracted.
+            context (Dict[str, Any]): A dictionary for shared context or configuration.
+                                     (Not directly used by this node but part of the signature).
 
         Returns:
-            A list of unique URLs found in the input data, sorted alphabetically for
-            deterministic output. Returns an empty list if no URLs are found or if
-            the input data is invalid.
+            List[str]: A sorted list of unique URLs found in the data.
+                       Returns an empty list if no URLs are found or if the input
+                       data is not a string.
         """
-        extracted_urls: Set[str] = set()
-
-        if data is None:
-            logger.debug("Received None data for URL extraction. Returning an empty list.")
-            return []
-
-        if isinstance(data, str):
-            urls_found = self._URL_REGEX.findall(data)
-            # The regex returns tuples because of multiple capturing groups.
-            # The first element of each tuple is the full match.
-            extracted_urls.update(url_match[0] for url_match in urls_found)
-        elif isinstance(data, Iterable):
-            for item in data:
-                if isinstance(item, str):
-                    urls_found = self._URL_REGEX.findall(item)
-                    extracted_urls.update(url_match[0] for url_match in urls_found)
-                else:
-                    logger.debug(
-                        f"Skipping non-string item of type '{type(item).__name__}' "
-                        "within iterable data during URL extraction."
-                    )
-        else:
+        if not isinstance(data, str):
             logger.warning(
-                f"Unsupported data type '{type(data).__name__}' for URL extraction. "
-                "Expected 'str' or 'Iterable[str]'. Returning an empty list."
+                f"[{self.node_name}] Received non-string data type ({type(data).__name__}). "
+                "Expected string for URL extraction. Returning empty list."
             )
             return []
 
-        # Convert the set of unique URLs to a sorted list for consistent output.
-        return sorted(list(extracted_urls))
+        extracted_urls: Set[str] = set()
+        try:
+            # Find all matches of the URL pattern in the data
+            for match in self._URL_REGEX.finditer(data):
+                url = match.group(0)
+                extracted_urls.add(url)
 
+            logger.info(f"[{self.node_name}] Successfully extracted {len(extracted_urls)} unique URLs.")
+            # Convert set to list and sort for consistent output
+            return sorted(list(extracted_urls))
+
+        except Exception as e:
+            logger.error(
+                f"[{self.node_name}] An unexpected error occurred during URL extraction: {e}",
+                exc_info=True
+            )
+            return []
