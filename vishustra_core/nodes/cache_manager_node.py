@@ -1,33 +1,71 @@
 
+# Standard library imports
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Callable
 
-# Assuming this import path for BaseNode in the Vishustra project structure
+# Project-specific imports
+# The BaseNode class is expected to be located here according to project context.
 from vishustra_core.nodes.base_node import BaseNode
 
+# Initialize a logger for this module.
 logger = logging.getLogger(__name__)
 
-class CacheManagerNode(BaseNode):
+
+class CacheManager(BaseNode):
     """
-    A Vishustra processing node responsible for managing an in-memory cache.
+    A Vishustra processing node designed to manage and utilize a simple in-memory cache.
 
-    This node supports common cache operations like 'get', 'set', 'delete', and 'clear'.
-    It's designed to be stateless across invocations regarding its internal cache store,
-    making it suitable for shared cache instances or simple request-level caching.
+    This node implements a read-through caching strategy within its `process` method.
+    It attempts to retrieve a value from its internal cache based on a dynamically
+    generated key.
 
-    The 'data' input for the process method should be a dictionary specifying the
-    cache action and its parameters.
+    -   **Cache Hit**: If a cached value is found, the node returns the cached value,
+        effectively short-circuiting downstream processing for that specific data.
+    -   **Cache Miss**: If no cached value is found, the node returns the original
+        input data, allowing subsequent nodes in the orchestration pipeline to
+        compute the required result.
+
+    The cache hit/miss status, along with the generated cache key, is recorded
+    in the `context` dictionary. This information enables an orchestrator or
+    other nodes to store computed results back into this `CacheManager` instance
+    when a cache miss previously occurred.
+
+    Beyond its `process` method, this node also exposes methods for explicit storage,
+    invalidation, and clearing of cache entries, allowing the orchestration layer
+    to manage the cache state dynamically.
     """
 
-    def __init__(self):
+    # Internal dictionary to simulate a cache store. In a production-grade system,
+    # this would typically be replaced by a more robust, persistent, or distributed
+    # cache solution (e.g., Redis, Memcached, a dedicated LRU cache implementation,
+    # or an external caching service client).
+    _cache: Dict[str, Any]
+
+    # A callable function responsible for generating unique keys for cache entries.
+    # This key is derived from the input `data` and current `context`.
+    _key_generator: Callable[[Any, Dict[str, Any]], str]
+
+    def __init__(self, key_generator: Callable[[Any, Dict[str, Any]], str]):
         """
-        Initializes the CacheManagerNode.
-        A simple in-memory dictionary is used to simulate the cache storage.
-        For production, this would typically be backed by a robust caching system
-        like Redis or Memcached, potentially injected via context or configuration.
+        Initializes the CacheManager node.
+
+        Args:
+            key_generator: A callable that accepts `data: Any` and `context: Dict[str, Any]`
+                           as arguments and returns a unique string representing the cache key
+                           for the given input. This function must be deterministic;
+                           identical inputs (`data` and relevant `context` parts) should
+                           always produce the same key for consistent cache behavior.
+
+        Raises:
+            TypeError: If the provided `key_generator` is not a callable function.
         """
-        self._cache: Dict[str, Any] = {}
-        logger.debug("CacheManagerNode initialized with an empty in-memory cache.")
+        if not callable(key_generator):
+            logger.error("Attempted to initialize CacheManager with a non-callable key_generator.")
+            raise TypeError("key_generator must be a callable function that returns a string key.")
+
+        self._cache = {}
+        self._key_generator = key_generator
+        logger.info(f"CacheManager initialized. Using key generator: '{self._key_generator.__name__}'.")
 
     @property
     def node_name(self) -> str:
@@ -38,84 +76,121 @@ class CacheManagerNode(BaseNode):
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the cache command provided in 'data'.
+        Processes the input data by attempting to retrieve a value from the cache.
 
-        The 'data' parameter is expected to be a dictionary with at least an 'action' key.
-        Supported actions:
-        - "get": Retrieves a value from the cache. Requires a 'key'.
-                 Returns the cached value or None if not found.
-                 Example: {"action": "get", "key": "my_data_key"}
-        - "set": Stores or updates a value in the cache. Requires 'key' and 'value'.
-                 Returns True on success.
-                 Example: {"action": "set", "key": "my_data_key", "value": {"item": "A"}}
-        - "delete": Removes a value from the cache. Requires a 'key'.
-                    Returns True if deleted, False if key was not found.
-                    Example: {"action": "delete", "key": "my_data_key"}
-        - "clear": Clears the entire cache. No additional parameters needed.
-                   Returns True on success.
-                   Example: {"action": "clear"}
+        This method implements a read-through caching pattern:
+        1.  Generates a cache key using the provided `_key_generator` based on `data` and `context`.
+        2.  Checks if a value associated with this generated key exists in the internal cache.
+        3.  **On Cache Hit**: If found, it returns the cached value directly.
+            It also updates `context['cache_hit']` to `True` and `context['cache_key']` with the key.
+        4.  **On Cache Miss**: If not found, it returns the original input `data`.
+            It updates `context['cache_hit']` to `False` and `context['cache_key']` with the key.
+
+        In case of errors during key generation or cache access, the original `data`
+        is returned, an error is logged, and details are added to `context['cache_error']`.
 
         Args:
-            data (Any): A dictionary representing the cache command.
-            context (Dict[str, Any]): A dictionary containing shared context information.
-                                     Not directly used by this basic cache implementation,
-                                     but available for future extensions (e.g., shared cache client).
+            data: The input data payload to be processed. This data, along with
+                  the `context`, is passed to the `_key_generator` to create a cache key.
+            context: A dictionary containing runtime context information. This will be
+                     updated with the following fields:
+                     - `cache_hit` (bool): `True` if a cached value was returned, `False` otherwise.
+                     - `cache_key` (str | None): The key used for the cache lookup, or `None` on key generation error.
+                     - `cache_error` (str, optional): An error message if an exception occurred.
 
         Returns:
-            Any: The result of the cache operation (e.g., cached value, boolean for success).
-
-        Raises:
-            ValueError: If the 'data' input is malformed or an unsupported action is requested.
+            The cached value if a cache hit occurs, otherwise the original input `data`.
+            In case of any error during this process, the original `data` is always
+            returned to ensure downstream operations can still proceed, if possible.
         """
-        if not isinstance(data, dict):
-            logger.error(f"Invalid input data type for CacheManagerNode. Expected dict, got {type(data)}.")
-            raise ValueError("CacheManagerNode expects 'data' to be a dictionary.")
-
-        action: Optional[str] = data.get("action")
-        key: Optional[str] = data.get("key")
-        value: Any = data.get("value")
-
-        if action is None:
-            logger.error("Cache command 'action' is missing in input data: %s", data)
-            raise ValueError("Cache command requires an 'action' key.")
+        # Initialize or reset context flags for cache operation
+        context["cache_hit"] = False
+        context["cache_key"] = None
+        context.pop("cache_error", None)  # Clear any previous error state
 
         try:
-            if action == "get":
-                if key is None:
-                    logger.warning("Attempted 'get' without a 'key'. Input data: %s", data)
-                    raise ValueError("Cache 'get' action requires a 'key'.")
-                result = self._cache.get(key)
-                if result is None:
-                    logger.debug("Cache miss for key: '%s'", key)
-                else:
-                    logger.debug("Cache hit for key: '%s'", key)
-                return result
-            elif action == "set":
-                if key is None or value is None:
-                    logger.warning("Attempted 'set' without 'key' or 'value'. Input data: %s", data)
-                    raise ValueError("Cache 'set' action requires 'key' and 'value'.")
-                self._cache[key] = value
-                logger.info("Key '%s' set in cache.", key)
-                return True
-            elif action == "delete":
-                if key is None:
-                    logger.warning("Attempted 'delete' without a 'key'. Input data: %s", data)
-                    raise ValueError("Cache 'delete' action requires a 'key'.")
-                if key in self._cache:
-                    del self._cache[key]
-                    logger.info("Key '%s' deleted from cache.", key)
-                    return True
-                else:
-                    logger.debug("Attempted to delete non-existent key '%s' from cache.", key)
-                    return False
-            elif action == "clear":
-                self._cache.clear()
-                logger.info("Cache has been cleared.")
-                return True
+            cache_key = self._key_generator(data, context)
+
+            if not isinstance(cache_key, str):
+                error_msg = (f"Cache key generator '{self._key_generator.__name__}' returned a "
+                             f"non-string key (type: {type(cache_key)}). Cache bypass initiated.")
+                logger.error(error_msg)
+                context["cache_error"] = error_msg
+                return data
+
+            context["cache_key"] = cache_key
+
+            if cache_key in self._cache:
+                cached_value = self._cache[cache_key]
+                context["cache_hit"] = True
+                logger.debug(f"Cache HIT for key: '{cache_key}'. Returning cached value.")
+                return cached_value
             else:
-                logger.error("Unsupported cache action '%s' requested.", action)
-                raise ValueError(f"Unsupported cache action: '{action}'")
+                logger.debug(f"Cache MISS for key: '{cache_key}'. Passing original data for computation.")
+                return data
         except Exception as e:
-            logger.exception("An error occurred during cache operation for data: %s", data)
-            raise RuntimeError(f"Failed to perform cache operation '{action}': {e}") from e
+            # Catch any unexpected errors during key generation or cache lookup
+            error_msg = (f"An unexpected error occurred during cache processing for data: "
+                         f"{data!r}. Error: {type(e).__name__}: {e}")
+            logger.exception(error_msg)  # Log full traceback for better debugging
+            context["cache_error"] = error_msg
+            # On error, always pass through the original data to avoid breaking the pipeline
+            return data
+
+    def store_in_cache(self, key: str, value: Any) -> None:
+        """
+        Explicitly stores a value into the cache under the given key.
+
+        This method is typically invoked by an orchestrator or another node
+        after a computation has successfully produced a result (e.g., following
+        a cache miss during the `process` phase).
+
+        Args:
+            key: The string key under which to store the value.
+            value: The data payload to be stored in the cache.
+
+        Raises:
+            TypeError: If the provided `key` is not a string.
+        """
+        if not isinstance(key, str):
+            logger.error(f"Attempted to store in cache with a non-string key (type: {type(key)}).")
+            raise TypeError("Cache key must be a string.")
+
+        self._cache[key] = value
+        logger.debug(f"Successfully stored value for key: '{key}' in cache.")
+
+    def invalidate_cache(self, key: str) -> bool:
+        """
+        Removes a specific entry from the cache based on its key.
+
+        Args:
+            key: The string key of the cache entry to invalidate.
+
+        Returns:
+            True if the key was found and successfully removed from the cache.
+            False if the key was not found in the cache (no action taken).
+
+        Raises:
+            TypeError: If the provided `key` is not a string.
+        """
+        if not isinstance(key, str):
+            logger.error(f"Attempted to invalidate cache with a non-string key (type: {type(key)}).")
+            raise TypeError("Cache key must be a string.")
+
+        if key in self._cache:
+            del self._cache[key]
+            logger.debug(f"Invalidated cache entry for key: '{key}'.")
+            return True
+        logger.debug(f"Attempted to invalidate non-existent cache key: '{key}'. No action taken.")
+        return False
+
+    def clear_cache(self) -> None:
+        """
+        Clears all entries from the internal cache.
+
+        This method effectively resets the entire cache, removing all stored data.
+        """
+        initial_size = len(self._cache)
+        self._cache.clear()
+        logger.info(f"CacheManager: Cleared all {initial_size} entries from the cache.")
 
