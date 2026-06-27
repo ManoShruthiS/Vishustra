@@ -1,131 +1,140 @@
-
 import logging
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Type
 
+# Assuming vishustra_core is a package and nodes.base_node is a module within it
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-
-class DataValidationException(ValueError):
-    """
-    Custom exception raised when data fails validation rules defined in the context.
-    """
+class DataValidationError(ValueError):
+    """Custom exception raised when data fails validation rules within Vishustra."""
     pass
-
 
 class DataValidatorNode(BaseNode):
     """
-    A processing node that validates input data against a set of rules
-    provided in the execution context.
+    A processing node responsible for validating input data against a set of predefined
+    or dynamically provided rules.
 
-    The node expects validation rules to be present in the `context` dictionary
-    under the key 'validation_rules'. If no rules are found, the data
-    is considered valid and passed through.
+    This node ensures data integrity and adherence to expected schemas before data
+    proceeds to further processing stages in the orchestration flow. Validation rules
+    can specify required fields, expected data types, and potentially more complex
+    custom validation logic.
 
-    Supported validation rules (as a dict under 'validation_rules'):
-    - 'required_keys': A list of strings, enforcing the presence of keys in dict data.
-    - 'min_length': A dict where keys are field names (str) and values are
-                    minimum required lengths (int) for string fields.
-    - 'allowed_values': A dict where keys are field names (str) and values are
-                        lists of allowed values for that field.
-    - 'min_string_length': An integer representing the minimum length for the
-                           entire input if `data` is a string.
+    Rules can be set during node initialization or provided/overridden via the
+    'validation_rules' key in the context dictionary during processing.
     """
+
+    def __init__(
+        self,
+        required_fields: Optional[List[str]] = None,
+        field_types: Optional[Dict[str, Type]] = None,
+        node_name: str = "DataValidator"
+    ):
+        """
+        Initializes the DataValidatorNode with static validation rules.
+
+        Args:
+            required_fields: A list of field names that must be present in the data.
+            field_types: A dictionary mapping field names to their expected Python types.
+                         E.g., `{"id": int, "name": str}`.
+            node_name: The descriptive name of this node instance. Defaults to "DataValidator".
+        """
+        self._node_name = node_name
+        self._required_fields = required_fields if required_fields is not None else []
+        self._field_types = field_types if field_types is not None else {}
+        logger.debug(
+            f"Initialized DataValidatorNode '{self._node_name}' with "
+            f"static required_fields={self._required_fields}, "
+            f"static field_types={self._field_types}."
+        )
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
-        return "DataValidator"
+        """Returns the programmatic name of the node."""
+        return self._node_name
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, validating it against rules specified in the context.
+        Validates the input data against configured rules and any rules
+        dynamically supplied in the `context`.
+
+        The `context` dictionary can optionally include a 'validation_rules' key,
+        which itself is a dictionary that can contain:
+        - 'required_fields': A `List[str]` to augment or override static required fields.
+        - 'field_types': A `Dict[str, Type]` to augment or override static field types.
 
         Args:
-            data: The input data to be validated. This can be any type.
-            context: A dictionary containing execution context, including
-                     'validation_rules' for this node.
+            data: The input data to be validated. This node primarily expects a dictionary
+                  for field-level validation, but will perform a basic type check otherwise.
+            context: A dictionary containing contextual information, potentially including
+                     dynamic validation rules under the 'validation_rules' key.
 
         Returns:
-            The original data if it passes all validation checks.
+            The original, unmodified data if all validation checks pass successfully.
 
         Raises:
-            DataValidationException: If the data fails any of the specified
-                                     validation rules.
-            TypeError: If the validation rules themselves are malformed.
+            DataValidationError: If the data fails any validation rule, indicating
+                                 an issue with the input data structure or content.
         """
-        logger.debug(f"[{self.node_name}] Starting data validation for incoming data.")
+        current_required_fields = list(self._required_fields)
+        current_field_types = dict(self._field_types)
 
-        validation_rules: Dict[str, Any] = context.get('validation_rules', {})
+        # Merge or override validation rules from context
+        if 'validation_rules' in context and isinstance(context['validation_rules'], Dict):
+            context_rules = context['validation_rules']
+            if 'required_fields' in context_rules and isinstance(context_rules['required_fields'], List):
+                # Extend required fields, avoiding duplicates
+                current_required_fields.extend(
+                    [f for f in context_rules['required_fields'] if f not in current_required_fields]
+                )
+                logger.debug(f"Context added/augmented required_fields: {context_rules['required_fields']}.")
 
-        if not validation_rules:
-            logger.info(f"[{self.node_name}] No validation rules found in context. Data will pass without explicit checks.")
-            return data
+            if 'field_types' in context_rules and isinstance(context_rules['field_types'], Dict):
+                # Update/override field types from context
+                current_field_types.update(context_rules['field_types'])
+                logger.debug(f"Context updated/augmented field_types: {context_rules['field_types']}.")
 
-        try:
-            # --- Rule: Validate dictionary data ---
-            if isinstance(data, dict):
-                # Required keys check
-                required_keys: List[str] = validation_rules.get('required_keys', [])
-                if not isinstance(required_keys, list):
-                    raise TypeError(f"Validation rule 'required_keys' must be a list, got {type(required_keys).__name__}.")
-                for key in required_keys:
-                    if not isinstance(key, str):
-                        raise TypeError(f"Elements in 'required_keys' must be strings, got {type(key).__name__}.")
-                    if key not in data:
-                        error_msg = f"Validation failed: Missing required key '{key}' in data."
-                        logger.error(f"[{self.node_name}] {error_msg}")
-                        raise DataValidationException(error_msg)
+        logger.debug(
+            f"Node '{self.node_name}' commencing data validation. "
+            f"Effective required_fields={current_required_fields}, "
+            f"effective field_types={current_field_types}."
+        )
 
-                # Minimum length for string fields check
-                min_length_rules: Dict[str, int] = validation_rules.get('min_length', {})
-                if not isinstance(min_length_rules, dict):
-                    raise TypeError(f"Validation rule 'min_length' must be a dictionary, got {type(min_length_rules).__name__}.")
-                for key, min_len in min_length_rules.items():
-                    if not isinstance(key, str) or not isinstance(min_len, int):
-                        raise TypeError(f"Keys in 'min_length' must be strings and values integers, got key type {type(key).__name__}, value type {type(min_len).__name__}.")
-                    if key in data and isinstance(data[key], str) and len(data[key]) < min_len:
-                        error_msg = f"Validation failed: Field '{key}' has length {len(data[key])}, which is less than required minimum {min_len}."
-                        logger.error(f"[{self.node_name}] {error_msg}")
-                        raise DataValidationException(error_msg)
+        # 1. Basic data type check for dictionary expected structure
+        if not isinstance(data, Dict):
+            error_msg = (
+                f"Validation failed for node '{self.node_name}': "
+                f"Expected input data to be a dictionary for field-level validation, "
+                f"but received type {type(data).__name__}."
+            )
+            logger.error(error_msg)
+            raise DataValidationError(error_msg)
 
-                # Allowed values for fields check
-                allowed_values_rules: Dict[str, List[Any]] = validation_rules.get('allowed_values', {})
-                if not isinstance(allowed_values_rules, dict):
-                    raise TypeError(f"Validation rule 'allowed_values' must be a dictionary, got {type(allowed_values_rules).__name__}.")
-                for key, allowed_list in allowed_values_rules.items():
-                    if not isinstance(key, str) or not isinstance(allowed_list, list):
-                        raise TypeError(f"Keys in 'allowed_values' must be strings and values lists, got key type {type(key).__name__}, value type {type(allowed_list).__name__}.")
-                    if key in data and data[key] not in allowed_list:
-                        error_msg = f"Validation failed: Field '{key}' has value '{data[key]}', which is not in allowed values {allowed_list}."
-                        logger.error(f"[{self.node_name}] {error_msg}")
-                        raise DataValidationException(error_msg)
+        # 2. Check for presence of all required fields
+        for field in current_required_fields:
+            if field not in data:
+                error_msg = (
+                    f"Validation failed for node '{self.node_name}': "
+                    f"Required field '{field}' is missing from the input data."
+                )
+                logger.error(error_msg)
+                raise DataValidationError(error_msg)
+            logger.debug(f"Required field '{field}' is present in data.")
 
-            # --- Rule: Validate string data ---
-            elif isinstance(data, str):
-                min_str_length: int = validation_rules.get('min_string_length', 0)
-                if not isinstance(min_str_length, int):
-                    raise TypeError(f"Validation rule 'min_string_length' must be an integer, got {type(min_str_length).__name__}.")
-                if len(data) < min_str_length:
-                    error_msg = f"Validation failed: Input string has length {len(data)}, which is less than required minimum {min_str_length}."
-                    logger.error(f"[{self.node_name}] {error_msg}")
-                    raise DataValidationException(error_msg)
+        # 3. Check types of specified fields
+        for field, expected_type in current_field_types.items():
+            if field in data:  # Only check type if the field exists
+                if not isinstance(data[field], expected_type):
+                    error_msg = (
+                        f"Validation failed for node '{self.node_name}' for field '{field}': "
+                        f"Expected type {expected_type.__name__}, but found "
+                        f"{type(data[field]).__name__}."
+                    )
+                    logger.error(error_msg)
+                    raise DataValidationError(error_msg)
+                logger.debug(f"Field '{field}' has correct type {expected_type.__name__}.")
+            # If a field type is specified for a field that is also required
+            # but missing, the missing field error would have been raised first.
 
-            else:
-                # Log that specific validation isn't implemented for this type,
-                # but doesn't necessarily mean it's invalid if no general rules apply.
-                logger.debug(f"[{self.node_name}] No specific validation rules applied for data type: {type(data).__name__}.")
-
-        except (KeyError, TypeError) as e:
-            error_msg = f"Malformed validation rules provided in context: {e}"
-            logger.error(f"[{self.node_name}] {error_msg}")
-            raise DataValidationException(error_msg) from e
-        except Exception as e:
-            error_msg = f"An unexpected error occurred during validation: {type(e).__name__}: {e}"
-            logger.critical(f"[{self.node_name}] {error_msg}")
-            raise DataValidationException(error_msg) from e
-
-        logger.info(f"[{self.node_name}] Data successfully validated and passed through.")
+        logger.info(f"Node '{self.node_name}' successfully validated the input data.")
         return data
-
