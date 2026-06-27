@@ -1,116 +1,115 @@
+
 import logging
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List
+
+# Assuming vishustra_core.nodes.base_node exists as per project context
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
+
 class IntentClassifierNode(BaseNode):
     """
-    A Vishustra node that classifies the intent of a user query.
-
-    This node simulates intent classification based on predefined keyword rules.
-    In a production environment, this would typically leverage an external LLM
-    or a dedicated machine learning model for robust intent recognition.
+    A Vishustra processing node responsible for classifying the intent of
+    incoming text data. This node simulates intent detection based on
+    predefined keywords.
     """
 
-    def __init__(self, classification_rules: Dict[str, List[str]] = None):
+    def __init__(self, intent_map: Dict[str, List[str]] = None, default_intent: str = "general_query"):
         """
-        Initializes the IntentClassifierNode with optional custom classification rules.
+        Initializes the IntentClassifierNode with an optional intent mapping and
+        a default intent.
 
         Args:
-            classification_rules: An optional dictionary where keys are intent names (str)
-                                  and values are lists of keywords (str) associated
-                                  with that intent. If None, a set of default rules is used.
+            intent_map: An optional dictionary where keys are intent names (str)
+                        and values are lists of keywords (List[str]) associated
+                        with that intent. If None, a default mapping is used.
+            default_intent: The intent string to assign if no specific intent
+                            is detected based on the provided keywords.
         """
-        super().__init__()
-        self._default_rules: Dict[str, List[str]] = {
-            "book_flight": ["book flight", "flight ticket", "travel to", "reservation"],
-            "check_status": ["flight status", "where is my flight", "delay", "arrival time"],
-            "cancel_order": ["cancel order", "return item", "refund"],
-            "general_query": ["hello", "hi", "how are you", "what can you do"],
-            "account_info": ["my account", "login", "password", "profile"]
+        self._intent_map = intent_map if intent_map is not None else self._build_default_intent_map()
+        self._default_intent = default_intent
+        logger.info(
+            f"IntentClassifierNode initialized. Using default intent: '{self._default_intent}'. "
+            f"Configured intents: {list(self._intent_map.keys())}"
+        )
+
+    def _build_default_intent_map(self) -> Dict[str, List[str]]:
+        """
+        Builds a default mapping of intents to keywords for demonstration purposes.
+        """
+        return {
+            "book_flight": ["book flight", "plane ticket", "fly to", "reservation", "travel"],
+            "check_status": ["status", "tracking", "order", "delivery", "check my"],
+            "customer_support": ["help", "support", "contact us", "problem", "issue"],
+            "greeting": ["hello", "hi", "hey", "good morning", "good evening"],
+            "farewell": ["bye", "goodbye", "see you", "later"],
+            "price_inquiry": ["how much", "cost", "price", "charge"],
+            "product_info": ["tell me about", "what is", "information on"],
         }
-        self.classification_rules = classification_rules if classification_rules is not None else self._default_rules
-        logger.info(f"Initialized {self.node_name} with rules for intents: {list(self.classification_rules.keys())}")
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """Returns the name of the node."""
         return "IntentClassifierNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input data (expected to be a user query string) to classify its intent.
+        Classifies the intent of the input text data based on the initialized
+        keyword mapping.
 
-        This method performs a simulated intent classification by checking for keywords
-        in the input data against the configured classification rules.
+        The `context` parameter is available for future extensions but is not
+        used in this basic keyword-based classification.
 
         Args:
-            data: The input data, expected to be a string representing a user query.
-            context: A dictionary containing contextual information for the processing.
-                     While not directly used for keyword matching in this simulation,
-                     it would typically carry parameters like session ID, user history,
-                     or LLM configuration (e.g., model name, temperature) if an LLM
-                     were used for classification.
+            data: The input text (e.g., user query) as a string.
+            context: A dictionary of contextual information, potentially
+                     including user history, session data, etc.
 
         Returns:
-            A dictionary containing the classification results:
-            - 'original_query': The input query string.
-            - 'classified_intent': The identified intent as a string (e.g., "book_flight", "unknown").
-            - 'confidence': A simulated confidence score (e.g., 1.0 if a match, 0.0 otherwise).
-            - 'explanation': A brief description of how the intent was derived.
+            A dictionary containing the detected intent and a simulated
+            confidence score, e.g., {"intent": "book_flight", "confidence": 0.95}.
 
-            If the input `data` is not a string, an error dictionary is returned.
+        Raises:
+            TypeError: If the input `data` is not a string.
+            ValueError: If the input `data` is an empty string after stripping whitespace.
         """
+        logger.debug(f"[{self.node_name}] Starting process for data: '{data}'")
+
         if not isinstance(data, str):
-            logger.error(
+            error_msg = (
                 f"[{self.node_name}] Invalid input data type. Expected 'str', "
-                f"but received '{type(data).__name__}'. Data: {data!r}"
+                f"but received '{type(data).__name__}'."
             )
-            return {
-                "error": "InvalidInputTypeError",
-                "message": "Input data for intent classification must be a string.",
-                "received_type": str(type(data)),
-                "original_data": data
-            }
+            logger.error(error_msg)
+            raise TypeError(error_msg)
 
-        query = data.lower().strip()
-        if not query:
-            logger.warning(f"[{self.node_name}] Received an empty or whitespace-only query string.")
-            return {
-                "original_query": data,
-                "classified_intent": "empty_query",
-                "confidence": 0.0,
-                "explanation": "Input query was empty or contained only whitespace."
-            }
+        text = data.strip()
+        if not text:
+            error_msg = f"[{self.node_name}] Received an empty string for classification."
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
-        identified_intent: str = "unknown"
-        confidence: float = 0.0
-        explanation: str = "No specific intent found."
+        # Normalize text for keyword matching
+        normalized_text = text.lower()
 
-        # Simulate intent classification using keyword matching
-        for intent_name, keywords in self.classification_rules.items():
+        detected_intent = self._default_intent
+        confidence = 0.5  # Default confidence for the default intent
+
+        for intent, keywords in self._intent_map.items():
             for keyword in keywords:
-                if keyword in query:
-                    identified_intent = intent_name
-                    confidence = 1.0  # Simple simulation: 1.0 if any keyword matches
-                    explanation = f"Matched keyword: '{keyword}' for intent '{intent_name}'."
+                if keyword in normalized_text:
+                    detected_intent = intent
+                    confidence = 0.95  # Simulated higher confidence for matched intent
                     logger.debug(
-                        f"[{self.node_name}] Classified query '{query}' as '{identified_intent}' "
-                        f"due to keyword '{keyword}'."
+                        f"[{self.node_name}] Matched keyword '{keyword}' for intent '{intent}' "
+                        f"in text: '{data[:50]}...'"
                     )
-                    break  # Found a match, no need to check other keywords for this intent
-            if identified_intent != "unknown":
-                break  # Found a match, no need to check other intents
+                    break  # Found a match for this intent, no need to check further keywords
+            if detected_intent != self._default_intent:
+                break  # An intent was found, no need to check other intents
 
-        if identified_intent == "unknown":
-            logger.info(f"[{self.node_name}] Could not classify intent for query: '{query}'. Defaulting to 'unknown'.")
-            explanation = "No matching keywords found for any defined intent in the query."
-
-        result: Dict[str, Any] = {
-            "original_query": data,
-            "classified_intent": identified_intent,
-            "confidence": confidence,
-            "explanation": explanation
-        }
+        result = {"intent": detected_intent, "confidence": confidence}
+        logger.info(f"[{self.node_name}] Classified input as: {result} for text: '{data}'")
         return result
+
