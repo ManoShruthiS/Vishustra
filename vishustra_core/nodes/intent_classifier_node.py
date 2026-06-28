@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, Union
+from typing import Any, Dict, List, Union
 
 from vishustra_core.nodes.base_node import BaseNode
 
@@ -7,98 +7,131 @@ logger = logging.getLogger(__name__)
 
 class IntentClassifierNode(BaseNode):
     """
-    A processing node designed to classify the underlying intent of a given text input.
+    A Vishustra node designed to classify the intent of a given text input.
 
-    This node simulates intent classification based on a predefined set of keywords.
-    In a production environment, this would typically integrate with a dedicated
-    Natural Language Understanding (NLU) service or a fine-tuned machine learning model.
+    This node provides a simulated intent classification mechanism. In a
+    production environment, it would typically interface with a specialized
+    machine learning model or an external NLP service to perform
+    sophisticated intent recognition. For demonstration, it uses a simple
+    keyword-based matching logic that can be configured via the context.
     """
 
-    _INTENT_MAP = {
-        "greeting": ["hello", "hi", "hey", "good morning", "good evening"],
-        "product_inquiry": ["what products", "product list", "show me products", "details about", "catalogue"],
-        "order_status": ["order status", "where is my order", "track my order", "delivery time"],
-        "support_request": ["help", "support", "technical issue", "contact support", "assistance"],
-        "goodbye": ["bye", "goodbye", "see you", "farewell"],
-        "acknowledgment": ["thank you", "thanks", "appreciate it"],
-    }
-    _DEFAULT_INTENT = "general_query"
+    def __init__(self):
+        """
+        Initializes the IntentClassifierNode.
+
+        Any setup for loading models, configuring external APIs, or
+        initializing resources for intent classification would occur here.
+        """
+        logger.debug("IntentClassifierNode initialized.")
 
     @property
     def node_name(self) -> str:
-        """Returns the programmatic name of the node."""
+        """Returns the descriptive name of this node."""
         return "IntentClassifier"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Union[str, float]]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Classifies the intent of the input text data.
+        Processes the input data to identify its underlying intent.
 
-        The `data` input is expected to be a string representing a user query or utterance.
-        The `context` dictionary provides a mechanism for passing operational metadata
-        or configuration relevant to the node's execution, though it is not
-        directly utilized for the classification logic in this simulated implementation.
+        The `data` input is expected to be a string containing the text
+        to be classified. The `context` dictionary can be used to provide
+        configuration parameters, such as an `intent_mapping` dictionary
+        to define custom intents and their associated keywords, or a
+        `default_intent` string for unclassified inputs.
 
         Args:
-            data: The input text to be classified. Must be a string.
-            context: A dictionary containing contextual information for the node's operation.
-                     (e.g., session ID, user preferences, global configurations).
+            data: The input text as a string that needs intent classification.
+            context: A dictionary containing operational parameters for the node.
+                     Expected keys include:
+                     - 'intent_mapping' (Dict[str, List[str]]): A mapping from
+                       intent names to a list of keywords associated with that intent.
+                     - 'default_intent' (str): The intent to return if no other
+                       intent is matched. Defaults to 'unknown'.
 
         Returns:
-            A dictionary containing the original query, the classified intent, and a
-            simulated confidence score. Example:
-            `{"original_query": "Hello there", "classified_intent": "greeting", "confidence": 0.95}`
+            A dictionary containing:
+            - 'text' (str): The original input text.
+            - 'intent' (str): The classified intent, e.g., 'greeting', 'place_order', 'unknown'.
+            - 'confidence' (float): A simulated confidence score for the classification,
+                                    ranging from 0.0 to 1.0.
 
         Raises:
-            TypeError: If the input `data` is not of type string.
-            ValueError: If the input `data` is an empty string after stripping whitespace.
+            TypeError: If the input `data` is not a string.
+            ValueError: If the 'intent_mapping' in `context` is not a dictionary.
         """
-        logger.debug(f"[{self.node_name}] Attempting intent classification for data: '{data}'")
-
         if not isinstance(data, str):
             logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected 'str', received '{type(data).__name__}'."
+                f"Invalid input data type for IntentClassifierNode. Expected 'str', "
+                f"but received '{type(data).__name__}'."
             )
             raise TypeError(
-                f"[{self.node_name}] Input 'data' for intent classification must be a string. "
-                f"Received type '{type(data).__name__}'."
+                f"IntentClassifierNode requires string input, but got {type(data).__name__}."
             )
 
-        query = data.strip().lower()
+        text_input = data.strip().lower()
+        classified_intent = context.get('default_intent', 'unknown')
+        confidence = 0.5  # Default confidence for unclassified or low-match scenarios
 
-        if not query:
-            logger.warning(
-                f"[{self.node_name}] Received an empty query string after stripping whitespace. "
-                "Unable to perform intent classification."
-            )
-            raise ValueError(
-                f"[{self.node_name}] Input query string cannot be empty for intent classification."
-            )
+        intent_mapping = context.get('intent_mapping')
 
-        classified_intent = self._DEFAULT_INTENT
-        confidence = 0.5  # Base confidence for unmatched or general queries
+        if intent_mapping:
+            if not isinstance(intent_mapping, dict):
+                logger.error(
+                    f"Invalid 'intent_mapping' type in context. Expected 'dict', "
+                    f"but received '{type(intent_mapping).__name__}'."
+                )
+                raise ValueError("Context 'intent_mapping' must be a dictionary.")
 
-        # Simple keyword-based classification
-        for intent, keywords in self._INTENT_MAP.items():
-            for keyword in keywords:
-                if keyword in query:
-                    classified_intent = intent
-                    confidence = 0.95  # Higher confidence for a positive match
-                    logger.debug(
-                        f"[{self.node_name}] Detected keyword '{keyword}' indicating intent '{intent}'."
+            matched = False
+            for intent, keywords in intent_mapping.items():
+                if not isinstance(keywords, (list, tuple)):
+                    logger.warning(
+                        f"Keywords for intent '{intent}' in context 'intent_mapping' "
+                        f"are not a list or tuple. Skipping this intent."
                     )
-                    # For this simulation, we take the first matching keyword and intent
-                    # In a real system, this would involve more sophisticated scoring.
+                    continue
+
+                for keyword in keywords:
+                    if isinstance(keyword, str) and keyword.lower() in text_input:
+                        classified_intent = intent
+                        confidence = 0.95  # High confidence for direct keyword match
+                        matched = True
+                        break
+                if matched:
                     break
-            if classified_intent != self._DEFAULT_INTENT:
-                break # If an intent was found, no need to check further intent categories
+            
+            if not matched:
+                logger.debug(f"No specific intent matched via 'intent_mapping' for text: '{data[:50]}...'")
+                # If mapping was provided but no match, use default_intent with slightly higher confidence than raw unknown
+                confidence = 0.6 if classified_intent != 'unknown' else 0.5 # If default was explicitly set
+
+        else:
+            logger.debug("No 'intent_mapping' found in context. Using internal fallback logic for classification.")
+            # Fallback to simple internal logic if no context mapping is provided
+            if any(phrase in text_input for phrase in ["hello", "hi", "hey"]):
+                classified_intent = "greeting"
+                confidence = 0.9
+            elif any(phrase in text_input for phrase in ["bye", "goodbye", "see ya"]):
+                classified_intent = "farewell"
+                confidence = 0.9
+            elif any(phrase in text_input for phrase in ["help", "support", "assist"]):
+                classified_intent = "request_help"
+                confidence = 0.85
+            elif any(phrase in text_input for phrase in ["order", "purchase", "buy"]):
+                classified_intent = "place_order"
+                confidence = 0.8
+            else:
+                classified_intent = context.get('default_intent', 'unknown')
+                confidence = 0.5
 
         logger.info(
-            f"[{self.node_name}] Classified intent for query '{data[:75]}{'...' if len(data) > 75 else ''}' "
-            f"as '{classified_intent}' with a confidence of {confidence:.2f}."
+            f"Classified intent for text '{data[:70]}{'...' if len(data) > 70 else ''}' "
+            f"as '{classified_intent}' with confidence {confidence:.2f}."
         )
 
         return {
-            "original_query": data,
-            "classified_intent": classified_intent,
-            "confidence": confidence,
+            "text": data,
+            "intent": classified_intent,
+            "confidence": confidence
         }
