@@ -1,93 +1,96 @@
 import logging
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List
 
-# Assuming vishustra_core.nodes.base_node exists in the project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class KeywordExtractorNode(BaseNode):
     """
-    A Vishustra node designed to extract a predefined set of keywords from input text data.
+    A processing node designed to extract keywords from a given text.
 
-    This node performs a simple, case-insensitive check for the presence of specified
-    keywords within the input string. In a production environment, this might be
-    backed by more sophisticated NLP techniques (e.g., tokenization, stemming,
-    lemmatization, or library-based keyword extraction).
+    This node expects a string as its input data and attempts to identify
+    and return a list of relevant keywords. For this initial implementation,
+    it performs a basic tokenization, converts text to lowercase, removes
+    common stop words and very short words, and strips basic punctuation.
     """
-
-    def __init__(self, keywords_to_extract: List[str] = None):
-        """
-        Initializes the KeywordExtractorNode with an optional list of keywords to look for.
-
-        Args:
-            keywords_to_extract: An optional list of strings representing the keywords
-                                 this node should attempt to extract. If None,
-                                 a default set of general LLM/orchestration-related
-                                 keywords will be used. All keywords are converted
-                                 to lowercase for case-insensitive matching.
-        """
-        if keywords_to_extract is None:
-            self._keywords_to_extract: Set[str] = {
-                "llm", "ai", "orchestration", "framework", "vishustra",
-                "node", "data", "processing", "model", "text", "information",
-                "component", "system", "engine", "flow"
-            }
-        else:
-            # Ensure keywords are stored in lowercase for efficient case-insensitive matching
-            self._keywords_to_extract = {k.lower() for k in keywords_to_extract}
-        logger.debug(f"{self.node_name} initialized with {len(self._keywords_to_extract)} keywords.")
 
     @property
     def node_name(self) -> str:
         """Returns the descriptive name of the node."""
-        return "KeywordExtractor"
+        return "Keyword Extractor"
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Processes the input data to extract predefined keywords.
-
-        The method expects the input `data` to be a string. It performs a case-insensitive
-        substring check for each configured keyword.
+        Extracts keywords from the input text data.
 
         Args:
-            data: The input data, expected to be a string containing text to analyze.
-            context: A dictionary containing contextual information for processing.
-                     This node does not currently utilize the context for keyword extraction
-                     but receives it as part of the standard `BaseNode` interface.
+            data: The input text from which keywords need to be extracted.
+                  Expected to be a string.
+            context: A dictionary containing contextual information relevant
+                     to the current orchestration run. Not directly used
+                     for keyword extraction logic in this basic version.
 
         Returns:
-            A sorted list of unique keywords found in the input text. If no keywords
-            are found, an empty list is returned.
+            A list of strings, where each string is an extracted keyword.
+            Returns an empty list if no significant keywords are found or
+            if the input is an empty string.
 
         Raises:
-            ValueError: If the input 'data' is not a string, indicating an invalid
-                        input type for this node's operation.
+            ValueError: If the input `data` is not a string.
         """
         if not isinstance(data, str):
             error_msg = (
-                f"Invalid input data type for '{self.node_name}'. Expected 'str', "
-                f"but received '{type(data).__name__}'. Data: {data}"
+                f"{self.node_name} expects input data of type 'str', "
+                f"but received {type(data).__name__}. Aborting keyword extraction."
             )
             logger.error(error_msg)
             raise ValueError(error_msg)
 
+        # Handle empty or whitespace-only strings gracefully
+        if not data.strip():
+            logger.info(
+                f"{self.node_name} received an empty or whitespace-only string. "
+                "Returning an empty list of keywords."
+            )
+            return []
+
+        # --- Simulate keyword extraction logic ---
+        # For a production-grade system, this would typically involve:
+        # - Advanced NLP libraries (e.g., NLTK, spaCy)
+        # - LLM calls for sophisticated keyword generation
+        # - Domain-specific dictionaries or models
+
         text_lower = data.lower()
-        extracted_keywords: Set[str] = set()
+        # Basic tokenization: split by spaces
+        raw_words = text_lower.split()
 
-        for keyword in self._keywords_to_extract:
-            # Perform a simple substring presence check.
-            # For robust keyword extraction, this would typically involve
-            # NLP libraries (e.g., NLTK, spaCy) for tokenization,
-            # lemmatization, and more sophisticated matching.
-            if keyword in text_lower:
-                extracted_keywords.add(keyword)
-        
-        found_count = len(extracted_keywords)
-        if found_count > 0:
-            logger.info(f"Node '{self.node_name}' successfully processed data. Found {found_count} keywords.")
-            logger.debug(f"Extracted keywords: {sorted(list(extracted_keywords))}")
-        else:
-            logger.info(f"Node '{self.node_name}' processed data but found no matching keywords.")
+        # Simple list of common English stop words and minimum word length filter
+        stop_words = {
+            "a", "an", "the", "is", "am", "are", "was", "were", "be", "been", "being",
+            "and", "or", "but", "if", "then", "else", "when", "where", "why", "how",
+            "for", "with", "at", "by", "from", "into", "of", "on", "to", "up", "down",
+            "in", "out", "off", "over", "under", "again", "further", "then", "once",
+            "here", "there", "all", "any", "both", "each", "few", "more", "most",
+            "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so",
+            "than", "too", "very", "s", "t", "can", "will", "just", "don", "should", "now"
+        }
+        min_keyword_length = 3  # Minimum length for a word to be considered a keyword
 
-        return sorted(list(extracted_keywords))
+        extracted_keywords = []
+        seen_keywords = set() # To ensure unique keywords
+
+        for word in raw_words:
+            # Strip common punctuation from the beginning and end of the word
+            cleaned_word = word.strip('.,!?;:\"\'()[]{}<>*-+/=_`~@#$%^&|\\')
+
+            if cleaned_word and cleaned_word not in stop_words and len(cleaned_word) >= min_keyword_length:
+                if cleaned_word not in seen_keywords:
+                    extracted_keywords.append(cleaned_word)
+                    seen_keywords.add(cleaned_word)
+
+        logger.debug(
+            f"{self.node_name} successfully processed data. "
+            f"Extracted {len(extracted_keywords)} keywords: {extracted_keywords}"
+        )
+        return extracted_keywords
