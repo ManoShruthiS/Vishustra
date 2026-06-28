@@ -1,123 +1,129 @@
-import logging
 import re
+import logging
 from typing import Any, Dict, List, Tuple
 
+# Assuming the base_node is located as per project context
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class PIIRedactorNode(BaseNode):
     """
-    A Vishustra processing node designed to identify and redact personally
-    identifiable information (PII) from string data.
+    A Vishustra processing node responsible for redacting Personally Identifiable
+    Information (PII) from input data. It provides a configurable mechanism
+    to identify and replace sensitive data patterns within strings, and
+    recursively processes string values within dictionaries and lists.
 
-    This node simulates PII detection and replacement with a specified
-    redaction string. It's configurable with custom PII patterns and
-    provides robust logging for detected and redacted items.
+    Current default redaction patterns target common PII types such as:
+    - Email addresses
+    - US Phone numbers (various formats)
+    - US Social Security Numbers (SSN-like patterns)
     """
 
-    def __init__(self, redaction_char: str = "[REDACTED]", pii_patterns: List[Tuple[str, str]] = None):
-        """
-        Initializes the PIIRedactorNode.
+    # Pre-compiled regex patterns for efficiency and their corresponding replacements.
+    # The order of patterns might matter for overlapping definitions.
+    _REDACTION_PATTERNS: List[Tuple[re.Pattern, str]] = [
+        # Email addresses (e.g., user@example.com)
+        (re.compile(r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b", re.IGNORECASE), "[EMAIL_REDACTED]"),
+        # US Phone numbers (e.g., 123-456-7890, (123) 456-7890, 123.456.7890)
+        (re.compile(r"\b(?:\d{3}[-.\s]?|\(\d{3}\)\s?)\d{3}[-.\s]?\d{4}\b"), "[PHONE_REDACTED]"),
+        # US Social Security Number (e.g., XXX-XX-XXXX)
+        (re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "[SSN_REDACTED]"),
+        # Generic phrases that might indicate PII, like "My name is John Doe"
+        # For a production system, more sophisticated NLP or entity recognition
+        # would be used for names, addresses, etc. This is a basic example.
+        (re.compile(r"my name is ([A-Z][a-z]+(?: [A-Z][a-z]+)?)", re.IGNORECASE), "my name is [NAME_REDACTED]"),
+    ]
 
-        Args:
-            redaction_char (str): The string used to replace detected PII.
-                                  Defaults to "[REDACTED]".
-            pii_patterns (List[Tuple[str, str]], optional): A list of tuples, where each tuple
-                                                            contains (regex_pattern_string, pii_type_name).
-                                                            If None, a default set of common PII patterns is used.
+    def __init__(self):
         """
-        self._redaction_char = redaction_char
-        if pii_patterns is None:
-            # Default, simple patterns for simulating PII detection.
-            # In a production system, these patterns would be much more sophisticated,
-            # potentially leveraging NLP libraries (e.g., spaCy, Presidio) for
-            # named entity recognition and advanced PII detection.
-            self._pii_patterns = [
-                (r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', 'Email Address'),
-                (r'\b(?:\d{3}[-.\s]?\d{3}[-.\s]?\d{4}|\(\d{3}\)\s*\d{3}-\d{4})\b', 'Phone Number'),
-                (r'\b\d{3}[-.\s]?\d{2}[-.\s]?\d{4}\b', 'Social Security Number (SSN)'),
-                # More complex patterns for credit cards or names might be added here,
-                # but require careful balancing to avoid false positives.
-            ]
-        else:
-            if not all(isinstance(p, tuple) and len(p) == 2 and isinstance(p[0], str) and isinstance(p[1], str) for p in pii_patterns):
-                raise ValueError("pii_patterns must be a list of (regex_pattern_string, pii_type_name) tuples.")
-            self._pii_patterns = pii_patterns
-        
-        # Compile regex patterns for efficiency during processing
-        self._compiled_patterns = [(re.compile(pattern), pii_type) for pattern, pii_type in self._pii_patterns]
-        logger.info("Node '%s' initialized with %d PII patterns.", self.node_name, len(self._compiled_patterns))
-
+        Initializes the PII Redactor Node.
+        """
+        logger.debug(f"[{self.node_name}] Initializing PII Redactor Node.")
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
-        return "PIIRedactor"
+        """Returns the descriptive name of this node."""
+        return "PII Redactor Node"
+
+    def _redact_string(self, text: str) -> str:
+        """
+        Applies all defined redaction patterns to a given string.
+
+        Args:
+            text: The input string to be redacted.
+
+        Returns:
+            The string with all identified PII patterns replaced by their
+            respective redaction placeholders.
+        """
+        original_text = text
+        for pattern, replacement in self._REDACTION_PATTERNS:
+            text = pattern.sub(replacement, text)
+
+        if original_text != text:
+            logger.debug(f"[{self.node_name}] Redaction applied to a string. Original length: {len(original_text)}, New length: {len(text)}")
+        return text
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
         Processes the input data to identify and redact PII.
 
-        If the input `data` is a string, it iterates through configured PII patterns,
-        detects matches, and replaces them with the `redaction_char`.
-        For other data types, it logs a warning and returns the data unchanged,
-        as PII redaction is primarily applicable to textual content.
+        This method supports:
+        - Direct string input: Redacts PII within the string.
+        - Dictionary input: Recursively redacts PII within string values
+          and within nested dictionaries/lists.
+        - List input: Iterates through the list, recursively processing
+          string or dictionary items.
 
         Args:
-            data (Any): The input data to be processed. Expected to be a string
-                        containing text potentially with PII.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                     for the processing pipeline. This node does
-                                     not currently use the context for its core logic.
+            data: The input data payload. Expected to be a string,
+                  dictionary, or a list containing strings/dictionaries.
+            context: A dictionary containing contextual information
+                     relevant to the current processing pipeline.
+                     While not directly used for configuration in this
+                     basic implementation, it can be extended to pass
+                     custom redaction rules or flags in advanced scenarios.
 
         Returns:
-            Any: The data with PII redacted if it was a string, otherwise the
-                 original data is returned untouched.
+            The processed data with PII redacted. The structure of the
+            data is preserved.
+
+        Raises:
+            TypeError: If the input data type is not supported for redaction.
         """
-        if not isinstance(data, str):
-            logger.warning(
-                "Node '%s': Input data is not a string (type: %s). PII redaction will be skipped.",
-                self.node_name,
-                type(data).__name__
-            )
-            return data
+        logger.info(f"[{self.node_name}] Starting PII redaction process for input data type: {type(data)}.")
 
-        redacted_data = data
-        total_redaction_count = 0
-        
-        logger.info("Node '%s': Starting PII redaction process.", self.node_name)
-
-        for pattern, pii_type in self._compiled_patterns:
-            try:
-                # Find all occurrences to log them for debugging/auditing before redaction
-                found_matches = pattern.findall(redacted_data)
-                if found_matches:
-                    logger.debug(
-                        "Node '%s': Detected %d occurrence(s) of '%s' PII type. Examples: %s",
-                        self.node_name,
-                        len(found_matches),
-                        pii_type,
-                        ', '.join([repr(m) for m in found_matches[:3]]) + ('...' if len(found_matches) > 3 else '')
-                    )
-                    
-                    # Replace with the configured redaction character
-                    redacted_data = pattern.sub(self._redaction_char, redacted_data)
-                    total_redaction_count += len(found_matches)
-            except Exception as e:
-                logger.error(
-                    "Node '%s': An error occurred while processing PII type '%s' with pattern '%s': %s",
-                    self.node_name, pii_type, pattern.pattern, e
-                )
-                # Decide whether to re-raise or continue. For PII, continuing with other patterns is generally safer.
-                
-        if total_redaction_count > 0:
-            logger.info(
-                "Node '%s': Completed PII redaction. %d PII item(s) redacted.",
-                self.node_name,
-                total_redaction_count
-            )
+        if isinstance(data, str):
+            redacted_data = self._redact_string(data)
+            logger.debug(f"[{self.node_name}] Processed string data.")
+            return redacted_data
+        elif isinstance(data, dict):
+            redacted_dict = {}
+            for key, value in data.items():
+                # Recursively process values that could contain PII
+                if isinstance(value, (str, dict, list)):
+                    logger.debug(f"[{self.node_name}] Recursing into dictionary key '{key}'.")
+                    redacted_dict[key] = self.process(value, context)
+                else:
+                    redacted_dict[key] = value # Preserve non-string/dict/list values
+            logger.debug(f"[{self.node_name}] Processed dictionary data.")
+            return redacted_dict
+        elif isinstance(data, list):
+            redacted_list = []
+            for index, item in enumerate(data):
+                # Recursively process list items that could contain PII
+                if isinstance(item, (str, dict, list)):
+                    logger.debug(f"[{self.node_name}] Recursing into list item at index {index}.")
+                    redacted_list.append(self.process(item, context))
+                else:
+                    redacted_list.append(item) # Preserve non-string/dict/list items
+            logger.debug(f"[{self.node_name}] Processed list data.")
+            return redacted_list
         else:
-            logger.info("Node '%s': No PII detected or redacted.", self.node_name)
-
-        return redacted_data
+            error_msg = (
+                f"[{self.node_name}] Unsupported data type for PII redaction: {type(data)}. "
+                "Expected str, dict, or list of str/dict."
+            )
+            logger.error(error_msg)
+            raise TypeError(error_msg)
