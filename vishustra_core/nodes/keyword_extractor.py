@@ -1,148 +1,79 @@
 import logging
 import re
-from typing import Any, Dict, List, Set, Union
+from typing import Any, Dict, List, Set
 
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-# A small, configurable set of common English words to exclude for basic keyword extraction.
-# In a production NLP scenario, this would be a much larger, language-specific list,
-# potentially from a dedicated library like NLTK or spaCy.
-_DEFAULT_COMMON_WORDS: Set[str] = {
-    "the", "a", "an", "is", "of", "and", "in", "to", "it", "that", "on", "with", "for",
-    "as", "by", "at", "from", "he", "she", "they", "we", "you", "i", "was", "were", "be",
-    "has", "had", "do", "does", "did", "this", "that", "these", "those", "have", "not",
-    "but", "or", "which", "when", "where", "how", "what", "who", "why", "then", "than",
-    "there", "here", "them", "us", "me", "him", "her", "my", "your", "his", "their", "our",
-    "its", "would", "could", "should", "will", "can", "may", "much", "more", "most", "also",
-    "up", "down", "out", "about", "into", "over", "under", "all", "any", "some", "such",
-    "no", "only", "very", "just", "so", "too", "new", "old", "good", "bad", "great",
-    "many", "few", "other", "another", "first", "last", "long", "short", "even", "back",
-    "well", "get", "go", "say", "see", "make", "take", "come", "know", "think", "look",
-    "want", "give", "use", "find", "tell", "ask", "work", "seem", "feel", "try", "leave",
-    "call", "need", "start", "run", "keep", "put", "mean", "begin", "show", "hear", "play",
-    "talk", "read", "write", "move", "like", "love", "hate", "full", "empty", "high", "low",
-    "through", "against", "between", "among", "without", "before", "after", "above", "below"
-}
-
-
-class KeywordExtractorNode(BaseNode):
+class KeywordExtractor(BaseNode):
     """
-    A Vishustra processing node that extracts keywords from text data.
-
-    This node takes a string as input, processes it by tokenizing, filtering
-    based on length and common words, and returns a list of unique keywords.
-    It's designed for demonstration and basic functionality within the framework,
-    simulating keyword extraction without external NLP libraries.
+    A Vishustra processing node that extracts keywords from input text.
+    It performs basic tokenization, stop-word removal, and minimum length
+    filtering to identify relevant terms.
     """
-
-    def __init__(
-        self,
-        max_keywords: int = 5,
-        min_word_length: int = 3,
-        exclude_common_words: bool = True,
-        custom_common_words: Union[Set[str], List[str], None] = None
-    ):
-        """
-        Initializes the KeywordExtractorNode.
-
-        Args:
-            max_keywords: The maximum number of keywords to return. Must be a positive integer.
-            min_word_length: The minimum length a word must have to be considered a keyword.
-                             Must be a positive integer.
-            exclude_common_words: If True, common English stop words will be excluded.
-            custom_common_words: An optional set or list of additional words to exclude.
-                                 These will be converted to lowercase and added to the
-                                 default common words if `exclude_common_words` is True.
-        """
-        if not isinstance(max_keywords, int) or max_keywords <= 0:
-            raise ValueError(f"max_keywords must be a positive integer, got {max_keywords}")
-        if not isinstance(min_word_length, int) or min_word_length <= 0:
-            raise ValueError(f"min_word_length must be a positive integer, got {min_word_length}")
-        if custom_common_words is not None and not isinstance(custom_common_words, (set, list)):
-            raise TypeError("custom_common_words must be a set or list of strings, or None.")
-
-        self._max_keywords = max_keywords
-        self._min_word_length = min_word_length
-        self._exclude_common_words = exclude_common_words
-
-        self._common_words = set()
-        if self._exclude_common_words:
-            self._common_words.update(_DEFAULT_COMMON_WORDS)
-            if custom_common_words:
-                # Ensure custom words are also lowercased for consistent comparison
-                self._common_words.update(word.lower() for word in custom_common_words if isinstance(word, str))
-
-        logger.debug(
-            f"KeywordExtractorNode initialized: max_keywords={self._max_keywords}, "
-            f"min_word_length={self._min_word_length}, "
-            f"exclude_common_words={self._exclude_common_words}. "
-            f"Total common words for exclusion: {len(self._common_words) if self._exclude_common_words else 0}."
-        )
 
     @property
     def node_name(self) -> str:
         """Returns the descriptive name of the node."""
-        return "KeywordExtractor"
+        return "Keyword Extractor"
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Extracts keywords from the input text data based on configured rules.
+        Processes the input data to extract keywords.
+
+        The `data` is expected to be a string.
+        The `context` dictionary can optionally provide:
+        - 'stop_words' (Set[str]): A set of words to ignore during extraction.
+          Defaults to a small common set if not provided.
+        - 'min_word_length' (int): Minimum length for a word to be considered a keyword.
+          Defaults to 3.
+        - 'max_keywords' (int | None): Maximum number of keywords to return.
+          If None, all extracted keywords are returned.
 
         Args:
-            data: The input text as a string from which to extract keywords.
-            context: A dictionary containing contextual information, not directly used by this node.
+            data: The input text (string) from which to extract keywords.
+            context: A dictionary containing runtime parameters for the node.
 
         Returns:
-            A list of unique keywords extracted from the text, sorted by length (descending)
-            and then alphabetically (ascending), limited by `max_keywords`.
+            A sorted list of unique extracted keywords (strings).
 
         Raises:
             TypeError: If the input 'data' is not a string.
         """
         if not isinstance(data, str):
-            error_msg = (
-                f"KeywordExtractorNode expects string input for 'data', "
-                f"but received type: {type(data).__name__}."
+            logger.error(
+                f"Invalid input type for KeywordExtractor. Expected 'str', "
+                f"but received '{type(data).__name__}'."
             )
-            logger.error(error_msg)
-            raise TypeError(error_msg)
-
-        if not data.strip():
-            logger.info("Received empty or whitespace-only string; returning an empty list of keywords.")
-            return []
+            raise TypeError("KeywordExtractor expects 'data' to be a string.")
 
         text = data.lower()
-        # Use regex to find all sequences of word characters. This helps normalize punctuation.
+
+        # Retrieve configuration from context or use defaults
+        default_stop_words = {
+            'a', 'an', 'the', 'is', 'of', 'and', 'in', 'for', 'to', 'with', 'on',
+            'it', 'that', 'this', 'was', 'as', 'at', 'by', 'be', 'has', 'had'
+        }
+        stop_words: Set[str] = context.get('stop_words', default_stop_words)
+        min_word_length: int = context.get('min_word_length', 3)
+        max_keywords: int | None = context.get('max_keywords', None)
+
+        # Simple tokenization: find all sequences of word characters
         words = re.findall(r'\b\w+\b', text)
 
-        candidate_keywords: List[str] = []
+        extracted_keywords: Set[str] = set()
         for word in words:
-            # Filter by minimum length
-            if len(word) < self._min_word_length:
-                logger.debug(f"Skipping word '{word}' (length {len(word)} < {self._min_word_length}).")
-                continue
+            if word not in stop_words and len(word) >= min_word_length:
+                extracted_keywords.add(word)
 
-            # Filter out common words if configured
-            if self._exclude_common_words and word in self._common_words:
-                logger.debug(f"Skipping common word '{word}'.")
-                continue
+        # Convert to list and sort for consistent output
+        result_keywords = sorted(list(extracted_keywords))
 
-            candidate_keywords.append(word)
+        # Apply max_keywords limit if specified
+        if max_keywords is not None and len(result_keywords) > max_keywords:
+            result_keywords = result_keywords[:max_keywords]
+            logger.debug(f"Truncated keywords to {max_keywords} as per context.")
 
-        # Remove duplicates and sort by length (descending) then alphabetically (ascending)
-        unique_keywords = sorted(
-            list(set(candidate_keywords)),
-            key=lambda k: (-len(k), k)
-        )
-
-        # Truncate the list to the maximum number of keywords
-        final_keywords = unique_keywords[:self._max_keywords]
-
-        logger.info(
-            f"Successfully extracted {len(final_keywords)} keywords from input text "
-            f"(original length: {len(data)} characters). Keywords: {final_keywords}"
-        )
-
-        return final_keywords
+        logger.info(f"Successfully extracted {len(result_keywords)} keywords.")
+        return result_keywords
