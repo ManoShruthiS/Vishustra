@@ -1,115 +1,107 @@
-import logging
-from typing import Any, Dict, Optional
-
 from vishustra_core.nodes.base_node import BaseNode
+from typing import Any, Dict, Optional
+import logging
 
 logger = logging.getLogger(__name__)
 
 class CacheManagerNode(BaseNode):
     """
-    A Vishustra node responsible for managing an in-memory cache.
+    A processing node that acts as an in-memory cache manager.
+    It supports 'get', 'set', 'delete', and 'clear_all' operations on cached data.
 
-    It supports 'get', 'set', and 'evict' operations on cached data.
-    The cache is internal to the node instance, allowing for dedicated cache
-    management within a specific orchestration flow.
+    Operations are specified via the 'operation' key in the context dictionary.
 
-    Input 'data' to the process method should be a dictionary with:
-    - "operation" (str): 'get', 'set', or 'evict'.
-    - "key" (Any): The key to identify the data in the cache.
-    - "value" (Any, optional): The value to store for 'set' operations.
-
-    Returns a dictionary indicating the outcome of the operation, e.g.:
-    - For 'get': {"status": "hit"|"miss", "key": ..., "value": ...}
-    - For 'set': {"status": "success", "operation": "set", "key": ..., "value": ...}
-    - For 'evict': {"status": "success"|"not_found", "operation": "evict", "key": ..., "value": ...}
-    - For errors: {"status": "error"|"failure", "message": ...}
+    - 'get': Retrieves data associated with 'data' (key). Returns the value or None.
+    - 'set': Stores 'context['value']' associated with 'data' (key). Returns the stored value.
+    - 'delete': Removes the entry for 'data' (key). Returns True if deleted, False if not found.
+    - 'clear_all': Clears all entries from the cache. Returns True.
     """
 
     _cache: Dict[Any, Any]
 
     def __init__(self, initial_cache: Optional[Dict[Any, Any]] = None):
         """
-        Initializes the CacheManagerNode with an optional pre-populated cache.
+        Initializes the CacheManagerNode.
 
         Args:
-            initial_cache (Optional[Dict[Any, Any]]): A dictionary to
-                                                       initialize the cache with.
+            initial_cache (Optional[Dict[Any, Any]]): An optional dictionary
+                                                       to pre-populate the cache.
         """
         self._cache = initial_cache if initial_cache is not None else {}
-        logger.debug(f"{self.node_name} initialized with {len(self._cache)} initial items.")
+        logger.info(f"[{self.node_name}] Initialized with {len(self._cache)} pre-existing entries.")
 
     @property
     def node_name(self) -> str:
         """Returns the name of the node."""
-        return "CacheManagerNode"
+        return "CacheManager"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the cache operation based on the input data.
+        Processes the input data, performing cache operations based on the context.
 
         Args:
-            data (Any): A dictionary containing 'operation', 'key', and optionally 'value'.
-            context (Dict[str, Any]): A dictionary containing contextual information.
-                                     (Not directly used by this node's logic but part of signature).
+            data (Any): The primary input for the cache operation, typically the key.
+            context (Dict[str, Any]): A dictionary containing operational parameters.
+                Expected keys in context:
+                - 'operation' (str): The cache operation to perform ('get', 'set', 'delete', 'clear_all').
+                                     Defaults to 'get'.
+                - 'value' (Any, for 'set' operation): The value to store in the cache.
 
         Returns:
-            Dict[str, Any]: A dictionary detailing the result of the cache operation.
+            Any: The result of the cache operation:
+                 - For 'get': The cached value or None if not found.
+                 - For 'set': The value that was set.
+                 - For 'delete': True if the key was deleted, False if not found.
+                 - For 'clear_all': True.
 
         Raises:
-            TypeError: If the input 'data' is not a dictionary.
-            ValueError: If required keys like 'operation' or 'key' are missing/invalid.
+            ValueError: If an invalid key type is provided, an unknown operation is requested,
+                        or 'set' operation is called without a 'value' in context.
         """
-        if not isinstance(data, dict):
-            logger.error(f"{self.node_name}: Input 'data' must be a dictionary. Received: {type(data)}")
-            raise TypeError("Input 'data' for CacheManagerNode must be a dictionary.")
+        operation = context.get('operation', 'get').lower()
 
-        operation = data.get("operation")
-        key = data.get("key")
-        value = data.get("value")
+        if operation != 'clear_all':
+            # Keys must be hashable for dictionary operations
+            if not isinstance(data, (str, int, float, bool, tuple, frozenset)) and data is not None:
+                logger.error(f"[{self.node_name}] Invalid cache key type: {type(data)}. Key must be hashable.")
+                raise ValueError(f"Cache key must be hashable. Received type: {type(data)}")
+            key = data
+        else:
+            key = None # Key is irrelevant for 'clear_all'
 
-        if not operation or not isinstance(operation, str):
-            logger.error(f"{self.node_name}: Missing or invalid 'operation' in data: {data}")
-            raise ValueError("Operation 'data[\"operation\"]' is required and must be a string.")
-
-        # Key is required for all supported operations. Value is only for 'set'.
-        if operation in ["get", "set", "evict"] and key is None:
-            logger.error(f"{self.node_name}: Missing 'key' for operation '{operation}' in data: {data}")
-            raise ValueError(f"Key 'data[\"key\"]' is required for operation '{operation}'.")
-
-        result: Dict[str, Any] = {"status": "failure", "message": "Unknown error."}
-
-        try:
-            if operation == "get":
-                if key in self._cache:
-                    cached_value = self._cache[key]
-                    logger.debug(f"{self.node_name}: Cache HIT for key '{key}'.")
-                    result = {"status": "hit", "key": key, "value": cached_value}
-                else:
-                    logger.debug(f"{self.node_name}: Cache MISS for key '{key}'.")
-                    result = {"status": "miss", "key": key, "value": None}
-            elif operation == "set":
-                if value is None:
-                    logger.error(f"{self.node_name}: Missing 'value' for 'set' operation for key '{key}'.")
-                    raise ValueError("Value 'data[\"value\"]' is required for 'set' operation.")
-                self._cache[key] = value
-                logger.info(f"{self.node_name}: Set cache for key '{key}'.")
-                result = {"status": "success", "operation": "set", "key": key, "value": value}
-            elif operation == "evict":
-                if key in self._cache:
-                    evicted_value = self._cache.pop(key)
-                    logger.info(f"{self.node_name}: Evicted key '{key}' from cache.")
-                    result = {"status": "success", "operation": "evict", "key": key, "value": evicted_value}
-                else:
-                    logger.warning(f"{self.node_name}: Attempted to evict non-existent key '{key}'.")
-                    result = {"status": "not_found", "operation": "evict", "key": key, "value": None}
+        if operation == 'get':
+            if key in self._cache:
+                logger.debug(f"[{self.node_name}] Cache hit for key: '{key}'")
+                return self._cache[key]
             else:
-                logger.warning(f"{self.node_name}: Unsupported operation: '{operation}'.")
-                result = {"status": "failure", "message": f"Unsupported operation: '{operation}'."}
-        except Exception as e:
-            logger.error(
-                f"{self.node_name}: An unexpected error occurred during operation '{operation}' "
-                f"for key '{key}': {e}", exc_info=True
-            )
-            result = {"status": "error", "message": str(e)}
+                logger.info(f"[{self.node_name}] Cache miss for key: '{key}'")
+                return None
 
-        return result
+        elif operation == 'set':
+            value = context.get('value')
+            if value is None:
+                logger.error(f"[{self.node_name}] 'set' operation requires a 'value' in context for key: '{key}'")
+                raise ValueError("Context missing 'value' for 'set' operation.")
+            
+            self._cache[key] = value
+            logger.info(f"[{self.node_name}] Cache set for key: '{key}'")
+            return value
+
+        elif operation == 'delete':
+            if key in self._cache:
+                del self._cache[key]
+                logger.info(f"[{self.node_name}] Cache deleted key: '{key}'")
+                return True
+            else:
+                logger.warning(f"[{self.node_name}] Attempted to delete non-existent key: '{key}'")
+                return False
+
+        elif operation == 'clear_all':
+            self._cache.clear()
+            logger.info(f"[{self.node_name}] All cache entries cleared.")
+            return True
+
+        else:
+            logger.error(f"[{self.node_name}] Unknown cache operation: '{operation}'")
+            raise ValueError(f"Unknown cache operation: '{operation}'")
+
