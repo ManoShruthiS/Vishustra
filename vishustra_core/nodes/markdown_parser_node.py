@@ -1,23 +1,16 @@
 import logging
+import re
 from typing import Any, Dict
 
-# Assuming 'vishustra_core.nodes.base_node' provides BaseNode
-# For local development/testing, you might need to ensure this path is resolvable
-# or temporarily create a dummy 'vishustra_core' structure.
 from vishustra_core.nodes.base_node import BaseNode
 
-# External dependency for Markdown parsing.
-# This assumes 'markdown' library is installed (e.g., pip install markdown).
-import markdown
-
-# Configure a logger for this module.
 logger = logging.getLogger(__name__)
-
 
 class MarkdownParserNode(BaseNode):
     """
-    A Vishustra processing node that parses Markdown formatted text
-    and converts it into HTML.
+    A Vishustra processing node responsible for parsing markdown text and
+    transforming it into HTML format. This node simulates the core conversion
+    logic, applying common markdown-to-HTML rules.
     """
 
     @property
@@ -27,40 +20,53 @@ class MarkdownParserNode(BaseNode):
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, expecting a Markdown string,
-        and returns its HTML representation.
+        Processes the input data, converting markdown strings into HTML.
+        This method includes basic transformations for common markdown elements
+        like bold and italic text, and wraps the content in a paragraph tag
+        if it's not already structured.
 
         Args:
-            data (Any): The input data, expected to be a string containing Markdown.
-            context (Dict[str, Any]): A dictionary containing runtime context
-                                       information (unused by this node currently).
+            data: The input data, expected to be a string containing markdown text.
+            context: A dictionary containing contextual information relevant to the
+                     processing task (currently unused by this specific node).
 
         Returns:
-            Any: A string containing the HTML representation of the input Markdown.
+            A string representing the HTML output parsed from the markdown.
 
         Raises:
-            TypeError: If the input 'data' is not a string.
-            RuntimeError: If an error occurs during Markdown parsing.
+            ValueError: If the input 'data' is not a string.
+            RuntimeError: If an unexpected error occurs during the markdown parsing
+                          simulation.
         """
-        logger.info(f"Node '{self.node_name}' initiated processing.")
-
         if not isinstance(data, str):
-            error_message = (
-                f"Node '{self.node_name}' received invalid data type. "
-                f"Expected 'str' for Markdown content, but got '{type(data).__name__}'."
+            logger.error(
+                "Invalid input type for MarkdownParserNode. Expected string, but received %s.",
+                type(data).__name__
             )
-            logger.error(error_message)
-            raise TypeError(error_message)
+            raise ValueError(
+                f"MarkdownParserNode expects string data, but received type {type(data).__name__}"
+            )
 
         try:
-            # Perform the Markdown to HTML conversion.
-            # The 'context' could potentially be used to pass Markdown extensions,
-            # but for a foundational node, a basic conversion is sufficient.
-            html_output = markdown.markdown(data)
-            logger.info(f"Node '{self.node_name}' successfully parsed Markdown content.")
-            return html_output
+            # Simulate markdown parsing. In a production environment,
+            # this would typically involve an external markdown library
+            # (e.g., `markdown`, `mistune`, `commonmark`).
+            # For this node, we'll apply some basic regex-based transformations.
+
+            # Convert bold text: **text** -> <strong>text</strong>
+            processed_html = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', data)
+            # Convert italic text: *text* -> <em>text</em>
+            processed_html = re.sub(r'\*(.*?)\*', r'<em>\1</em>', processed_html)
+
+            # Basic paragraph wrapping if the content doesn't appear to be structured HTML already
+            stripped_html = processed_html.strip()
+            if not stripped_html.startswith('<') or not stripped_html.endswith('>'):
+                processed_html = f"<p>{stripped_html}</p>"
+
+            logger.info("Successfully transformed markdown data into HTML format.")
+            return processed_html
         except Exception as e:
-            # Catch any exceptions that might occur during the markdown conversion.
-            error_message = f"Node '{self.node_name}' encountered an error while parsing Markdown: {e}"
-            logger.exception(error_message)  # Log the exception with traceback
-            raise RuntimeError(error_message) from e
+            logger.exception(
+                "An unexpected error occurred during markdown parsing simulation in MarkdownParserNode."
+            )
+            raise RuntimeError(f"Failed to parse markdown: {e}") from e
