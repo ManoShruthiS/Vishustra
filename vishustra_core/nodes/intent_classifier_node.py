@@ -1,107 +1,103 @@
-
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
-# Assuming vishustra_core.nodes.base_node exists as per project context
+# Assuming this import path based on project context
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class IntentClassifierNode(BaseNode):
     """
-    A Vishustra processing node that simulates intent classification for a given text input.
-
-    This node takes a user query (string) and, based on a set of simple keyword rules,
-    classifies its likely intent. In a production environment, this would integrate
-    with an actual ML model or external NLP service.
+    A processing node designed to classify the intent of a given text input.
+    It uses a predefined set of patterns/keywords to map input text to specific intents.
+    This provides a configurable and modular way to integrate intent recognition
+    into Vishustra workflows.
     """
 
-    def __init__(self):
+    def __init__(self, intents_config: Dict[str, List[str]], default_intent: str = "unclear_intent"):
         """
-        Initializes the IntentClassifierNode.
-        In a real scenario, this might load a pre-trained intent model
-        or configure API clients.
+        Initializes the IntentClassifierNode with a configuration for intent classification.
+
+        Args:
+            intents_config: A dictionary where keys are intent names (str) and values
+                            are lists of keywords or phrases (str) associated with that intent.
+                            The node will attempt to match these keywords/phrases in the input data.
+                            Matching is case-insensitive.
+            default_intent: The intent to return if no specific intent matches the input data.
+                            Defaults to "unclear_intent".
+
+        Raises:
+            TypeError: If `intents_config` or its elements, or `default_intent` are not of the
+                       expected types.
         """
-        logger.debug("IntentClassifierNode initialized.")
+        if not isinstance(intents_config, dict):
+            raise TypeError("The 'intents_config' parameter must be a dictionary.")
+        
+        processed_config: Dict[str, List[str]] = {}
+        for intent_name, patterns in intents_config.items():
+            if not isinstance(intent_name, str):
+                raise TypeError(f"Intent name '{intent_name}' in 'intents_config' must be a string.")
+            if not isinstance(patterns, list):
+                raise TypeError(f"Patterns for intent '{intent_name}' must be a list of strings.")
+            if not all(isinstance(p, str) for p in patterns):
+                raise TypeError(f"All patterns within the list for intent '{intent_name}' must be strings.")
+            
+            processed_config[intent_name.lower()] = [p.lower() for p in patterns]
+
+        if not isinstance(default_intent, str):
+            raise TypeError("The 'default_intent' parameter must be a string.")
+
+        self._intents_config = processed_config
+        self._default_intent = default_intent.lower()
+        logger.debug(f"IntentClassifierNode initialized with {len(self._intents_config)} intents.")
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of this node.
-        """
+        """Returns the programmatic name of the node."""
         return "IntentClassifierNode"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
+    def process(self, data: Any, context: Dict[str, Any]) -> str:
         """
-        Processes the input data to classify its intent.
+        Processes the input data to identify its intent based on configured patterns.
 
-        Expects `data` to be a string representing a user query.
-        Uses a simple keyword-based approach for demonstration.
+        The method expects the input `data` to be a string representing an utterance
+        or query. It performs a case-insensitive keyword match against the
+        `intents_config` provided during initialization.
 
         Args:
-            data (Any): The input data to be processed, expected to be a string.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                       relevant to the processing.
+            data: The input text (expected to be a string) for intent classification.
+            context: A dictionary containing contextual information. While not
+                     directly used in this basic implementation, it is available
+                     for more complex future enhancements.
 
         Returns:
-            Dict[str, Any]: A dictionary containing the detected intent, confidence,
-                            and the original query.
+            The identified intent as a string. Returns `self._default_intent` if no
+            specific intent matches the input data.
 
         Raises:
-            TypeError: If the input `data` is not a string.
-            ValueError: If `data` is an empty string after stripping whitespace.
+            ValueError: If the input `data` is not a string, indicating an
+                        unsupported input type for this node.
         """
-        logger.info(f"[{self.node_name}] Starting intent classification.")
-        logger.debug(f"[{self.node_name}] Received context: {context}")
-
         if not isinstance(data, str):
-            error_msg = (
-                f"[{self.node_name}] Invalid input data type. "
-                f"Expected string, but received {type(data).__name__}."
+            logger.error(f"IntentClassifierNode received invalid data type. Expected 'str', got '{type(data).__name__}'.")
+            raise ValueError(
+                f"IntentClassifierNode expects string input for data. Received type: {type(data).__name__}"
             )
-            logger.error(error_msg)
-            raise TypeError(error_msg)
 
-        user_query = data.strip()
-        if not user_query:
-            error_msg = f"[{self.node_name}] Received an empty query after stripping whitespace."
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+        text_lower = data.lower()
+        matched_intent: Optional[str] = None
 
-        # Normalize for case-insensitive matching
-        lower_query = user_query.lower()
+        for intent, patterns in self._intents_config.items():
+            for pattern in patterns:
+                if pattern in text_lower:
+                    matched_intent = intent
+                    break  # Found a pattern for this intent
+            if matched_intent:
+                break  # Found an intent, no need to check further
 
-        detected_intent = "general_inquiry"
-        confidence = 0.5  # Default low confidence
-
-        # Simple keyword-based intent detection
-        if any(keyword in lower_query for keyword in ["order", "delivery", "shipment", "track"]):
-            detected_intent = "order_management"
-            confidence = 0.95
-        elif any(keyword in lower_query for keyword in ["support", "help", "issue", "problem", "contact us"]):
-            detected_intent = "customer_support"
-            confidence = 0.90
-        elif any(keyword in lower_query for keyword in ["account", "profile", "settings", "login", "password"]):
-            detected_intent = "account_management"
-            confidence = 0.85
-        elif any(keyword in lower_query for keyword in ["price", "cost", "features", "product", "buy"]):
-            detected_intent = "product_inquiry"
-            confidence = 0.80
-        elif any(keyword in lower_query for keyword in ["weather", "time", "news"]):
-            detected_intent = "informational"
-            confidence = 0.75
-
-        result = {
-            "original_query": user_query,
-            "detected_intent": detected_intent,
-            "confidence": confidence,
-            "node_processed_by": self.node_name,
-        }
-
-        logger.info(
-            f"[{self.node_name}] Classified intent: '{detected_intent}' "
-            f"(Confidence: {confidence:.2f}) for query: '{user_query[:70]}{'...' if len(user_query) > 70 else ''}'"
-        )
-        logger.debug(f"[{self.node_name}] Returning result: {result}")
-        return result
-
+        if matched_intent:
+            logger.info(f"Classified intent for input '{data[:75]}...' as '{matched_intent}'.")
+            return matched_intent
+        else:
+            logger.info(f"No specific intent matched for input '{data[:75]}...'. Defaulting to '{self._default_intent}'.")
+            return self._default_intent
