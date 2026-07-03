@@ -1,103 +1,75 @@
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
-# Assuming this import path based on project context
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class IntentClassifierNode(BaseNode):
     """
-    A processing node designed to classify the intent of a given text input.
-    It uses a predefined set of patterns/keywords to map input text to specific intents.
-    This provides a configurable and modular way to integrate intent recognition
-    into Vishustra workflows.
+    A processing node that classifies the intent of a given text input.
+
+    This node simulates intent classification based on simple keyword matching.
+    In a production environment, this would typically integrate with
+    a machine learning model (e.g., an NLU service, a fine-tuned transformer).
     """
-
-    def __init__(self, intents_config: Dict[str, List[str]], default_intent: str = "unclear_intent"):
-        """
-        Initializes the IntentClassifierNode with a configuration for intent classification.
-
-        Args:
-            intents_config: A dictionary where keys are intent names (str) and values
-                            are lists of keywords or phrases (str) associated with that intent.
-                            The node will attempt to match these keywords/phrases in the input data.
-                            Matching is case-insensitive.
-            default_intent: The intent to return if no specific intent matches the input data.
-                            Defaults to "unclear_intent".
-
-        Raises:
-            TypeError: If `intents_config` or its elements, or `default_intent` are not of the
-                       expected types.
-        """
-        if not isinstance(intents_config, dict):
-            raise TypeError("The 'intents_config' parameter must be a dictionary.")
-        
-        processed_config: Dict[str, List[str]] = {}
-        for intent_name, patterns in intents_config.items():
-            if not isinstance(intent_name, str):
-                raise TypeError(f"Intent name '{intent_name}' in 'intents_config' must be a string.")
-            if not isinstance(patterns, list):
-                raise TypeError(f"Patterns for intent '{intent_name}' must be a list of strings.")
-            if not all(isinstance(p, str) for p in patterns):
-                raise TypeError(f"All patterns within the list for intent '{intent_name}' must be strings.")
-            
-            processed_config[intent_name.lower()] = [p.lower() for p in patterns]
-
-        if not isinstance(default_intent, str):
-            raise TypeError("The 'default_intent' parameter must be a string.")
-
-        self._intents_config = processed_config
-        self._default_intent = default_intent.lower()
-        logger.debug(f"IntentClassifierNode initialized with {len(self._intents_config)} intents.")
 
     @property
     def node_name(self) -> str:
-        """Returns the programmatic name of the node."""
-        return "IntentClassifierNode"
+        """Returns the name of the node."""
+        return "IntentClassifier"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> str:
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data to identify its intent based on configured patterns.
+        Processes the input text to determine its underlying intent.
 
-        The method expects the input `data` to be a string representing an utterance
-        or query. It performs a case-insensitive keyword match against the
-        `intents_config` provided during initialization.
+        The `data` input is expected to be a string representing the user's query.
+        The `context` dictionary can optionally contain configuration for the
+        classifier, though for this simulated implementation, it's not strictly
+        necessary for the core logic.
 
         Args:
-            data: The input text (expected to be a string) for intent classification.
-            context: A dictionary containing contextual information. While not
-                     directly used in this basic implementation, it is available
-                     for more complex future enhancements.
+            data (Any): The input data, expected to be a string (user query).
+            context (Dict[str, Any]): A dictionary containing context-specific
+                                       information, potentially including model
+                                       configuration or additional parameters.
 
         Returns:
-            The identified intent as a string. Returns `self._default_intent` if no
-            specific intent matches the input data.
+            Any: A dictionary containing the original text and the classified intent.
+                 Example: {"text": "What's the weather like?", "intent": "get_weather"}
 
         Raises:
-            ValueError: If the input `data` is not a string, indicating an
-                        unsupported input type for this node.
+            TypeError: If the input `data` is not a string.
+            ValueError: If the classification logic encounters an unexpected issue.
         """
         if not isinstance(data, str):
-            logger.error(f"IntentClassifierNode received invalid data type. Expected 'str', got '{type(data).__name__}'.")
-            raise ValueError(
-                f"IntentClassifierNode expects string input for data. Received type: {type(data).__name__}"
-            )
+            logger.error(f"IntentClassifierNode received invalid data type: {type(data)}. Expected str.")
+            raise TypeError(f"IntentClassifierNode expects string input, but received {type(data)}.")
 
-        text_lower = data.lower()
-        matched_intent: Optional[str] = None
+        query = data.lower().strip()
+        classified_intent = "general_query" # Default intent
 
-        for intent, patterns in self._intents_config.items():
-            for pattern in patterns:
-                if pattern in text_lower:
-                    matched_intent = intent
-                    break  # Found a pattern for this intent
-            if matched_intent:
-                break  # Found an intent, no need to check further
+        try:
+            # Simulate intent classification with simple keyword matching
+            if any(keyword in query for keyword in ["book", "reserve", "flight", "ticket", "travel"]):
+                classified_intent = "book_flight"
+            elif any(keyword in query for keyword in ["weather", "forecast", "temperature", "climate"]):
+                classified_intent = "get_weather"
+            elif any(keyword in query for keyword in ["news", "headlines", "article"]):
+                classified_intent = "get_news"
+            elif any(keyword in query for keyword in ["order", "purchase", "buy", "item", "product"]):
+                classified_intent = "place_order"
+            elif any(keyword in query for keyword in ["help", "support", "assist"]):
+                classified_intent = "request_help"
+            
+            # Additional context-based hints could be used here
+            # For example, if context['previous_intent'] was 'book_flight',
+            # a query like 'for tomorrow' could be classified as 'confirm_details_flight'
 
-        if matched_intent:
-            logger.info(f"Classified intent for input '{data[:75]}...' as '{matched_intent}'.")
-            return matched_intent
-        else:
-            logger.info(f"No specific intent matched for input '{data[:75]}...'. Defaulting to '{self._default_intent}'.")
-            return self._default_intent
+            logger.info(f"Classified intent for '{query[:50]}...' as '{classified_intent}'")
+            return {"text": data, "intent": classified_intent}
+
+        except Exception as e:
+            logger.exception(f"An error occurred during intent classification for query '{query[:50]}...': {e}")
+            raise ValueError(f"Failed to classify intent for query: '{query[:50]}...' due to an internal error.") from e
+
