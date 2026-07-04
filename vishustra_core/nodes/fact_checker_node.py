@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, Union
 
 from vishustra_core.nodes.base_node import BaseNode
 
@@ -7,145 +7,109 @@ logger = logging.getLogger(__name__)
 
 class FactCheckerNode(BaseNode):
     """
-    A processing node that simulates fact-checking of input text.
-    It can be configured to use an external API (simulated) or an internal
-    list of known facts provided in the context.
+    A processing node designed to simulate fact-checking a given statement.
+
+    It uses an internal knowledge base to determine the factuality of a statement
+    and provides a confidence score and reason for its determination.
     """
+
+    # Internal knowledge base for demonstration purposes.
+    # In a real-world scenario, this would interface with external fact-checking APIs
+    # or a more sophisticated knowledge graph.
+    _predefined_facts: Dict[str, bool] = {
+        "the earth is flat": False,
+        "water boils at 100 degrees celsius at sea level": True,
+        "the sun rises in the west": False,
+        "python is a programming language": True,
+        "cats are canines": False,
+        "vishustra is an llm orchestration framework": True,
+        "the capital of france is paris": True,
+        "bananas are berries": True, # A common surprising fact
+        "tomatoes are vegetables": False # Biologically fruits, legally vegetables sometimes
+    }
+
+    def __init__(self):
+        """
+        Initializes the FactCheckerNode.
+        """
+        logger.info("FactCheckerNode initialized, ready to verify statements.")
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
-        return "FactCheckerNode"
+        """Returns the descriptive name of the node."""
+        return "FactChecker"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Union[str, bool, float, None]]:
         """
-        Processes the input data to perform a fact-check.
+        Processes the input data to determine the factuality of a statement.
 
-        The `data` input is expected to be a dictionary containing at least
-        a 'text' key with the content to be fact-checked.
+        The `data` input is expected to be either:
+        - A string representing the statement to be checked.
+        - A dictionary containing a 'statement' key whose value is the string to check.
 
-        The `context` can provide configuration for the fact-checking process:
-        - 'fact_check_api_url': (Optional[str]) URL of an external fact-checking
-          API. If provided, the node will simulate an API call.
-        - 'known_facts': (Optional[List[str]]) A list of known facts to
-          check against if no API URL is provided.
+        The `context` dictionary can optionally contain keys for external fact-checking
+        services, but for this simulation, it's primarily for logging context.
 
         Args:
-            data: The input data, expected to be a dictionary with a 'text' key.
-            context: A dictionary containing operational context and configuration.
+            data: The statement to fact-check, as a string or a dict.
+            context: A dictionary containing contextual information for the process.
 
         Returns:
             A dictionary containing:
-            - 'original_data': The data passed into the node.
-            - 'fact_check_result': A dictionary with the fact-checking outcome,
-              including 'status' ('verified', 'unverified', 'partially_verified', 'failed'),
-              'message', and relevant details.
+            - 'statement': The original statement that was checked.
+            - 'is_factual': True, False, or None if factuality cannot be determined.
+            - 'reason': A textual explanation for the determination.
+            - 'confidence': A float between 0.0 and 1.0 indicating confidence.
+
+        Raises:
+            ValueError: If the input data is not a string or a dict with a 'statement' key.
         """
-        logger.debug(f"[{self.node_name}] Starting process for data.")
-        
-        # Initialize result structure with a default error state
-        result: Dict[str, Any] = {
-            "original_data": data,
-            "fact_check_result": {
-                "status": "failed",
-                "message": "An unexpected error occurred during fact-checking."
+        statement_to_check: str
+        if isinstance(data, str):
+            statement_to_check = data
+        elif isinstance(data, dict) and "statement" in data:
+            statement_to_check = str(data["statement"])
+        else:
+            logger.error("Invalid input data type for FactCheckerNode. Expected string or dict with 'statement' key.")
+            raise ValueError("FactCheckerNode requires a string statement or a dict with a 'statement' key.")
+
+        if not statement_to_check.strip():
+            logger.warning("Received an empty or whitespace-only statement for fact-checking.")
+            return {
+                "statement": statement_to_check,
+                "is_factual": None,
+                "reason": "Empty statement provided for fact-checking.",
+                "confidence": 0.0
             }
+
+        logger.info(f"Attempting to fact-check statement: '{statement_to_check}'")
+        logger.debug(f"Current context for FactCheckerNode: {context}")
+
+        is_factual: bool | None = None
+        reason: str = "Could not verify factuality based on available knowledge."
+        confidence: float = 0.0
+
+        # Normalize the statement for case-insensitive lookup
+        normalized_statement = statement_to_check.strip().lower()
+
+        if normalized_statement in self._predefined_facts:
+            is_factual = self._predefined_facts[normalized_statement]
+            reason = f"Statement matched internal knowledge base as {('true' if is_factual else 'false')}."
+            confidence = 0.95 # High confidence for direct internal match
+        else:
+            # In a real system, this would trigger an external API call,
+            # a more complex NLP model, or a deeper database query.
+            # For simulation, we'll mark it as uncheckable with low confidence.
+            logger.info(f"Statement '{statement_to_check}' not found in internal knowledge base. "
+                        "Further external verification would be required.")
+            reason = "Statement not found in direct knowledge base. External verification needed."
+            confidence = 0.1 # Low confidence as it's an unknown fact
+
+        result = {
+            "statement": statement_to_check,
+            "is_factual": is_factual,
+            "reason": reason,
+            "confidence": confidence
         }
-
-        # Validate input data format
-        if not isinstance(data, dict):
-            logger.error(f"[{self.node_name}] Invalid input data type. Expected dict, got {type(data).__name__}.")
-            result["fact_check_result"].update({
-                "message": "Input data must be a dictionary.",
-                "error_type": "InvalidInputTypeError"
-            })
-            return result
-
-        text_to_check: Union[str, None] = data.get("text")
-        if not isinstance(text_to_check, str) or not text_to_check.strip():
-            logger.error(f"[{self.node_name}] 'text' key missing or not a non-empty string in input data.")
-            result["fact_check_result"].update({
-                "message": "Input data dictionary must contain a non-empty 'text' string.",
-                "error_type": "MissingOrInvalidTextError"
-            })
-            return result
-
-        fact_check_api_url: Union[str, None] = context.get("fact_check_api_url")
-        known_facts: List[str] = context.get("known_facts", [])
-
-        # --- Fact-checking logic ---
-        try:
-            if fact_check_api_url:
-                logger.info(f"[{self.node_name}] Simulating external fact-check API call to: {fact_check_api_url}")
-                # In a real-world scenario, 'requests' or an equivalent HTTP client
-                # would be used here to call the external API.
-                # For this simulation, we'll provide a placeholder response.
-                
-                simulated_status = "unverified"
-                simulated_message = "Content sent to external API for verification (simulated response)."
-                
-                # Simple keyword-based simulation for a "verified" status
-                if "Vishustra" in text_to_check or "LLM orchestration" in text_to_check:
-                    simulated_status = "verified"
-                    simulated_message = "Content aligns with known Vishustra context (simulated API verification)."
-                elif "untrue" in text_to_check.lower() or "false" in text_to_check.lower():
-                    simulated_status = "partially_verified" # Or could be 'disputed' / 'false' in a real system
-                    simulated_message = "Content contains potentially disputed claims (simulated API response)."
-
-
-                result["fact_check_result"].update({
-                    "status": simulated_status,
-                    "message": simulated_message,
-                    "api_endpoint": fact_check_api_url
-                })
-                logger.info(f"[{self.node_name}] External API simulation complete. Status: {simulated_status}")
-
-            elif known_facts:
-                logger.info(f"[{self.node_name}] Performing internal fact-check against {len(known_facts)} known facts.")
-                verified_facts_found: List[str] = []
-                
-                for fact in known_facts:
-                    if fact.lower() in text_to_check.lower():
-                        verified_facts_found.append(fact)
-                
-                if verified_facts_found:
-                    status = "partially_verified"
-                    message = f"Found {len(verified_facts_found)} matching known facts in the content. (Internal check)."
-                    if len(verified_facts_found) == len(known_facts):
-                        status = "verified"
-                        message = "All known facts found in the content. (Internal check)."
-                else:
-                    status = "unverified"
-                    message = "No matching known facts found in the content. (Internal check)."
-
-                result["fact_check_result"].update({
-                    "status": status,
-                    "message": message,
-                    "known_facts_checked": known_facts,
-                    "verified_facts_found": verified_facts_found
-                })
-                logger.info(f"[{self.node_name}] Internal fact-check complete. Status: {status}")
-            else:
-                logger.warning(f"[{self.node_name}] No fact-check API URL or known facts provided in context. Cannot perform verification.")
-                result["fact_check_result"].update({
-                    "status": "unverified",
-                    "message": "No fact-checking configuration found (neither API URL nor internal known facts). Content remains unverified."
-                })
-            
-            # If we reached here, the process completed without critical errors, update status if still 'failed'
-            if result["fact_check_result"]["status"] == "failed":
-                 result["fact_check_result"].update({
-                    "status": "unverified", # Default to unverified if no specific check was done but no hard error either
-                    "message": "Fact-checking process completed, but no specific verification method was configured."
-                 })
-
-        except Exception as e:
-            logger.exception(f"[{self.node_name}] An unexpected exception occurred during fact-checking process.")
-            result["fact_check_result"].update({
-                "status": "failed",
-                "message": f"An unhandled exception occurred: {type(e).__name__} - {e}",
-                "error_type": type(e).__name__
-            })
-            
-        logger.debug(f"[{self.node_name}] Process finished. Final status: {result['fact_check_result']['status']}")
+        logger.debug(f"Fact-checking completed for '{statement_to_check}'. Result: {result}")
         return result
