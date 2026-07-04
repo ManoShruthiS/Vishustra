@@ -1,90 +1,73 @@
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict
+
+import markdown # Third-party library for markdown parsing
 
 from vishustra_core.nodes.base_node import BaseNode
-import markdown
 
 logger = logging.getLogger(__name__)
 
 class MarkdownParserNode(BaseNode):
     """
-    A Vishustra processing node designed to parse Markdown text into other formats,
-    primarily HTML, leveraging the `markdown` Python library.
+    A Vishustra processing node that parses Markdown text into HTML.
 
-    This node provides functionality to convert raw Markdown strings into structured
-    HTML, supporting various Markdown extensions and their configurations passed
-    through the processing context.
+    This node expects a string containing Markdown as input and converts it
+    to its corresponding HTML representation using the 'markdown' library.
+    It can optionally accept a list of Markdown extensions via the context.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """Returns the name of the node."""
         return "MarkdownParser"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Parses the input data, which is expected to be a Markdown string,
-        into an output format, defaulting to HTML.
-
-        The `context` dictionary can be used to customize the parsing behavior,
-        allowing for the inclusion of Markdown extensions and their specific
-        configurations.
+        Parses the input Markdown string and returns the resulting HTML.
 
         Args:
-            data: The Markdown string content to be parsed.
-            context: A dictionary containing operational context and
-                     optional configuration for the markdown parser.
-                     Supported keys within `context`:
-                     - 'extensions': Optional[List[str]] - A list of Markdown extension names
-                                     to enable during parsing (e.g., ['fenced_code', 'tables']).
-                     - 'extension_configs': Optional[Dict[str, Dict[str, Any]]] - A dictionary
-                                            mapping extension names to their configuration dictionaries.
-                     - 'output_format': Optional[str] - The desired output format (e.g., 'html').
-                                        Note: The current implementation primarily generates HTML,
-                                        and other formats requested will default to HTML output.
+            data (Any): The input data, expected to be a string containing Markdown.
+            context (Dict[str, Any]): A dictionary for contextual information.
+                                      Can include 'markdown_extensions' (list of str)
+                                      to enable specific Markdown extensions.
+                                      e.g., `{"markdown_extensions": ["fenced_code"]}`
 
         Returns:
-            The parsed content as a string, typically HTML.
+            Any: The processed data, typically an HTML string.
 
         Raises:
-            ValueError: If the input `data` is not a string, indicating an invalid input type.
-            RuntimeError: If an unexpected error occurs during the markdown parsing process.
+            TypeError: If the input data is not a string.
+            RuntimeError: If an error occurs during Markdown parsing.
         """
         if not isinstance(data, str):
-            error_msg = (
-                f"{self.node_name}: Input data type mismatch. "
-                f"Expected 'str' for Markdown content, but received '{type(data).__name__}'."
+            logger.error(
+                f"{self.node_name}: Invalid input data type. "
+                f"Expected string, got {type(data).__name__}."
             )
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            raise TypeError(
+                f"Input data for MarkdownParserNode must be a string. "
+                f"Got {type(data).__name__}."
+            )
 
         try:
-            # Extract configuration from context, providing sensible defaults
-            extensions: List[str] = context.get('extensions', [])
-            extension_configs: Dict[str, Dict[str, Any]] = context.get('extension_configs', {})
-            output_format: str = context.get('output_format', 'html').lower()
-
-            if output_format != 'html':
+            # Retrieve optional markdown extensions from context
+            extensions = context.get("markdown_extensions", [])
+            if not isinstance(extensions, list):
                 logger.warning(
-                    f"{self.node_name}: Requested output format '{output_format}' is not "
-                    f"fully supported by this node's direct implementation. "
-                    f"Proceeding with default 'html' conversion."
+                    f"{self.node_name}: 'markdown_extensions' in context "
+                    f"is not a list. Ignoring provided extensions."
                 )
+                extensions = []
 
-            # Perform the Markdown parsing
-            parsed_content = markdown.markdown(
-                data,
-                extensions=extensions,
-                extension_configs=extension_configs
-            )
+            # Perform the markdown parsing
+            processed_data = markdown.markdown(data, extensions=extensions)
 
-            logger.debug(
-                f"{self.node_name}: Successfully parsed data. "
-                f"Enabled extensions: {', '.join(extensions) if extensions else 'None'}."
-            )
-            return parsed_content
+            logger.info(f"{self.node_name}: Successfully parsed markdown to HTML.")
+            return processed_data
 
         except Exception as e:
-            error_msg = f"{self.node_name}: Failed to process Markdown data. An unexpected error occurred: {e}"
-            logger.exception(error_msg)  # Log the full traceback for debugging
-            raise RuntimeError(error_msg) from e
+            logger.error(
+                f"{self.node_name}: An unexpected error occurred during markdown parsing: {e}",
+                exc_info=True
+            )
+            raise RuntimeError(f"Failed to parse markdown content: {e}") from e
