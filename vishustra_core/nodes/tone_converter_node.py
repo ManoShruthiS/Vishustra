@@ -1,110 +1,82 @@
 import logging
 from typing import Any, Dict
 
-# Assuming this path structure based on the project context
-# The base_node is expected to be in a subdirectory `nodes` within `vishustra_core`
+# Assuming vishustra_core.nodes.base_node provides the BaseNode class
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-class ToneConverterNode(BaseNode):
+
+class ToneConverter(BaseNode):
     """
-    A Vishustra processing node that simulates converting the tone of an input text.
-
-    This node takes a string as input and, based on the configured target tone,
-    simulates a tone conversion. For demonstration, it prepends an indicator
-    to the text. In a real scenario, this would involve NLP models or rules.
-
-    Configuration Parameters (via constructor):
-        - target_tone (str): The desired tone to convert the input text to
-                             (e.g., "formal", "informal", "empathetic", "concise").
+    A Vishustra processing node responsible for simulating the conversion
+    of text tone. It expects text data and a 'target_tone' specified
+    within the execution context.
     """
-
-    # Define a set of supported tones for validation
-    _supported_tones = {"formal", "informal", "empathetic", "concise", "neutral", "professional"}
-
-    def __init__(self, target_tone: str):
-        """
-        Initializes the ToneConverterNode with a specific target tone.
-
-        Args:
-            target_tone (str): The tone to convert the input text to.
-                               Must be one of the supported tones.
-        Raises:
-            ValueError: If the target_tone is not recognized or invalid.
-        """
-        if not isinstance(target_tone, str) or target_tone.lower() not in self._supported_tones:
-            valid_tones = ", ".join(sorted(list(self._supported_tones)))
-            logger.error(
-                f"Node initialization failed: Invalid or unsupported target_tone '{target_tone}'. "
-                f"Supported tones are: {valid_tones}"
-            )
-            raise ValueError(
-                f"Invalid or unsupported target_tone '{target_tone}'. "
-                f"Supported tones are: {valid_tones}"
-            )
-        self._target_tone = target_tone.lower()
-        logger.debug(f"ToneConverterNode initialized successfully with target_tone: '{self._target_tone}'")
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the dynamic name of the node, including its configured target tone.
-        This helps distinguish different instances of ToneConverterNode in a pipeline.
-        """
-        return f"ToneConverter:{self._target_tone.capitalize()}"
+        """Returns the descriptive name of the node."""
+        return "ToneConverter"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, attempting to convert its tone.
+        Processes the input data by simulating a tone conversion.
 
-        If the input `data` is a string, it simulates converting its tone
-        to the `_target_tone` specified during initialization. If `data`
-        is not a string, a TypeError is raised as this node expects text.
+        This method expects the `data` to be a string (the text to convert)
+        and the `context` dictionary to contain a 'target_tone' key
+        with a string value indicating the desired tone (e.g., "formal", "casual", "sarcastic").
 
         Args:
-            data (Any): The input data to be processed, *expected to be a string*.
+            data (Any): The input data, expected to be a string containing the text.
             context (Dict[str, Any]): A dictionary containing contextual information
-                                       for the current processing flow. This can be
-                                       used for pipeline-specific data or shared state.
+                                     required for processing. Must include 'target_tone' (str).
 
         Returns:
-            Any: The processed data, which is a string with a tone indicator.
+            Any: The processed data, which is a string representing the text
+                 with a simulated tone adjustment.
 
         Raises:
-            TypeError: If the input `data` is not a string, as this node is designed
-                       to operate exclusively on text data.
-            RuntimeError: If an unexpected internal error occurs during the tone
-                          conversion process, indicating a critical failure.
+            TypeError: If the input 'data' is not a string.
+            ValueError: If 'target_tone' is missing from the context or is not a
+                        non-empty string.
         """
-        if not isinstance(data, str):
-            error_msg = (
-                f"{self.node_name}: Invalid input data type. Expected a string for tone conversion, "
-                f"but received type '{type(data).__name__}'."
-            )
-            logger.error(error_msg)
-            raise TypeError(error_msg)
+        logger.info(f"[{self.node_name}] Initiating text tone conversion process.")
 
-        try:
-            # Simulate tone conversion by prepending an indicator to the text.
-            # In a production system, this section would integrate with advanced
-            # NLP models (e.g., fine-tuned LLMs, style transfer models) or
-            # a sophisticated rule-based engine to perform actual tone transformation.
-            converted_text = f"[{self._target_tone.upper()} TONE] {data}"
-            logger.info(
-                f"{self.node_name}: Successfully simulated tone conversion to '{self._target_tone}'. "
-                f"Original data (first 50 chars): '{data[:50]}...' -> Converted data (first 50 chars): '{converted_text[:50]}...'"
+        if not isinstance(data, str):
+            logger.error(
+                f"[{self.node_name}] Invalid input data type. Expected string, "
+                f"received {type(data).__name__}."
             )
-            return converted_text
-        except Exception as e:
-            # Catching general Exception for any unforeseen runtime issues during the core logic.
-            # Using logger.exception() automatically includes stack trace information.
-            logger.exception(
-                f"{self.node_name}: An unexpected error occurred during tone conversion of data "
-                f"(first 50 chars: '{data[:50]}...')."
+            raise TypeError(
+                f"[{self.node_name}] Input 'data' must be a string for tone conversion."
             )
-            # Re-raise as a RuntimeError to signify a critical failure in the node's processing,
-            # allowing upstream pipeline error handling to catch it.
-            raise RuntimeError(
-                f"Failed to process data in {self.node_name} due to an internal error: {e}"
-            ) from e
+
+        target_tone = context.get("target_tone")
+
+        if not isinstance(target_tone, str) or not target_tone.strip():
+            logger.error(
+                f"[{self.node_name}] 'target_tone' is missing or invalid in context. "
+                f"Expected a non-empty string, received: {target_tone}."
+            )
+            raise ValueError(
+                f"[{self.node_name}] Context must provide a valid 'target_tone' "
+                f"(non-empty string) for tone conversion."
+            )
+
+        # Simulate the tone conversion. In a real-world scenario with an LLM,
+        # this would involve an API call to transform the text based on the
+        # target_tone prompt. For this node, we append a descriptive suffix.
+        processed_text = f"{data.strip()} (rephrased for a {target_tone.strip()} tone)"
+
+        logger.info(
+            f"[{self.node_name}] Successfully simulated conversion to '{target_tone}' tone."
+        )
+        logger.debug(
+            f"[{self.node_name}] Original text (first 100 chars): '{data[:100]}...'"
+        )
+        logger.debug(
+            f"[{self.node_name}] Converted text (first 100 chars): '{processed_text[:100]}...'"
+        )
+
+        return processed_text
