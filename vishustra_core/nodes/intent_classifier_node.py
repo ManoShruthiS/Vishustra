@@ -7,69 +7,93 @@ logger = logging.getLogger(__name__)
 
 class IntentClassifierNode(BaseNode):
     """
-    A processing node that classifies the intent of a given text input.
-
-    This node simulates intent classification based on simple keyword matching.
-    In a production environment, this would typically integrate with
-    a machine learning model (e.g., an NLU service, a fine-tuned transformer).
+    A Vishustra node that classifies the intent of a given text input.
+    This node uses a keyword-based approach for demonstration, but in a
+    production environment, it would typically integrate with advanced
+    Natural Language Understanding (NLU) models.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
-        return "IntentClassifier"
-
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input text to determine its underlying intent.
+        Returns the name of the node.
+        """
+        return "IntentClassifierNode"
 
-        The `data` input is expected to be a string representing the user's query.
-        The `context` dictionary can optionally contain configuration for the
-        classifier, though for this simulated implementation, it's not strictly
-        necessary for the core logic.
+    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Classifies the intent of the input text based on predefined rules or
+        rules provided in the context.
 
         Args:
-            data (Any): The input data, expected to be a string (user query).
-            context (Dict[str, Any]): A dictionary containing context-specific
-                                       information, potentially including model
-                                       configuration or additional parameters.
+            data (Any): The input data, expected to be a string containing
+                        the user's query or utterance.
+            context (Dict[str, Any]): A dictionary containing contextual
+                                      information. Can include 'intent_rules'
+                                      to dynamically define or override
+                                      classification rules.
 
         Returns:
-            Any: A dictionary containing the original text and the classified intent.
-                 Example: {"text": "What's the weather like?", "intent": "get_weather"}
+            Dict[str, Any]: A dictionary containing the classified intent
+                            and a confidence score.
+                            Example: {"intent": "greeting", "confidence": 0.95}
 
         Raises:
-            TypeError: If the input `data` is not a string.
-            ValueError: If the classification logic encounters an unexpected issue.
+            ValueError: If the input data is not a string, as this node
+                        specifically operates on textual input.
         """
         if not isinstance(data, str):
-            logger.error(f"IntentClassifierNode received invalid data type: {type(data)}. Expected str.")
-            raise TypeError(f"IntentClassifierNode expects string input, but received {type(data)}.")
+            logger.error(
+                f"IntentClassifierNode received non-string data: type={type(data)}. "
+                "Expected a string for intent classification."
+            )
+            raise ValueError("IntentClassifierNode expects string input for classification.")
 
-        query = data.lower().strip()
-        classified_intent = "general_query" # Default intent
+        text_input = data.lower().strip()
+        classified_intent = "unknown"
+        confidence = 0.5  # Default confidence for 'unknown' or general matches
 
-        try:
-            # Simulate intent classification with simple keyword matching
-            if any(keyword in query for keyword in ["book", "reserve", "flight", "ticket", "travel"]):
-                classified_intent = "book_flight"
-            elif any(keyword in query for keyword in ["weather", "forecast", "temperature", "climate"]):
-                classified_intent = "get_weather"
-            elif any(keyword in query for keyword in ["news", "headlines", "article"]):
-                classified_intent = "get_news"
-            elif any(keyword in query for keyword in ["order", "purchase", "buy", "item", "product"]):
-                classified_intent = "place_order"
-            elif any(keyword in query for keyword in ["help", "support", "assist"]):
-                classified_intent = "request_help"
-            
-            # Additional context-based hints could be used here
-            # For example, if context['previous_intent'] was 'book_flight',
-            # a query like 'for tomorrow' could be classified as 'confirm_details_flight'
+        # Base keyword-to-intent mappings
+        # In a real system, these would be loaded from configuration or a model.
+        base_intent_rules = {
+            "greeting": ["hello", "hi", "hey", "good morning", "good evening", "how are you"],
+            "order_status": ["where is my order", "track my order", "order status", "my order number", "delivery status"],
+            "product_info": ["tell me about", "what is", "product details", "features of", "specification for"],
+            "farewell": ["bye", "goodbye", "see you", "later"],
+            "thank_you": ["thank you", "thanks", "appreciate it", "cheers"],
+            "help": ["help me", "i need help", "support", "assist me"],
+            "cancel_order": ["cancel my order", "stop order", "revoke order"]
+        }
 
-            logger.info(f"Classified intent for '{query[:50]}...' as '{classified_intent}'")
-            return {"text": data, "intent": classified_intent}
+        # Merge base rules with any context-provided rules.
+        # Context rules take precedence or extend the base rules.
+        context_intent_rules = context.get("intent_rules", {})
+        merged_intent_rules = {**base_intent_rules, **context_intent_rules}
 
-        except Exception as e:
-            logger.exception(f"An error occurred during intent classification for query '{query[:50]}...': {e}")
-            raise ValueError(f"Failed to classify intent for query: '{query[:50]}...' due to an internal error.") from e
+        # Perform a simple keyword-based classification
+        for intent, keywords in merged_intent_rules.items():
+            for keyword in keywords:
+                if keyword in text_input:
+                    classified_intent = intent
+                    confidence = 0.9  # Higher confidence for a direct keyword match
+                    logger.debug(
+                        f"Intent '{classified_intent}' identified by keyword '{keyword}' "
+                        f"in input: '{text_input}'."
+                    )
+                    break # Matched an intent, no need to check more keywords for this intent
+            if classified_intent != "unknown":
+                break # Matched an intent, no need to check other intents
 
+        if classified_intent == "unknown":
+            confidence = 0.3  # Lower confidence for unclassified inputs
+            logger.info(
+                f"No specific intent identified for input: '{text_input}'. "
+                f"Classified as '{classified_intent}'."
+            )
+        else:
+            logger.info(
+                f"Input '{text_input}' classified as intent '{classified_intent}' "
+                f"with confidence {confidence:.2f}."
+            )
+
+        return {"intent": classified_intent, "confidence": confidence}
