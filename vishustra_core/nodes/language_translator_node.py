@@ -1,119 +1,114 @@
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
+
 class LanguageTranslatorNode(BaseNode):
     """
-    A Vishustra processing node that simulates language translation.
+    A Vishustra node designed to simulate language translation of input text.
 
-    This node takes an input string and "translates" it to a specified target language.
-    Translation is simulated using a simple internal mapping for demonstration purposes.
-    In a production environment, this would integrate with an actual translation service
-    or an internal model.
+    This node expects the input `data` to be a string. The `context` dictionary
+    must contain a 'target_language' key, specifying the language to translate
+    the text into (e.g., 'es' for Spanish, 'fr' for French, 'de' for German).
+    An optional 'source_language' can also be provided in the context; otherwise,
+    it defaults to 'auto-detection'.
+
+    For a production environment, this node would integrate with an actual
+    translation service or a robust internal translation model.
     """
-
-    def __init__(self, default_target_language: str = "en",
-                 mock_translations: Optional[Dict[str, Dict[str, str]]] = None):
-        """
-        Initializes the LanguageTranslatorNode with a default target language and
-        an optional set of mock translations.
-
-        Args:
-            default_target_language: The language code (e.g., "en", "es", "fr") to
-                                     translate to if 'target_language' is not provided
-                                     in the `context` for a `process` call.
-            mock_translations: A dictionary defining mock translations.
-                               The structure should be:
-                               `{"source_text": {"target_lang_code": "translated_text"}}`.
-                               If None, a default set of mock translations is used.
-        """
-        self._default_target_language = default_target_language
-        self._mock_translations = mock_translations if mock_translations is not None else {
-            "Hello": {"es": "Hola", "fr": "Bonjour", "de": "Hallo"},
-            "World": {"es": "Mundo", "fr": "Monde", "de": "Welt"},
-            "Thank you": {"es": "Gracias", "fr": "Merci", "de": "Danke schön"},
-            "Good morning": {"es": "Buenos días", "fr": "Bonjour", "de": "Guten Morgen"},
-            "Please": {"es": "Por favor", "fr": "S'il vous plaît", "de": "Bitte"},
-            "Yes": {"es": "Sí", "fr": "Oui", "de": "Ja"},
-            "No": {"es": "No", "fr": "Non", "de": "Nein"},
-            "How are you?": {"es": "¿Cómo estás?", "fr": "Comment allez-vous?", "de": "Wie geht es Ihnen?"},
-            "Vishustra is great": {"es": "Vishustra es genial", "fr": "Vishustra est super", "de": "Vishustra ist großartig"},
-        }
-        logger.debug(f"LanguageTranslatorNode initialized with default_target_language: "
-                     f"{self._default_target_language} and {len(self._mock_translations)} mock entries.")
 
     @property
     def node_name(self) -> str:
         """Returns the descriptive name of the node."""
-        return "LanguageTranslator"
+        return "LanguageTranslatorNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Translates the input data (expected to be a string) to a specified target language.
+        Translates the provided input text data to the specified target language.
 
-        The target language is determined in the following order:
-        1. From `context["target_language"]` if present.
-        2. From the `default_target_language` provided during node initialization.
-
-        If the `data` is not a string, a `ValueError` is raised.
-        If no target language can be determined, a `ValueError` is raised.
-        If a direct mock translation is not available for the given text and target language,
-        the original text is returned, and a warning is logged.
+        The translation mechanism in this implementation is simulated. In a real-world
+        scenario, this method would interface with an external translation API
+        (e.g., Google Cloud Translation, DeepL, Microsoft Translator) or an
+        in-house machine learning translation model.
 
         Args:
-            data: The text string to be translated.
-            context: A dictionary that may contain 'target_language' (str),
-                     e.g., `{"target_language": "es"}`.
+            data (Any): The input data to be translated. This is expected to be a string.
+            context (Dict[str, Any]): A dictionary providing additional processing parameters.
+                                      It **must** contain:
+                                      - 'target_language' (str): The ISO 639-1 code of the
+                                        language to translate into (e.g., "es", "fr").
+                                      It **may** contain:
+                                      - 'source_language' (str, optional): The ISO 639-1 code of the
+                                        source language. Defaults to "auto" for auto-detection.
 
         Returns:
-            The translated text string, or the original text if no mock translation
-            is found for the specified target language.
+            Any: The translated text as a string.
 
         Raises:
-            ValueError: If 'data' is not a string, or if no target language is specified
-                        or configured.
+            TypeError: If the input `data` is not a string.
+            ValueError: If 'target_language' is missing from `context` or is not a valid string.
+            RuntimeError: If an unexpected error occurs during the simulated translation process.
         """
+        logger.debug(f"[{self.node_name}] Initiating process with data type: {type(data)}")
+
         if not isinstance(data, str):
-            logger.error(f"Invalid input data type for LanguageTranslatorNode. Expected str, got {type(data)}.")
+            logger.error(
+                f"[{self.node_name}] Invalid input data type. Expected 'str', received '{type(data).__name__}'."
+            )
+            raise TypeError(
+                f"LanguageTranslatorNode requires string input for 'data', but received {type(data).__name__}."
+            )
+
+        target_language = context.get("target_language")
+        if not isinstance(target_language, str) or not target_language.strip():
+            logger.error(
+                f"[{self.node_name}] 'target_language' is missing or invalid in context. "
+                f"Received keys: {list(context.keys())}"
+            )
             raise ValueError(
-                f"LanguageTranslatorNode expects string input for translation, "
-                f"but received type: {type(data).__name__}."
+                "Context must contain a valid non-empty string for 'target_language' for translation."
             )
 
-        text_to_translate = data.strip()
-        target_language = context.get("target_language", self._default_target_language)
+        source_language = context.get("source_language", "auto").strip().lower()
+        effective_target_language = target_language.strip().lower()
 
-        if not target_language:
-            logger.error("No target language specified in context or node configuration for translation.")
-            raise ValueError("Target language must be specified either in context or during node initialization.")
+        logger.info(
+            f"[{self.node_name}] Attempting to translate text "
+            f"from '{source_language}' to '{effective_target_language}'. "
+            f"Input snippet: '{data[:75]}{'...' if len(data) > 75 else ''}'"
+        )
 
-        logger.info(f"Attempting to translate text to '{target_language}': '{text_to_translate[:100]}...'")
-
-        # Simulate translation using the mock data
-        if text_to_translate in self._mock_translations:
-            translations_for_text = self._mock_translations[text_to_translate]
-            if target_language in translations_for_text:
-                translated_text = translations_for_text[target_language]
-                logger.debug(f"Successfully translated '{text_to_translate[:50]}...' to "
-                             f"'{translated_text[:50]}...' for language '{target_language}'.")
-                return translated_text
+        try:
+            # --- Simulated Translation Logic ---
+            # This block simulates the interaction with an external translation service.
+            # In a real application, this would involve API calls, error handling for
+            # external service responses, and potentially retry mechanisms.
+            if effective_target_language == "es":
+                translated_text = f"[ES] {data} [Traducido al español]"
+            elif effective_target_language == "fr":
+                translated_text = f"[FR] {data} [Traduit en français]"
+            elif effective_target_language == "de":
+                translated_text = f"[DE] {data} [Übersetzt ins Deutsche]"
+            elif effective_target_language == "ja":
+                translated_text = f"[JA] {data} [日本語に翻訳済み]"
+            elif effective_target_language == "zh":
+                translated_text = f"[ZH] {data} [翻译成中文]"
             else:
-                logger.warning(
-                    f"No mock translation available for text '{text_to_translate[:50]}...' "
-                    f"to target language '{target_language}'. Returning original text."
-                )
-                # In a real system, an actual translation service might still attempt a translation
-                # or indicate an unsupported language. Here, we simulate by returning the original.
-                return text_to_translate
-        else:
+                # For any other unsupported or generic language, append a generic translated tag.
+                translated_text = f"[{effective_target_language.upper()}] {data} [Translated]"
+            # --- End Simulated Translation Logic ---
+
             logger.info(
-                f"No exact mock translation found for '{text_to_translate[:50]}...' "
-                f"in internal dictionary. Returning original text."
+                f"[{self.node_name}] Successfully translated text to '{effective_target_language}'. "
+                f"Output snippet: '{translated_text[:75]}{'...' if len(translated_text) > 75 else ''}'"
             )
-            # For texts not present in our mock map, we return the original text
-            # to simulate a translator that might not have every phrase pre-translated
-            # or an API call that resulted in no change.
-            return text_to_translate
+            return translated_text
+
+        except Exception as e:
+            logger.exception(
+                f"[{self.node_name}] An unexpected error occurred during the simulated translation process."
+            )
+            raise RuntimeError(f"Failed to perform language translation: {e}") from e
