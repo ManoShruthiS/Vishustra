@@ -1,51 +1,48 @@
-import logging
-from typing import Any, Dict, Optional, List
 
-# Assuming vishustra_core is available in the project's Python path
+import logging
+from typing import Any, Dict
+
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
+
 class IntentClassifierNode(BaseNode):
     """
-    A Vishustra processing node that classifies the intent of a given text input.
-
-    This node simulates intent classification based on predefined keywords.
-    It expects a string as input data and returns a dictionary containing
-    the classified intent, a confidence score, and the original text.
+    A Vishustra node that classifies the intent of a given text utterance.
+    This node simulates intent classification using a simple keyword-matching
+    approach. In a production environment, this would integrate with a
+    sophisticated Natural Language Understanding (NLU) model.
     """
 
-    def __init__(self, model_config: Optional[Dict[str, List[str]]] = None):
+    def __init__(self, default_intent: str = "UNKNOWN_INTENT"):
         """
-        Initializes the IntentClassifierNode with a specific intent model configuration.
+        Initializes the IntentClassifierNode.
 
         Args:
-            model_config (Optional[Dict[str, List[str]]]): A dictionary where keys
-                are intent names (str) and values are lists of keywords (List[str])
-                associated with that intent. If None, a default configuration is used.
+            default_intent (str): The intent to return if no specific intent
+                                  can be classified from the utterance.
         """
-        if model_config is None:
-            self._intent_model = {
-                "greeting": ["hello", "hi", "hey", "good morning", "good evening"],
-                "order_status": ["where is my order", "order status", "track my package", "delivery date"],
-                "product_query": ["tell me about", "what is", "product details", "specifications", "features of"],
-                "customer_support": ["help me", "support", "technical issue", "contact support"],
-                "farewell": ["goodbye", "bye", "see you later", "thanks for your help"]
-            }
-            logger.info("IntentClassifierNode initialized with default model configuration.")
-        else:
-            if not isinstance(model_config, dict):
-                raise TypeError("model_config must be a dictionary if provided.")
-            # Basic validation for model_config structure
-            for intent, keywords in model_config.items():
-                if not isinstance(intent, str) or not isinstance(keywords, list) or \
-                   not all(isinstance(k, str) for k in keywords):
-                    raise ValueError(
-                        f"Invalid model_config format. Expected Dict[str, List[str]], "
-                        f"but found non-string intent '{intent}' or non-list/non-string keywords '{keywords}'."
-                    )
-            self._intent_model = {k.lower(): [kw.lower() for kw in v] for k, v in model_config.items()}
-            logger.info("IntentClassifierNode initialized with custom model configuration.")
+        self._default_intent = default_intent
+        # A simple keyword-to-intent mapping for demonstration purposes.
+        # This would typically be replaced by a loaded NLU model or service client.
+        self._intent_map: Dict[str, str] = {
+            "schedule meeting": "ScheduleMeeting",
+            "book appointment": "ScheduleMeeting",
+            "cancel meeting": "CancelMeeting",
+            "reschedule meeting": "RescheduleMeeting",
+            "weather forecast": "GetWeather",
+            "play music": "PlayMusic",
+            "stop music": "StopMusic",
+            "order food": "OrderFood",
+            "restaurant reservation": "OrderFood",
+            "tell me a joke": "TellJoke",
+            "create reminder": "CreateReminder",
+            "set alarm": "SetAlarm",
+            "send email": "SendEmail",
+            "help me": "GetHelp",
+        }
+        logger.info(f"IntentClassifierNode initialized with default intent: '{self._default_intent}'")
 
     @property
     def node_name(self) -> str:
@@ -56,88 +53,65 @@ class IntentClassifierNode(BaseNode):
         """
         Processes the input data to classify its intent.
 
+        This method expects the `data` to be a string representing a user utterance.
+        It performs a simple keyword-based matching to identify the intent.
+
         Args:
-            data (Any): The input data to classify. Expected to be a string representing
-                        the user's utterance.
+            data (Any): The input data, expected to be a string utterance.
             context (Dict[str, Any]): A dictionary containing contextual information
-                                       for the current processing flow.
+                                       for the current processing flow. This node
+                                       does not modify the context but receives it.
 
         Returns:
-            Dict[str, Any]: A dictionary containing:
-                - 'intent' (str): The classified intent, e.g., "greeting", "unknown".
-                - 'confidence' (float): A confidence score for the classification (0.0 to 1.0).
-                - 'original_text' (str): The original input text.
-                - 'error' (Optional[str]): An error message if processing failed.
+            Dict[str, Any]: A dictionary containing the original utterance, its
+                            classified intent, and optionally the matched keyword.
+                            Example: {"utterance": "...", "intent": "...", "matched_keyword": "..."}.
+
+        Raises:
+            TypeError: If the input `data` is not a string, as this node
+                       is designed to process text utterances.
         """
         if not isinstance(data, str):
-            error_msg = f"IntentClassifierNode received invalid input type. Expected 'str', got '{type(data).__name__}'."
-            logger.error(error_msg)
-            return {
-                "intent": "error",
-                "confidence": 0.0,
-                "original_text": str(data),
-                "error": error_msg
-            }
+            error_message = (
+                f"{self.node_name} expects input 'data' to be a string utterance, "
+                f"but received type {type(data).__name__}. This data cannot be processed."
+            )
+            logger.error(error_message)
+            raise TypeError(error_message)
 
-        text_input = data.strip()
-        if not text_input:
-            warning_msg = "IntentClassifierNode received empty string input. Classifying as 'unknown'."
-            logger.warning(warning_msg)
-            return {
-                "intent": "unknown",
-                "confidence": 0.5,
-                "original_text": data,
-                "error": None
-            }
+        utterance = data.strip().lower()
+        classified_intent = self._default_intent
+        matched_keyword = None
 
-        processed_text = text_input.lower()
-        classified_intent = "unknown"
-        confidence = 0.5  # Default confidence for unknown intent
+        logger.debug(f"Attempting to classify intent for utterance: '{utterance}'")
 
-        for intent, keywords in self._intent_model.items():
-            for keyword in keywords:
-                if keyword in processed_text:
-                    classified_intent = intent
-                    confidence = 0.95  # High confidence for a direct keyword match
-                    logger.debug(f"Intent '{intent}' detected for text: '{text_input}' via keyword '{keyword}'.")
-                    break  # Found an intent, no need to check further keywords for this text
-            if classified_intent != "unknown":
-                break  # Found an intent, no need to check further intents
+        for keyword, intent in self._intent_map.items():
+            if keyword in utterance:
+                classified_intent = intent
+                matched_keyword = keyword
+                break  # Found the first matching keyword, assign intent and exit
 
-        logger.info(f"Classified intent for '{text_input}': '{classified_intent}' with confidence {confidence:.2f}.")
+        if matched_keyword:
+            logger.info(
+                f"Classified intent for utterance '{utterance}' as '{classified_intent}' "
+                f"based on keyword '{matched_keyword}'."
+            )
+        else:
+            logger.info(
+                f"No specific intent found for utterance '{utterance}', "
+                f"defaulting to '{classified_intent}'."
+            )
 
-        return {
+        # The context can be used for logging or for more complex nodes,
+        # but for this specific node, it's primarily passed through.
+        _ = context # Suppress unused variable warning if context isn't directly used here.
+
+        result = {
+            "utterance": data,  # Retain original casing for the output utterance
             "intent": classified_intent,
-            "confidence": confidence,
-            "original_text": data,
-            "error": None
+            "matched_keyword": matched_keyword,
         }
 
-# Example Usage (for local testing, not part of the committed code)
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        logger.debug(f"{self.node_name} processed successfully, result: {result}")
+        return result
 
-    # Default model
-    classifier_default = IntentClassifierNode()
-    print(f"Node Name: {classifier_default.node_name}")
-    print(f"Result: {classifier_default.process('Hello, how are you?', {})}")
-    print(f"Result: {classifier_default.process('Where is my order number 12345?', {})}")
-    print(f"Result: {classifier_default.process('Tell me about the new product features.', {})}")
-    print(f"Result: {classifier_default.process('I need some help with my account.', {})}")
-    print(f"Result: {classifier_default.process('This is a completely random sentence.', {})}")
-    print(f"Result: {classifier_default.process('', {})}")
-    print(f"Result: {classifier_default.process(123, {})}") # Invalid input
-
-    # Custom model
-    custom_model = {
-        "book_flight": ["book a flight", "flight reservation", "find flights"],
-        "check_weather": ["what's the weather", "weather forecast", "temperature in"],
-        "play_music": ["play some music", "start music", "next song"]
-    }
-    classifier_custom = IntentClassifierNode(model_config=custom_model)
-    print("\n--- Custom Model Classifier ---")
-    print(f"Node Name: {classifier_custom.node_name}")
-    print(f"Result: {classifier_custom.process('I want to book a flight to London.', {})}")
-    print(f"Result: {classifier_custom.process('What is the weather like in Paris?', {})}")
-    print(f"Result: {classifier_custom.process('Play some jazz music.', {})}")
-    print(f"Result: {classifier_custom.process('How much does it cost?', {})}") # Should be unknown for custom model
