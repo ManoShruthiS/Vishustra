@@ -1,139 +1,118 @@
 import logging
-from typing import Any, Dict, Union
+from typing import Any, Dict
 
-# Assume BaseNode is available at this path as per project context
+# Assuming vishustra_core.nodes.base_node is available in the project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class FactCheckerNode(BaseNode):
     """
-    A Vishustra processing node designed to simulate fact-checking of claims.
+    A Vishustra node designed to simulate fact-checking textual claims.
 
-    This node takes an input claim (as a string or within a dictionary) and
-    attempts to verify it against a small, internal knowledge base of facts.
-    It returns a structured result indicating the verification status.
+    This node takes a string as input, representing a claim, and processes it
+    to determine a verdict (e.g., TRUE, FALSE, NEEDS_MORE_INFO) along with
+    simulated reasoning. In a production environment, this would integrate
+    with external fact-checking services, knowledge bases, or advanced
+    language models for verification.
     """
-
-    # A simple, static knowledge base for demonstration purposes.
-    # In a real-world scenario, this would involve external API calls,
-    # database lookups, or more sophisticated NLP models.
-    _KNOWN_FACTS = {
-        "the sky is blue": {"status": "verified", "reasoning": "Common observational fact, due to Rayleigh scattering of sunlight."},
-        "water boils at 100 degrees celsius": {"status": "verified", "reasoning": "Standard boiling point of pure water at sea level (1 atmosphere)."},
-        "the earth is flat": {"status": "debunked", "reasoning": "Overwhelming scientific and observational evidence confirms the Earth's oblate spheroid shape."},
-        "vishustra is the best orchestration framework": {"status": "unverified", "reasoning": "Subjective claim, difficult to objectively verify without specific metrics and comparative analysis. Status depends on context and criteria."},
-        "2 + 2 = 4": {"status": "verified", "reasoning": "Fundamental arithmetic truth."},
-    }
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of this processing node."""
+        """Returns the descriptive name of the node."""
         return "FactCheckerNode"
 
-    def process(self, data: Union[str, Dict[str, Any]], context: Dict[str, Any]) -> Dict[str, Any]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input data to perform a simulated fact-check.
+        Processes the input data to simulate fact-checking a claim.
 
-        The `data` input can be provided in two primary formats:
-        1. A direct string representing the claim to be checked.
-        2. A dictionary containing the claim under the key 'claim'.
-
-        The `context` dictionary is available for passing runtime configuration
-        or shared state across nodes, though it's not explicitly used in this
-        simulated fact-checking logic.
+        The `data` argument is expected to be a string representing the claim
+        to be verified. The `context` dictionary can be used to pass
+        configuration parameters, external service clients, or other
+        runtime information relevant for the fact-checking process.
 
         Args:
-            data: The claim to be verified, either as a string or a dictionary.
-            context: A dictionary holding contextual information for this process.
+            data: The textual claim to be fact-checked (expected type: str).
+            context: A dictionary containing contextual information,
+                     such as configuration settings or client instances.
 
         Returns:
-            A dictionary containing the following keys:
-            - 'claim': The original claim that was processed.
-            - 'status': A string indicating the verification status (e.g., 'verified',
-                        'debunked', 'unverified', 'needs_review', 'error').
-            - 'reasoning': A brief explanation for the assigned status.
-            - 'original_input_type': The type of the input 'data'.
+            A dictionary containing the original claim, its simulated verdict,
+            and a reasoning statement.
+            Example:
+            {
+                "claim": "Vishustra is a highly modular LLM orchestration framework.",
+                "verdict": "TRUE",
+                "reasoning": "Based on project documentation and core design principles."
+            }
+
+        Raises:
+            TypeError: If the input `data` is not a string.
+            ValueError: If the input `data` string is empty or contains only whitespace.
         """
-        claim: str = ""
-        original_data = data # Store for consistent output and logging
-        input_type = type(data).__name__
-
-        logger.debug(f"FactCheckerNode received input of type: {input_type}, data: {original_data}")
-
-        if isinstance(data, str):
-            claim = data
-        elif isinstance(data, dict):
-            # Attempt to extract the claim from a dictionary
-            extracted_claim = data.get('claim')
-            if extracted_claim is None:
-                logger.warning(
-                    f"FactCheckerNode received a dictionary without a 'claim' key. "
-                    f"Returning 'error' status. Data: {original_data}"
-                )
-                return {
-                    "claim": original_data,
-                    "status": "error",
-                    "reasoning": "Input dictionary is missing the 'claim' key.",
-                    "original_input_type": input_type,
-                }
-            elif not isinstance(extracted_claim, str):
-                logger.warning(
-                    f"FactCheckerNode received a 'claim' value that is not a string "
-                    f"in the input dictionary. Type: {type(extracted_claim).__name__}. Data: {original_data}"
-                )
-                return {
-                    "claim": original_data,
-                    "status": "error",
-                    "reasoning": f"Value for 'claim' key must be a string, got {type(extracted_claim).__name__}.",
-                    "original_input_type": input_type,
-                }
-            claim = extracted_claim
-        else:
-            # Handle unexpected data types gracefully
+        if not isinstance(data, str):
             logger.error(
-                f"FactCheckerNode received an unexpected data type. Expected str or dict, "
-                f"got {input_type}. Data: {original_data}"
+                "FactCheckerNode: Invalid data type received. Expected 'str', but got '%s'.",
+                type(data).__name__
             )
-            return {
-                "claim": original_data,
-                "status": "error",
-                "reasoning": f"Unexpected input data type: {input_type}. Expected str or dict.",
-                "original_input_type": input_type,
-            }
+            raise TypeError(
+                f"FactCheckerNode requires 'data' to be a string, "
+                f"but received type '{type(data).__name__}'."
+            )
 
-        # Validate the extracted or direct claim string
-        if not claim or not claim.strip():
+        claim = data.strip()
+        if not claim:
+            logger.warning("FactCheckerNode: Received an empty or whitespace-only claim string.")
+            raise ValueError("FactCheckerNode cannot process an empty claim.")
+        
+        # Retrieve max_claim_length from context or use a default
+        max_claim_length = context.get('max_claim_length', 1024)
+        if len(claim) > max_claim_length:
             logger.warning(
-                f"FactCheckerNode received an empty or whitespace-only claim after extraction. "
-                f"Original input: {original_data}"
+                "FactCheckerNode: Claim length (%d) exceeds configured maximum (%d). "
+                "Consider refining input data or increasing 'max_claim_length' in context.",
+                len(claim), max_claim_length
             )
-            return {
-                "claim": claim,
-                "status": "error",
-                "reasoning": "The claim provided is empty or contains only whitespace.",
-                "original_input_type": input_type,
-            }
+            # Depending on requirements, one might choose to truncate, reject, or just log.
+            # For this simulation, we proceed but log the warning.
 
-        # Normalize the claim for lookup (case-insensitive, trim whitespace)
-        normalized_claim = claim.strip().lower()
-        logger.debug(f"Attempting to fact-check normalized claim: '{normalized_claim}'")
+        logger.info("FactCheckerNode: Initiating fact-check for claim: '%s'", claim[:100] + ('...' if len(claim) > 100 else ''))
 
-        # Simulate fact-checking against the internal knowledge base
-        if normalized_claim in self._KNOWN_FACTS:
-            result = self._KNOWN_FACTS[normalized_claim]
-            logger.info(f"Claim '{claim}' matched a known fact. Status: {result['status']}.")
-            return {
-                "claim": claim,
-                "status": result["status"],
-                "reasoning": result["reasoning"],
-                "original_input_type": input_type,
-            }
-        else:
-            logger.info(f"Claim '{claim}' not found in automated knowledge base. Marking as 'needs_review'.")
-            return {
-                "claim": claim,
-                "status": "needs_review",
-                "reasoning": "Claim not found in automated knowledge base; requires human verification or further processing.",
-                "original_input_type": input_type,
-            }
+        verdict: str = "NEEDS_MORE_INFO"
+        reasoning: str = "Automated verification could not find definitive evidence."
+
+        # --- Simulate Fact-Checking Logic ---
+        # In a real-world scenario, this section would involve:
+        # 1. Making API calls to external fact-checking services.
+        # 2. Querying structured knowledge bases or internal data sources.
+        # 3. Interacting with LLMs to evaluate the claim against provided context or external data.
+        # For this example, we use simple keyword matching to simulate different verdicts.
+
+        claim_lower = claim.lower()
+
+        if "vishustra is an llm orchestration framework" in claim_lower or \
+           "vishustra is a highly modular llm orchestration framework" in claim_lower:
+            verdict = "TRUE"
+            reasoning = "Based on official project documentation and core objectives."
+        elif "vishustra is a frontend framework" in claim_lower or \
+             "vishustra is built in java" in claim_lower:
+            verdict = "FALSE"
+            reasoning = "Vishustra is a backend LLM orchestration framework, primarily in Python, not a frontend or Java-based one."
+        elif "vishustra" in claim_lower and "python" in claim_lower:
+            verdict = "TRUE"
+            reasoning = "Vishustra is indeed developed using Python as its primary programming language."
+        
+        # This part of the simulation allows overriding verdicts via context for testing purposes
+        mock_verdicts = context.get('mock_verdicts', {})
+        if claim in mock_verdicts:
+            verdict = mock_verdicts[claim].get('verdict', verdict)
+            reasoning = mock_verdicts[claim].get('reasoning', reasoning)
+            logger.debug("FactCheckerNode: Applied mock verdict from context for claim: '%s'", claim)
+
+        logger.info("FactCheckerNode: Fact-check completed. Verdict: %s for claim: '%s'", verdict, claim[:100] + ('...' if len(claim) > 100 else ''))
+
+        return {
+            "claim": claim,
+            "verdict": verdict,
+            "reasoning": reasoning,
+        }
