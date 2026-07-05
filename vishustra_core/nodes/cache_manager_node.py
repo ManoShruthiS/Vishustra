@@ -1,239 +1,149 @@
 import logging
-import time
 from typing import Any, Dict, Optional
 
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-
 class CacheManagerNode(BaseNode):
     """
-    A Vishustra processing node responsible for managing data caching operations.
+    A Vishustra processing node that manages a data cache within the execution context.
 
-    This node provides functionality to retrieve, store, and invalidate data within
-    an in-memory cache, offering a foundational component for optimizing LLM
-    orchestration workflows by reducing redundant computations.
+    This node supports common caching operations such as getting, setting,
+    deleting, and clearing cache entries. It expects operation details in the
+    'data' input dictionary and interacts with a cache store managed within
+    the 'context' dictionary.
 
-    The node's behavior is primarily driven by directives passed within the `context`
-    dictionary, allowing for flexible cache interactions based on workflow needs.
-
-    Configuration parameters for initialization:
-    - cache_name (str): A unique identifier for this cache instance. Useful for
-                        distinguishing between multiple cache managers or policies.
-                        Defaults to "default_cache".
-    - default_ttl_seconds (Optional[int]): The default time-to-live (TTL) for
-                                            cached items, in seconds. If `None`,
-                                            cached items will not expire automatically.
-    - cache_key_field (Optional[str]): Specifies a field within the input `data`
-                                        (if `data` is a dictionary) to use as the
-                                        cache key. If `None`, the node will attempt
-                                        to derive a key from `context['cache_key']`,
-                                        `data['id']`, or the `data` itself.
-    - initial_cache_data (Optional[Dict[Any, Any]]): A dictionary to pre-populate
-                                                      the cache upon initialization.
+    The cache store is typically a simple Python dictionary, allowing for
+    in-memory caching across nodes sharing the same context. It can be
+    identified by a configurable key within the context.
     """
 
-    def __init__(self,
-                 cache_name: str = "default_cache",
-                 default_ttl_seconds: Optional[int] = None,
-                 cache_key_field: Optional[str] = None,
-                 initial_cache_data: Optional[Dict[Any, Any]] = None):
-
-        self._cache_name = cache_name
-        self._default_ttl_seconds = default_ttl_seconds
-        self._cache_key_field = cache_key_field
-
-        # Internal in-memory cache for storing values
-        self._cache: Dict[Any, Any] = initial_cache_data if initial_cache_data is not None else {}
-        # Stores the Unix timestamp (float) of when an item was last added or updated
-        self._timestamps: Dict[Any, float] = {}
-
-        # Initialize timestamps for any pre-populated data if TTL is active
-        if self._default_ttl_seconds is not None and initial_cache_data is not None:
-            current_time = time.time()
-            for key in initial_cache_data:
-                self._timestamps[key] = current_time
-
-        logger.debug(f"CacheManagerNode '{self.node_name}' initialized. "
-                     f"Default TTL: {default_ttl_seconds if default_ttl_seconds is not None else 'None'}s. "
-                     f"Key field preference: '{cache_key_field if cache_key_field else 'auto-detect'}'.")
+    # Default key under which the cache store will be managed in the context
+    _DEFAULT_CACHE_CONTEXT_KEY = "vishustra_global_cache_store"
 
     @property
     def node_name(self) -> str:
-        """Returns the programmatic name of the node, including its configured cache name."""
-        return f"CacheManagerNode_{self._cache_name}"
-
-    def _get_cache_key(self, data: Any, context: Dict[str, Any]) -> Any:
-        """
-        Determines the appropriate cache key for an operation based on priority:
-        1. An explicit 'cache_key' provided in the `context`.
-        2. The value associated with `self._cache_key_field` if `data` is a dictionary.
-        3. The value of the 'id' field if `data` is a dictionary.
-        4. The `data` itself, if it is hashable.
-
-        If no suitable hashable key can be determined, it logs a warning and returns `None`.
-        """
-        # Priority 1: Explicit 'cache_key' in context
-        if 'cache_key' in context:
-            return context['cache_key']
-
-        # Priority 2: Configured cache_key_field if data is a dictionary
-        if isinstance(data, dict) and self._cache_key_field and self._cache_key_field in data:
-            return data[self._cache_key_field]
-
-        # Priority 3: Default 'id' field if data is a dictionary
-        if isinstance(data, dict) and 'id' in data:
-            return data['id']
-
-        # Priority 4: Use the data itself, if hashable
-        try:
-            hash(data)  # Check if data is hashable for direct use as a key
-            return data
-        except TypeError:
-            logger.warning(
-                f"CacheManagerNode '{self.node_name}': Failed to determine a cache key. "
-                f"Input data of type '{type(data).__name__}' is not hashable, "
-                f"and no specific key field or 'cache_key' in context was provided. "
-                "Caching operations requiring a key will be skipped."
-            )
-            return None  # Indicate no valid key found
-
-    def _is_expired(self, key: Any) -> bool:
-        """
-        Checks if a cached item associated with the given key has expired based on its TTL.
-        Returns `True` if expired or no timestamp exists for a TTL-configured cache, `False` otherwise.
-        """
-        if self._default_ttl_seconds is None:
-            return False  # No TTL configured, so items do not expire
-
-        timestamp = self._timestamps.get(key)
-        if timestamp is None:
-            # If no timestamp exists for a key in a TTL-configured cache,
-            # consider it expired to ensure it's re-cached with a fresh timestamp.
-            return True
-
-        return (time.time() - timestamp) > self._default_ttl_seconds
-
-    def _get_item(self, cache_key: Any) -> Any:
-        """
-        Retrieves an item from the cache. Performs an expiration check if TTL is active.
-        If the item is expired, it's removed from the cache before returning `None`.
-        """
-        if cache_key is None or cache_key not in self._cache:
-            return None
-
-        if self._is_expired(cache_key):
-            logger.debug(f"CacheManagerNode '{self.node_name}': Item for key '{cache_key}' expired. Evicting.")
-            del self._cache[cache_key]
-            if cache_key in self._timestamps:
-                del self._timestamps[cache_key]
-            return None
-
-        return self._cache[cache_key]
-
-    def _set_item(self, cache_key: Any, value: Any) -> None:
-        """
-        Stores an item in the cache. Updates its timestamp if TTL is enabled.
-        Logs a warning if an attempt is made to set an item with a `None` key.
-        """
-        if cache_key is None:
-            logger.warning(f"CacheManagerNode '{self.node_name}': Attempted to set item with a None key. Skipping operation.")
-            return
-
-        self._cache[cache_key] = value
-        if self._default_ttl_seconds is not None:
-            self._timestamps[cache_key] = time.time()
-        logger.debug(f"CacheManagerNode '{self.node_name}': Item for key '{cache_key}' successfully set/updated.")
-
-    def _invalidate_item(self, cache_key: Any) -> None:
-        """
-        Removes an item from the cache. Logs if the item did not exist.
-        Logs a warning if an attempt is made to invalidate an item with a `None` key.
-        """
-        if cache_key is None:
-            logger.warning(f"CacheManagerNode '{self.node_name}': Attempted to invalidate item with a None key. Skipping operation.")
-            return
-
-        if cache_key in self._cache:
-            del self._cache[cache_key]
-            if cache_key in self._timestamps:
-                del self._timestamps[cache_key]
-            logger.debug(f"CacheManagerNode '{self.node_name}': Item for key '{cache_key}' successfully invalidated.")
-        else:
-            logger.debug(f"CacheManagerNode '{self.node_name}': Attempted to invalidate non-existent key '{cache_key}'. No action taken.")
+        """Returns the descriptive name of the node."""
+        return "CacheManager"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data by performing a cache operation defined in the `context`.
+        Processes the input data by performing a specified cache operation.
 
-        The `context` dictionary can specify the 'cache_operation' (defaults to 'get')
-        and an explicit 'cache_key'. The node updates the `context` with a
-        'cache_hit' boolean and 'cache_key_used' for observability.
+        The 'data' input must be a dictionary containing at least an "operation" key.
+        Depending on the operation, other keys like "key", "value", and "cache_key"
+        may be required.
 
-        Supported 'cache_operation' values:
-        - 'get' (default): Attempts to retrieve data from the cache. If a hit occurs
-                           (and not expired), returns the cached value. On a miss
-                           or expiration, returns the original `data`.
-        - 'set': Stores the input `data` in the cache using the derived key. Returns
-                 the original `data`.
-        - 'invalidate': Removes the item associated with the derived key from the cache.
-                        Returns the original `data`.
-        - 'passthrough': Ignores all cache logic and returns the original `data` directly.
+        The 'context' dictionary is used to hold the actual cache store. If a cache
+        store identified by `cache_context_key` (defaulting to `_DEFAULT_CACHE_CONTEXT_KEY`)
+        is not found or is not a dictionary, an empty dictionary will be initialized
+        in the context for subsequent operations within the same pipeline run.
 
         Args:
-            data (Any): The input data to be processed or cached.
-            context (Dict[str, Any]): A dictionary for shared state and directives.
+            data (Any): A dictionary specifying the cache operation and its parameters.
+                        Expected keys:
+                        - "operation" (str): The desired cache action ("get", "set", "delete", "clear").
+                        - "key" (str, optional): The cache key to operate on (required for "get", "set", "delete").
+                        - "value" (Any, optional): The value to store (required for "set").
+                        - "cache_key" (str, optional): The specific key in the context where the
+                                                       cache dictionary is stored. Defaults to
+                                                       `_DEFAULT_CACHE_CONTEXT_KEY`.
+
+            context (Dict[str, Any]): The shared execution context dictionary,
+                                       where the cache store is managed.
 
         Returns:
-            Any: The processed data, which could be the cached value, the original
-                 input data, or the result of a cache management action.
+            Any: The result of the cache operation:
+                - For "get": The cached value if found, otherwise `None`.
+                - For "set": The value that was successfully stored.
+                - For "delete": The value that was deleted, or `None` if the key did not exist.
+                - For "clear": A confirmation string (e.g., "Cache cleared").
+                - On error: Raises an exception, or `None` if the error is handled internally
+                            without re-raising.
+
+        Raises:
+            ValueError: If 'data' is not a dictionary, or if required parameters
+                        (like 'operation', 'key', 'value') are missing or invalid
+                        for the specified operation.
+            Exception: For unexpected errors during cache operations, to propagate
+                       failure upstream.
         """
-        cache_operation = context.get('cache_operation', 'get').lower()
-        cache_key = self._get_cache_key(data, context)
-        context['cache_key_used'] = cache_key
+        if not isinstance(data, dict):
+            logger.error(f"[{self.node_name}] Invalid input data type: expected a dictionary, got {type(data)}.")
+            raise ValueError(f"Input data for '{self.node_name}' must be a dictionary.")
 
-        # Operations that require a valid cache key
-        if cache_key is None and cache_operation not in ['passthrough']:
-            logger.error(
-                f"CacheManagerNode '{self.node_name}': Cannot perform '{cache_operation}' operation "
-                "as a valid cache key could not be determined. Returning original data without caching."
+        operation: Optional[str] = data.get("operation")
+        cache_context_key: str = data.get("cache_key", self._DEFAULT_CACHE_CONTEXT_KEY)
+
+        # Retrieve or initialize the cache store from the context
+        cache_store = context.get(cache_context_key)
+        if not isinstance(cache_store, dict):
+            logger.warning(
+                f"[{self.node_name}] Cache store not found or invalid type under context key "
+                f"'{cache_context_key}'. Initializing an empty dictionary cache for this context run."
             )
-            context['cache_hit'] = False
-            return data
+            cache_store = {}
+            context[cache_context_key] = cache_store  # Store the new cache dict back into context
 
-        if cache_operation == 'get':
-            cached_value = self._get_item(cache_key)
-            if cached_value is not None:
-                context['cache_hit'] = True
-                logger.info(f"CacheManagerNode '{self.node_name}': Cache HIT for key '{cache_key}'.")
-                return cached_value
+        key: Optional[str] = data.get("key")
+        value: Any = data.get("value")
+        result: Any = None
+
+        try:
+            if operation == "get":
+                if key is None:
+                    logger.error(f"[{self.node_name}] 'get' operation requires a 'key'.")
+                    raise ValueError("'get' operation requires a 'key'.")
+                result = cache_store.get(key)
+                if result is not None:
+                    logger.debug(f"[{self.node_name}] Cache hit for key '{key}'.")
+                else:
+                    logger.debug(f"[{self.node_name}] Cache miss for key '{key}'.")
+                return result
+
+            elif operation == "set":
+                if key is None:
+                    logger.error(f"[{self.node_name}] 'set' operation requires a 'key'.")
+                    raise ValueError("'set' operation requires a 'key'.")
+                # 'value' can be None, so we only check if it's missing from the data dict
+                if "value" not in data:
+                    logger.error(f"[{self.node_name}] 'set' operation requires a 'value'.")
+                    raise ValueError("'set' operation requires a 'value'.")
+                
+                cache_store[key] = value
+                logger.debug(f"[{self.node_name}] Cache set for key '{key}'.")
+                return value
+
+            elif operation == "delete":
+                if key is None:
+                    logger.error(f"[{self.node_name}] 'delete' operation requires a 'key'.")
+                    raise ValueError("'delete' operation requires a 'key'.")
+                if key in cache_store:
+                    deleted_value = cache_store.pop(key)
+                    logger.debug(f"[{self.node_name}] Cache deleted for key '{key}'.")
+                    return deleted_value
+                else:
+                    logger.warning(f"[{self.node_name}] Attempted to delete non-existent key '{key}'.")
+                    return None
+
+            elif operation == "clear":
+                cache_store.clear()
+                logger.debug(f"[{self.node_name}] Cache cleared successfully under context key '{cache_context_key}'.")
+                return "Cache cleared"
+
             else:
-                context['cache_hit'] = False
-                logger.info(f"CacheManagerNode '{self.node_name}': Cache MISS for key '{cache_key}'. Returning original data.")
-                return data
+                logger.error(f"[{self.node_name}] Unknown or unsupported cache operation: '{operation}'.")
+                raise ValueError(f"Unknown cache operation: '{operation}'")
 
-        elif cache_operation == 'set':
-            self._set_item(cache_key, data)
-            context['cache_hit'] = False  # A 'set' operation itself is not a cache 'hit'
-            logger.info(f"CacheManagerNode '{self.node_name}': Explicitly SET item for key '{cache_key}'.")
-            return data  # Return original data after setting it
-
-        elif cache_operation == 'invalidate':
-            self._invalidate_item(cache_key)
-            context['cache_hit'] = False  # An 'invalidate' operation is not a cache 'hit'
-            logger.info(f"CacheManagerNode '{self.node_name}': Explicitly INVALIDATED item for key '{cache_key}'.")
-            return data  # Return original data after invalidating
-
-        elif cache_operation == 'passthrough':
-            logger.debug(f"CacheManagerNode '{self.node_name}': Passthrough operation. Bypassing cache logic.")
-            context['cache_hit'] = False
-            return data
-
-        else:
+        except ValueError as ve:
+            # Re-raise explicit ValueErrors for malformed input
+            raise ve
+        except Exception as e:
+            # Catch all other unexpected errors during cache interaction
             logger.error(
-                f"CacheManagerNode '{self.node_name}': Received unknown cache_operation '{cache_operation}'. "
-                "Returning original data and marking as no cache hit."
+                f"[{self.node_name}] An unexpected error occurred during operation "
+                f"'{operation}' on cache key '{key}' in context key '{cache_context_key}': {e}",
+                exc_info=True
             )
-            context['cache_hit'] = False
-            return data
+            raise  # Re-raise to signal a failure in the pipeline
