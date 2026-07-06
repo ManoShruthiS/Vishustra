@@ -1,118 +1,95 @@
 import logging
 from typing import Any, Dict
 
-# Assuming vishustra_core.nodes.base_node is available in the project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class FactCheckerNode(BaseNode):
     """
-    A Vishustra node designed to simulate fact-checking textual claims.
+    A processing node designed to simulate the fact-checking of textual statements.
 
-    This node takes a string as input, representing a claim, and processes it
-    to determine a verdict (e.g., TRUE, FALSE, NEEDS_MORE_INFO) along with
-    simulated reasoning. In a production environment, this would integrate
-    with external fact-checking services, knowledge bases, or advanced
-    language models for verification.
+    This node accepts a string statement as input and attempts to determine its
+    truthfulness based on a set of internal, predefined (simulated) rules. In a
+    production environment, this node would integrate with external knowledge bases,
+    dedicated fact-checking APIs, or sophisticated natural language processing
+    models to perform genuine verification.
+
+    The output provides the original statement, a determined truthfulness status
+    ("TRUE", "FALSE", "UNKNOWN"), and a brief reason for that determination.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "FactCheckerNode"
+        """Returns the descriptive name of this node."""
+        return "Fact Checker"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data to simulate fact-checking a claim.
-
-        The `data` argument is expected to be a string representing the claim
-        to be verified. The `context` dictionary can be used to pass
-        configuration parameters, external service clients, or other
-        runtime information relevant for the fact-checking process.
+        Processes the input data, attempting to fact-check a given statement.
 
         Args:
-            data: The textual claim to be fact-checked (expected type: str).
-            context: A dictionary containing contextual information,
-                     such as configuration settings or client instances.
+            data: The statement to be fact-checked. Expected to be a string.
+            context: A dictionary containing contextual information relevant to the
+                     processing. While this simulated node does not utilize context
+                     directly, it is provided for future extensibility (e.g., API keys,
+                     configuration parameters, confidence thresholds).
 
         Returns:
-            A dictionary containing the original claim, its simulated verdict,
-            and a reasoning statement.
+            A dictionary containing the original statement, its determined
+            truthfulness status, and a reason for the determination.
             Example:
             {
-                "claim": "Vishustra is a highly modular LLM orchestration framework.",
-                "verdict": "TRUE",
-                "reasoning": "Based on project documentation and core design principles."
+                "original_statement": "The Earth is flat.",
+                "status": "FALSE",
+                "reason": "Widely debunked theory (simulated check)."
             }
 
         Raises:
-            TypeError: If the input `data` is not a string.
-            ValueError: If the input `data` string is empty or contains only whitespace.
+            TypeError: If the input 'data' is not of type `str`.
         """
+        log_prefix = f"[{self.node_name}]"
+        logger.info(f"{log_prefix} Initiating fact-check process for data of type: {type(data).__name__}.")
+
         if not isinstance(data, str):
-            logger.error(
-                "FactCheckerNode: Invalid data type received. Expected 'str', but got '%s'.",
-                type(data).__name__
+            error_msg = (
+                f"{log_prefix} Invalid input data type. Expected 'str', "
+                f"but received '{type(data).__name__}'. Unable to process."
             )
-            raise TypeError(
-                f"FactCheckerNode requires 'data' to be a string, "
-                f"but received type '{type(data).__name__}'."
-            )
+            logger.error(error_msg)
+            raise TypeError(error_msg)
 
-        claim = data.strip()
-        if not claim:
-            logger.warning("FactCheckerNode: Received an empty or whitespace-only claim string.")
-            raise ValueError("FactCheckerNode cannot process an empty claim.")
-        
-        # Retrieve max_claim_length from context or use a default
-        max_claim_length = context.get('max_claim_length', 1024)
-        if len(claim) > max_claim_length:
-            logger.warning(
-                "FactCheckerNode: Claim length (%d) exceeds configured maximum (%d). "
-                "Consider refining input data or increasing 'max_claim_length' in context.",
-                len(claim), max_claim_length
-            )
-            # Depending on requirements, one might choose to truncate, reject, or just log.
-            # For this simulation, we proceed but log the warning.
-
-        logger.info("FactCheckerNode: Initiating fact-check for claim: '%s'", claim[:100] + ('...' if len(claim) > 100 else ''))
-
-        verdict: str = "NEEDS_MORE_INFO"
-        reasoning: str = "Automated verification could not find definitive evidence."
-
-        # --- Simulate Fact-Checking Logic ---
-        # In a real-world scenario, this section would involve:
-        # 1. Making API calls to external fact-checking services.
-        # 2. Querying structured knowledge bases or internal data sources.
-        # 3. Interacting with LLMs to evaluate the claim against provided context or external data.
-        # For this example, we use simple keyword matching to simulate different verdicts.
-
-        claim_lower = claim.lower()
-
-        if "vishustra is an llm orchestration framework" in claim_lower or \
-           "vishustra is a highly modular llm orchestration framework" in claim_lower:
-            verdict = "TRUE"
-            reasoning = "Based on official project documentation and core objectives."
-        elif "vishustra is a frontend framework" in claim_lower or \
-             "vishustra is built in java" in claim_lower:
-            verdict = "FALSE"
-            reasoning = "Vishustra is a backend LLM orchestration framework, primarily in Python, not a frontend or Java-based one."
-        elif "vishustra" in claim_lower and "python" in claim_lower:
-            verdict = "TRUE"
-            reasoning = "Vishustra is indeed developed using Python as its primary programming language."
-        
-        # This part of the simulation allows overriding verdicts via context for testing purposes
-        mock_verdicts = context.get('mock_verdicts', {})
-        if claim in mock_verdicts:
-            verdict = mock_verdicts[claim].get('verdict', verdict)
-            reasoning = mock_verdicts[claim].get('reasoning', reasoning)
-            logger.debug("FactCheckerNode: Applied mock verdict from context for claim: '%s'", claim)
-
-        logger.info("FactCheckerNode: Fact-check completed. Verdict: %s for claim: '%s'", verdict, claim[:100] + ('...' if len(claim) > 100 else ''))
-
-        return {
-            "claim": claim,
-            "verdict": verdict,
-            "reasoning": reasoning,
+        statement = data.strip()
+        result: Dict[str, Any] = {
+            "original_statement": statement,
+            "status": "UNKNOWN",
+            "reason": "Truthfulness could not be determined with current internal rules."
         }
+
+        # --- Simulated Fact-Checking Logic ---
+        # This section simulates truth verification. In a real-world application,
+        # this would involve calls to external services, database queries, or
+        # complex NLP model inferences.
+        statement_lower = statement.lower()
+
+        if "albert einstein" in statement_lower and "theory of relativity" in statement_lower:
+            result["status"] = "TRUE"
+            result["reason"] = "Corroborated scientific fact (simulated check)."
+            logger.info(f"{log_prefix} Statement identified as TRUE: '{statement[:70]}...'")
+        elif "earth is flat" in statement_lower or "flat earth theory" in statement_lower:
+            result["status"] = "FALSE"
+            result["reason"] = "Widely debunked theory by scientific consensus (simulated check)."
+            logger.info(f"{log_prefix} Statement identified as FALSE: '{statement[:70]}...'")
+        elif "sun revolves around the earth" in statement_lower:
+            result["status"] = "FALSE"
+            result["reason"] = "Geocentric model debunked by heliocentric evidence (simulated check)."
+            logger.info(f"{log_prefix} Statement identified as FALSE: '{statement[:70]}...'")
+        else:
+            logger.warning(
+                f"{log_prefix} Truthfulness UNKNOWN for statement based on internal rules: "
+                f"'{statement[:70]}...'. External verification may be required."
+            )
+        # --- End of Simulated Fact-Checking Logic ---
+
+        logger.info(f"{log_prefix} Completed fact-check for statement. Final status: {result['status']}.")
+        return result
