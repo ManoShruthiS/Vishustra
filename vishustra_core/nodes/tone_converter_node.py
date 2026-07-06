@@ -5,87 +5,150 @@ from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-
 class ToneConverterNode(BaseNode):
     """
-    A processing node designed to convert the tone of input text.
+    A Vishustra processing node designed to convert the tone of text data.
 
-    This node expects a 'target_tone' key in the context dictionary,
-    which specifies the desired output tone (e.g., 'formal', 'informal', 'neutral', 'sarcastic').
-    The node simulates the tone conversion process.
+    This node accepts a string as input and, based on the 'target_tone'
+    specified in the context, applies a set of predefined transformations
+    to simulate a change in tone. Currently, it supports 'formal', 'informal',
+    and 'neutral' tones.
+
+    Note: This node provides a rule-based simulation of tone conversion.
+    For more sophisticated and context-aware tone transformations,
+    integration with a large language model (LLM) would typically be employed
+    in a production Vishustra pipeline.
     """
+
+    _FORMAL_CONVERSIONS: Dict[str, str] = {
+        # Contraction expansions
+        "don't": "do not", "can't": "cannot", "won't": "will not", "it's": "it is",
+        "you're": "you are", "I'm": "I am", "we're": "we are", "they're": "they are",
+        "he's": "he is", "she's": "she is", "isn't": "is not", "aren't": "are not",
+        "wasn't": "was not", "weren't": "were not", "haven't": "have not",
+        "hasn't": "has not", "hadn't": "had not", "wouldn't": "would not",
+        "couldn't": "could not", "shouldn't": "should not", "mustn't": "must not",
+        "needn't": "need not",
+
+        # Informal to formal word substitutions
+        "awesome": "excellent",
+        "cool": "impressive",
+        "get in touch": "contact us",
+        "a lot": "numerous",
+        "stuff": "materials",
+        "pretty much": "virtually",
+        "kinda": "somewhat",
+        "guys": "colleagues",
+        "wanna": "want to",
+        "gonna": "going to",
+        "lemme": "let me",
+        "gotta": "have to",
+    }
+
+    _INFORMAL_CONVERSIONS: Dict[str, str] = {
+        # Contraction contractions
+        "do not": "don't", "cannot": "can't", "will not": "won't", "it is": "it's",
+        "you are": "you're", "I am": "I'm", "we are": "we're", "they are": "they're",
+        "he is": "he's", "she is": "she's", "is not": "isn't", "are not": "aren't",
+        "was not": "wasn't", "were not": "weren't", "have not": "haven't",
+        "has not": "hasn't", "had not": "hadn't", "would not": "wouldn't",
+        "could not": "couldn't", "should not": "shouldn't", "must not": "mustn't",
+        "need not": "needn't",
+
+        # Formal to informal word substitutions
+        "excellent": "awesome",
+        "impressive": "cool",
+        "contact us": "get in touch",
+        "numerous": "a lot",
+        "materials": "stuff",
+        "virtually": "pretty much",
+        "somewhat": "kinda",
+        "colleagues": "guys",
+        "want to": "wanna",
+        "going to": "gonna",
+        "let me": "lemme",
+        "have to": "gotta",
+    }
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "ToneConverterNode"
+        """Returns the descriptive name of this processing node."""
+        return "ToneConverter"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> str:
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, typically a string, to simulate a tone conversion
-        based on the 'target_tone' specified in the context.
+        Processes the input data by converting its tone based on the specified context.
 
         Args:
-            data: The input data, expected to be a string representing text.
-            context: A dictionary containing operational parameters for the node.
-                     Must include 'target_tone' (str) specifying the desired tone.
+            data (Any): The input data, expected to be a string that needs tone conversion.
+            context (Dict[str, Any]): A dictionary containing processing context parameters.
+                                     It *must* include 'target_tone' (str), which specifies
+                                     the desired output tone (e.g., 'formal', 'informal', 'neutral').
 
         Returns:
-            A string representing the input text with its tone simulated to be converted.
+            Any: The tone-converted string. The type matches the input if conversion is successful.
 
         Raises:
-            TypeError: If the input `data` is not a string.
-            ValueError: If 'target_tone' is missing from `context`, is not a string,
-                        is empty, or specifies an unsupported tone.
+            TypeError: If the input 'data' is not a string.
+            ValueError: If 'target_tone' is missing from the context, is not a string,
+                        or specifies an unsupported tone.
         """
         if not isinstance(data, str):
             logger.error(
-                "ToneConverterNode: Invalid input data type. Expected 'str', but received '%s'.",
-                type(data).__name__,
+                "ToneConverterNode received non-string data. Expected str, but got %s.",
+                type(data),
             )
             raise TypeError(
-                f"ToneConverterNode expects 'data' to be a string, but received {type(data).__name__}"
+                f"ToneConverterNode expects 'data' to be a string, but received {type(data)}."
             )
 
-        target_tone_raw = context.get("target_tone")
-
-        if not isinstance(target_tone_raw, str) or not target_tone_raw:
+        target_tone = context.get("target_tone")
+        if not target_tone or not isinstance(target_tone, str):
             logger.error(
-                "ToneConverterNode: 'target_tone' is missing or invalid in context. "
-                "Expected a non-empty string for 'target_tone'."
+                "ToneConverterNode 'target_tone' not found or invalid in context. "
+                "Context received: %s",
+                context,
             )
             raise ValueError(
-                "ToneConverterNode requires a non-empty string value for 'target_tone' in the context dictionary."
+                "ToneConverterNode requires a 'target_tone' (str) in the context to operate."
             )
 
-        target_tone = target_tone_raw.lower()
-        converted_text: str
+        processed_text = data
+        lower_tone = target_tone.lower()
+        conversions: Dict[str, str] = {}
 
-        # Simulate tone conversion based on the specified target_tone
-        if target_tone == "formal":
-            converted_text = f"Regarding the matter at hand, it is observed that: '{data}' (tone adjusted to formal)."
-            logger.info("ToneConverterNode: Successfully converted text to formal tone.")
-        elif target_tone == "informal":
-            converted_text = f"Hey, just wanted to let you know: '{data}' (pretty informal, right?)."
-            logger.info("ToneConverterNode: Successfully converted text to informal tone.")
-        elif target_tone == "neutral":
-            converted_text = f"The information provided is: '{data}' (presented in a neutral tone)."
-            logger.info("ToneConverterNode: Successfully converted text to neutral tone.")
-        elif target_tone == "sarcastic":
-            converted_text = f"Oh, how absolutely *fascinating*! '{data}' (infused with a delightful layer of sarcasm)."
-            logger.info("ToneConverterNode: Successfully converted text to sarcastic tone.")
+        if lower_tone == "formal":
+            conversions = self._FORMAL_CONVERSIONS
+            logger.info("Applying formal tone conversions.")
+        elif lower_tone == "informal":
+            conversions = self._INFORMAL_CONVERSIONS
+            logger.info("Applying informal tone conversions.")
+        elif lower_tone == "neutral":
+            logger.info("ToneConverterNode received 'neutral' tone; no text conversion applied.")
+            return processed_text
         else:
             logger.error(
-                "ToneConverterNode: Unsupported 'target_tone' specified: '%s'.",
-                target_tone_raw,
+                "ToneConverterNode received unsupported 'target_tone': '%s'. "
+                "Supported tones are 'formal', 'informal', 'neutral'.",
+                target_tone,
             )
             raise ValueError(
-                f"Unsupported 'target_tone': '{target_tone_raw}'. "
-                "Supported tones are 'formal', 'informal', 'neutral', 'sarcastic'."
+                f"Unsupported 'target_tone': '{target_tone}'. "
+                "Supported options are 'formal', 'informal', 'neutral'."
             )
-
-        logger.debug(
-            "ToneConverterNode: Processed data (original: '%s'...) with target_tone '%s'. Output: '%s'...",
-            data[:50], target_tone_raw, converted_text[:50]
+        
+        # Apply word-based conversions.
+        # This simulation iterates through replacements to handle multiple occurrences
+        # and attempts to cover both lowercase and title-case for basic sentence structure.
+        for original, replacement in conversions.items():
+            # Apply conversion for exact match (case-sensitive)
+            processed_text = processed_text.replace(original, replacement)
+            # Apply conversion for capitalized version (e.g., at sentence start)
+            processed_text = processed_text.replace(original.capitalize(), replacement.capitalize())
+        
+        logger.info(
+            "Tone conversion successfully completed for target tone '%s'. "
+            "Original data length: %d, Processed data length: %d",
+            target_tone, len(data), len(processed_text)
         )
-        return converted_text
+        return processed_text
