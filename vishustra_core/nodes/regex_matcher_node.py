@@ -1,104 +1,103 @@
-import re
 import logging
-from typing import Any, Dict, List, Optional, Tuple, Union
+import re
+from typing import Any, Dict, List
 
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
+
 class RegexMatcherNode(BaseNode):
     """
     A Vishustra processing node that performs regular expression matching
-    on input data. It extracts all non-overlapping occurrences based on a
-    pattern provided in the context.
+    on input data.
+
+    This node expects the input `data` to be a string and requires a
+    `regex_pattern` string in the `context` dictionary to define the
+    pattern to match. It returns all non-overlapping matches found in
+    the data.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """Returns the descriptive name of the node."""
         return "RegexMatcher"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Optional[List[Union[str, Tuple[str, ...]]]]:
+    def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
         Processes the input data by applying a regular expression pattern
-        and extracting all non-overlapping matches.
-
-        Expected `context` keys:
-        - 'pattern' (str): The regular expression pattern to use. (Required)
-        - 'flags' (int, optional): Bitmask of `re.RegexFlag` (e.g., re.IGNORECASE | re.MULTILINE).
-                                   Defaults to 0 (no flags).
-        - 'return_full_matches_only' (bool, optional): If True, and the pattern
-                                                       contains capturing groups,
-                                                       the method will return
-                                                       the full matched strings
-                                                       instead of tuples of groups.
-                                                       Defaults to False (return groups as tuples if present).
+        from the context.
 
         Args:
-            data (Any): The input data, expected to be a string.
-            context (Dict[str, Any]): A dictionary containing parameters for processing.
+            data: The input string on which the regex matching will be performed.
+                  Must be of type `str`.
+            context: A dictionary containing operational parameters for the node.
+                     Must include a key 'regex_pattern' with a string value
+                     representing the regular expression.
 
         Returns:
-            Optional[List[Union[str, Tuple[str, ...]]]]: A list of all non-overlapping
-            matches found. Each match will be either a string (if no capturing
-            groups or 'return_full_matches_only' is True) or a tuple of strings
-            (if capturing groups are present). Returns None if no matches are found
-            or if a critical error (e.g., invalid pattern, incorrect data type) occurs.
+            A list of strings, where each string is a non-overlapping match
+            found by the regex pattern in the input data. Returns an empty
+            list if no matches are found.
+
+        Raises:
+            TypeError: If the `data` input is not a string.
+            ValueError: If 'regex_pattern' is missing from the `context`,
+                        is not a string, or is an invalid regular expression.
         """
         if not isinstance(data, str):
-            logger.warning(
-                f"Node '{self.node_name}': Input data is not a string. "
-                f"Received type: {type(data).__name__}. Returning None."
-            )
-            return None
-
-        pattern_str = context.get('pattern')
-        if not isinstance(pattern_str, str) or not pattern_str:
             logger.error(
-                f"Node '{self.node_name}': 'pattern' key missing or not a valid "
-                f"non-empty string in context. Context received: {context}"
+                "[%s] Input data type error. Expected string, but received %s.",
+                self.node_name,
+                type(data).__name__,
             )
-            return None
+            raise TypeError(
+                f"[{self.node_name}] Input 'data' must be a string for regex matching, "
+                f"but received {type(data).__name__}."
+            )
 
-        flags = context.get('flags', 0)
-        if not isinstance(flags, int):
-            logger.warning(
-                f"Node '{self.node_name}': 'flags' in context is not an integer. "
-                f"Received type: {type(flags).__name__}. Defaulting to 0."
-            )
-            flags = 0
+        regex_pattern = context.get("regex_pattern")
 
-        return_full_matches_only = context.get('return_full_matches_only', False)
-        if not isinstance(return_full_matches_only, bool):
-            logger.warning(
-                f"Node '{self.node_name}': 'return_full_matches_only' in context is not a boolean. "
-                f"Received type: {type(return_full_matches_only).__name__}. Defaulting to False."
+        if regex_pattern is None:
+            logger.error(
+                "[%s] Missing configuration: 'regex_pattern' is not provided in the context.",
+                self.node_name,
             )
-            return_full_matches_only = False
+            raise ValueError(
+                f"[{self.node_name}] 'regex_pattern' must be provided in the context."
+            )
+
+        if not isinstance(regex_pattern, str):
+            logger.error(
+                "[%s] Configuration error: 'regex_pattern' in context is not a string. Received %s.",
+                self.node_name,
+                type(regex_pattern).__name__,
+            )
+            raise ValueError(
+                f"[{self.node_name}] 'regex_pattern' in context must be a string, "
+                f"but received {type(regex_pattern).__name__}."
+            )
 
         try:
-            compiled_pattern = re.compile(pattern_str, flags)
+            compiled_pattern = re.compile(regex_pattern)
         except re.error as e:
             logger.error(
-                f"Node '{self.node_name}': Invalid regex pattern '{pattern_str}' "
-                f"with flags {flags}: {e}"
+                "[%s] Invalid regex pattern provided: '%s'. Error: %s",
+                self.node_name,
+                regex_pattern,
+                e,
             )
-            return None
+            raise ValueError(
+                f"[{self.node_name}] Invalid regex pattern provided: {e}"
+            ) from e
 
-        if return_full_matches_only:
-            # Use finditer to get match objects, then extract the full matched string (group 0)
-            matches = [m.group(0) for m in compiled_pattern.finditer(data)]
-        else:
-            # Use findall which returns strings (no groups) or tuples of groups
-            matches = compiled_pattern.findall(data)
-
-        if not matches:
-            logger.debug(
-                f"Node '{self.node_name}': No matches found for pattern '{pattern_str}' in data."
-            )
-            return None
-
+        matches = compiled_pattern.findall(data)
         logger.debug(
-            f"Node '{self.node_name}': Found {len(matches)} matches for pattern '{pattern_str}'."
+            "[%s] Successfully found %d matches for pattern '%s' in data (first 100 chars: '%s...').",
+            self.node_name,
+            len(matches),
+            regex_pattern,
+            data[:100],
         )
+
         return matches
