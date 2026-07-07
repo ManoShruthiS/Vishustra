@@ -1,104 +1,83 @@
 import logging
 from typing import Any, Dict
 
+# Assuming BaseNode is available in the specified module path as per project context.
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class SentimentAnalyzerNode(BaseNode):
     """
-    A processing node designed to analyze the sentiment of a given text input.
+    A Vishustra processing node that analyzes the sentiment of input text.
 
-    This node simulates sentiment analysis using a basic keyword-matching approach.
-    In a production environment, this would typically integrate with a dedicated
-    Natural Language Processing (NLP) service or a sophisticated language model
-    for more robust and nuanced sentiment detection.
+    This node simulates sentiment analysis, categorizing text as 'positive',
+    'negative', or 'neutral' based on simplified keyword matching.
+    In a production environment, this would typically integrate with an actual NLP
+    sentiment analysis service, a pre-trained model, or an external API.
     """
 
     @property
     def node_name(self) -> str:
         """
-        Returns the unique name of this node.
+        Returns the descriptive name of the node.
         """
         return "SentimentAnalyzer"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input data to determine its underlying sentiment.
+        Analyzes the sentiment of the input data.
+
+        Expects 'data' to be a string. It returns a dictionary containing
+        the original text and its inferred sentiment.
 
         Args:
-            data: The input data, which is expected to be a string representing text.
-            context: A dictionary containing contextual information relevant for processing.
-                     (Currently not utilized for the sentiment logic, but available
-                     for future enhancements such as configuration parameters).
+            data (Any): The input data, expected to be a string of text.
+            context (Dict[str, Any]): A dictionary containing contextual information
+                                       relevant to the processing. This could include
+                                       configuration settings for a more complex analyzer.
 
         Returns:
-            A dictionary containing:
-            - "text": The original input text.
-            - "sentiment": The analyzed sentiment ("Positive", "Negative", or "Neutral").
-            - "score": A numerical confidence score for the detected sentiment,
-                       ranging approximately from -1.0 (highly negative) to 1.0 (highly positive).
+            Dict[str, Any]: A dictionary with 'text' and 'sentiment' keys.
+                            Example: {"text": "Hello world!", "sentiment": "neutral"}
+                            An additional 'message' key might be present for edge cases.
 
         Raises:
-            ValueError: If the input `data` is not a string, as this node is designed
-                        specifically for text processing.
+            TypeError: If the input 'data' is not a string.
         """
         if not isinstance(data, str):
-            logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected 'str', "
-                f"but received '{type(data).__name__}'. Data: {data!r}"
+            error_msg = (
+                f"{self.node_name} received non-string data. "
+                f"Type: {type(data).__name__}. Expected 'str'."
             )
-            raise ValueError(f"Input data for {self.node_name} must be a string.")
+            logger.error(error_msg, extra={"data_type": type(data).__name__})
+            raise TypeError(error_msg)
 
-        # Handle empty or whitespace-only strings gracefully
         if not data.strip():
-            logger.info(
-                f"[{self.node_name}] Received empty or whitespace-only string. "
-                "Defaulting to 'Neutral' sentiment."
+            logger.warning(
+                f"{self.node_name} received an empty string for analysis. "
+                "Returning 'neutral' sentiment.",
+                extra={"original_data": data}
             )
-            return {"text": data, "sentiment": "Neutral", "score": 0.0}
+            return {"text": data, "sentiment": "neutral", "message": "Empty string provided."}
 
-        logger.info(f"[{self.node_name}] Initiating sentiment analysis for text (length: {len(data)} characters).")
-
-        # Simulate sentiment analysis with keyword matching
         text_lower = data.lower()
-        
-        positive_keywords = {
-            "good", "great", "excellent", "happy", "love", "positive", "awesome",
-            "fantastic", "superb", "wonderful", "amazing", "joy", "like"
-        }
-        negative_keywords = {
-            "bad", "terrible", "horrible", "sad", "hate", "negative", "awful",
-            "poor", "worse", "disappointing", "frustrated", "dislike"
-        }
+        sentiment = "neutral"
 
-        positive_count = sum(text_lower.count(kw) for kw in positive_keywords)
-        negative_count = sum(text_lower.count(kw) for kw in negative_keywords)
+        # Simplified keyword-based sentiment detection for demonstration.
+        # This would be replaced by actual NLP model inference in a real system.
+        positive_keywords = ["good", "happy", "great", "excellent", "love", "joy", "positive"]
+        negative_keywords = ["bad", "sad", "terrible", "awful", "hate", "unhappy", "negative"]
 
-        sentiment = "Neutral"
-        score = 0.0
+        if any(keyword in text_lower for keyword in positive_keywords):
+            sentiment = "positive"
+        elif any(keyword in text_lower for keyword in negative_keywords):
+            sentiment = "negative"
 
-        total_scoreable_keywords = positive_count + negative_count
+        result = {"text": data, "sentiment": sentiment}
+        logger.debug(
+            f"{self.node_name} processed text (first 50 chars): '{data[:50]}...' "
+            f"- Inferred sentiment: '{sentiment}'",
+            extra={"sentiment_result": sentiment, "original_text_preview": data[:50]}
+        )
 
-        if total_scoreable_keywords > 0:
-            if positive_count > negative_count:
-                sentiment = "Positive"
-                score = positive_count / total_scoreable_keywords
-            elif negative_count > positive_count:
-                sentiment = "Negative"
-                score = - (negative_count / total_scoreable_keywords)
-            else: # Equal counts of positive and negative keywords
-                sentiment = "Neutral"
-                score = 0.0
-        else:
-            # If no sentiment-bearing keywords found, default to neutral
-            sentiment = "Neutral"
-            score = 0.0
-
-        logger.info(f"[{self.node_name}] Analysis concluded. Sentiment: '{sentiment}', Score: {score:.2f}.")
-
-        return {
-            "text": data,
-            "sentiment": sentiment,
-            "score": score
-        }
+        return result
