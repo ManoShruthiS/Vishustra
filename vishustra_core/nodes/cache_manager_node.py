@@ -1,103 +1,133 @@
 import logging
+import hashlib
+import json
 from typing import Any, Dict, Optional
 
-# Assuming vishustra_core is accessible in the project structure
-# For standalone execution, you might need to mock or define BaseNode locally.
+# Assuming the specified import path for BaseNode
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class CacheManagerNode(BaseNode):
     """
-    A Vishustra processing node that acts as an in-memory cache manager.
-    It supports operations like setting, getting, deleting, and clearing
-    key-value pairs within its internal cache.
-    """
+    A processing node responsible for managing data caching within the Vishustra pipeline.
 
-    def __init__(self, initial_cache: Optional[Dict[str, Any]] = None):
-        """
-        Initializes the CacheManagerNode with an optional initial cache state.
-        """
-        self._cache: Dict[str, Any] = initial_cache if initial_cache is not None else {}
-        logger.info("CacheManagerNode initialized with %d initial items.", len(self._cache))
+    This node implements a caching mechanism primarily for read operations.
+    When `process` is called:
+    1. It generates a stable cache key based on the input `data`.
+    2. It attempts to retrieve a previously computed result using this key from
+       the 'cache_store' provided in the `context`.
+    
+    Behavior based on cache status:
+    - If a cache hit occurs: The node immediately returns the cached result,
+      effectively short-circuiting any subsequent nodes in the pipeline for this request.
+      It sets `context['cache_hit']` to `True`.
+    - If a cache miss occurs: The node passes the original `data` along for further
+      processing by downstream nodes. It sets `context['cache_hit']` to `False`
+      and stores the generated cache key in `context['cache_key_for_storage']`.
+      This key can then be used by an orchestrator or a subsequent dedicated node
+      to store the final result of the downstream processing if desired.
+
+    The 'cache_store' is expected to be a dictionary-like object (e.g., `dict`,
+    or an object implementing `collections.abc.MutableMapping`) provided
+    within the `context` dictionary under the key `'cache_store'`.
+
+    Example `context` setup:
+    `context = {'cache_store': my_in_memory_cache_dict}`
+    """
 
     @property
     def node_name(self) -> str:
         """Returns the name of the node."""
-        return "CacheManagerNode"
+        return "CacheManager"
+
+    def _generate_cache_key(self, data: Any) -> str:
+        """
+        Generates a stable and consistent cache key from the input data.
+
+        This method prioritizes JSON serialization for complex data structures
+        (like dictionaries and lists) to ensure consistent key generation regardless
+        of insertion order. For primitive types, it uses their string representation.
+        The generated string is then hashed using SHA256 to produce a fixed-size key.
+
+        Args:
+            data: The input data for which to generate a cache key.
+
+        Returns:
+            A SHA256 hexadecimal string representing the cache key.
+
+        Raises:
+            ValueError: If the input data is not suitable for cache key generation
+                        (e.g., not JSON serializable and not a primitive type).
+        """
+        if isinstance(data, (str, int, float, bool, type(None))):
+            key_str = str(data)
+        else:
+            try:
+                # Attempt to serialize to JSON for complex structures (dicts, lists)
+                # sort_keys ensures consistent key order, ensure_ascii=False handles Unicode
+                key_str = json.dumps(data, sort_keys=True, ensure_ascii=False)
+            except TypeError as e:
+                # If data is not JSON serializable and not a primitive,
+                # we cannot reliably generate a consistent key.
+                error_msg = (
+                    f"Data of type '{type(data).__name__}' is not suitable for cache key generation. "
+                    f"It must be JSON serializable or a primitive type. Original error: {e}"
+                )
+                logger.error(error_msg, exc_info=True)
+                raise ValueError(error_msg) from e
+            
+        return hashlib.sha256(key_str.encode('utf-8')).hexdigest()
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes caching operations based on the provided data and context.
+        Processes the input data by attempting to retrieve it from the cache.
 
-        Expected `context` format:
-        `{'operation': 'GET' | 'SET' | 'DELETE' | 'CLEAR'}`
+        Args:
+            data: The input data to be processed (or checked in cache).
+            context: A dictionary containing shared pipeline context, expected
+                     to include 'cache_store' (a dict-like object where cache
+                     entries are stored).
 
-        Expected `data` format varies by operation:
-        - For 'GET' and 'DELETE': `{'key': 'some_key'}`
-        - For 'SET': `{'key': 'some_key', 'value': 'some_value'}`
-        - For 'CLEAR': `{}` (empty dictionary or any data will clear the cache)
+        Returns:
+            The cached result if a cache hit occurs, otherwise the original `data`
+            is returned for further processing by downstream nodes.
 
-        Returns a dictionary indicating the result of the operation.
+        Raises:
+            ValueError: If 'cache_store' is not found or is not a dictionary-like
+                        object in the context, or if the input data fails key generation.
         """
-        operation = context.get('operation')
-
-        if not operation or not isinstance(operation, str):
-            logger.error("Missing or invalid 'operation' in context for CacheManagerNode.")
-            return {"status": "ERROR", "message": "Operation type not specified or invalid."}
-
-        operation = operation.upper()
-        cache_key = data.get('key') if isinstance(data, dict) else None
+        cache_store = context.get('cache_store')
+        # We check for Dict, but ideally it could be any MutableMapping for flexibility.
+        # For simplicity and common use cases, Dict is a good starting point.
+        if not isinstance(cache_store, Dict):
+            error_msg = (
+                "CacheManagerNode requires a 'cache_store' (dict-like object) "
+                "in the context to operate."
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
         try:
-            if operation == 'GET':
-                if cache_key is None:
-                    logger.warning("GET operation attempted without a 'key' in data.")
-                    return {"status": "ERROR", "message": "Key is required for GET operation."}
+            cache_key = self._generate_cache_key(data)
+        except ValueError as e:
+            # If key generation fails, we cannot interact with the cache.
+            # Log the error, treat as a cache miss, and pass the original data.
+            # No cache_key_for_storage is set, as a valid key couldn't be formed.
+            logger.warning(f"Skipping cache check due to failed key generation. Error: {e}")
+            context['cache_hit'] = False
+            return data
 
-                if cache_key in self._cache:
-                    value = self._cache[cache_key]
-                    logger.debug(f"Cache HIT for key: '{cache_key}'")
-                    return {"status": "SUCCESS", "operation": "GET", "key": cache_key, "value": value}
-                else:
-                    logger.debug(f"Cache MISS for key: '{cache_key}'")
-                    return {"status": "NOT_FOUND", "operation": "GET", "key": cache_key, "value": None}
+        # Store the generated cache key in context for potential future writes
+        # by an orchestrator or another node if a miss occurs.
+        context['cache_key_for_storage'] = cache_key
 
-            elif operation == 'SET':
-                if cache_key is None:
-                    logger.warning("SET operation attempted without a 'key' in data.")
-                    return {"status": "ERROR", "message": "Key is required for SET operation."}
-                if 'value' not in data:
-                    logger.warning(f"SET operation attempted for key '{cache_key}' without a 'value'.")
-                    return {"status": "ERROR", "message": "Value is required for SET operation."}
-
-                self._cache[cache_key] = data['value']
-                logger.info(f"Cache SET for key: '{cache_key}'")
-                return {"status": "SUCCESS", "operation": "SET", "key": cache_key}
-
-            elif operation == 'DELETE':
-                if cache_key is None:
-                    logger.warning("DELETE operation attempted without a 'key' in data.")
-                    return {"status": "ERROR", "message": "Key is required for DELETE operation."}
-
-                if cache_key in self._cache:
-                    del self._cache[cache_key]
-                    logger.info(f"Cache DELETE for key: '{cache_key}'")
-                    return {"status": "SUCCESS", "operation": "DELETE", "key": cache_key}
-                else:
-                    logger.warning(f"DELETE operation failed, key '{cache_key}' not found.")
-                    return {"status": "NOT_FOUND", "operation": "DELETE", "key": cache_key, "message": "Key not found."}
-
-            elif operation == 'CLEAR':
-                initial_size = len(self._cache)
-                self._cache.clear()
-                logger.info(f"Cache CLEAR operation performed. {initial_size} items removed.")
-                return {"status": "SUCCESS", "operation": "CLEAR", "items_cleared": initial_size}
-
-            else:
-                logger.error(f"Unsupported cache operation: '{operation}'")
-                return {"status": "ERROR", "message": f"Unsupported operation: {operation}"}
-
-        except Exception as e:
-            logger.exception(f"An unexpected error occurred during cache operation '{operation}' for key '{cache_key}'.")
-            return {"status": "ERROR", "message": f"An unexpected error occurred: {str(e)}"}
+        if cache_key in cache_store:
+            cached_value = cache_store[cache_key]
+            context['cache_hit'] = True
+            logger.debug(f"Cache hit for key '{cache_key[:8]}...'. Returning cached value.")
+            return cached_value
+        else:
+            context['cache_hit'] = False
+            logger.debug(f"Cache miss for key '{cache_key[:8]}...'. Passing data for processing.")
+            return data
