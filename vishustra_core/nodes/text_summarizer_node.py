@@ -1,24 +1,15 @@
-import logging
-from typing import Any, Dict
-
 from vishustra_core.nodes.base_node import BaseNode
+from typing import Any, Dict
+import logging
+import re
 
 logger = logging.getLogger(__name__)
 
 class TextSummarizerNode(BaseNode):
     """
-    A processing node that simulates text summarization.
-
-    This node takes a string as input and returns a simulated summary
-    of that text. The summarization logic is intentionally simple for
-    demonstration purposes, often truncating the text based on word count.
-
-    Context parameters that can influence behavior:
-    - 'summarizer_target_words' (int, default: 50): The approximate maximum
-      number of words for the summary.
-    - 'summarizer_min_original_length' (int, default: 100): If the original
-      text has fewer words than this, it might be returned without summarization,
-      unless it's still longer than `summarizer_target_words`.
+    A processing node that simulates abstractive text summarization.
+    It takes a text string and attempts to produce a shorter,
+    condensed version based on configured parameters.
     """
 
     @property
@@ -28,88 +19,91 @@ class TextSummarizerNode(BaseNode):
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input text data by generating a simulated summary.
+        Processes the input text to generate a summary.
+
+        The summarization logic can be controlled via the 'context' dictionary:
+        - 'summary_ratio': A float between 0.0 and 1.0 representing the
+                           desired ratio of the summary's length to the
+                           original text's length. Defaults to 0.3 (30%).
+                           Applied on sentence count.
+        - 'max_sentences': An integer specifying the maximum number of
+                           sentences to include in the summary. Overrides
+                           'summary_ratio' if present.
+        - 'min_sentences': An integer specifying the minimum number of
+                           sentences for the summary. Defaults to 1.
 
         Args:
-            data (Any): The input data, expected to be a string representing the text
-                        to be summarized.
-            context (Dict[str, Any]): A dictionary containing additional context or
-                                      configuration parameters for the node.
-                                      Can include 'summarizer_target_words' and
-                                      'summarizer_min_original_length'.
+            data: The input text to be summarized. Expected to be a string.
+            context: A dictionary containing parameters for summarization,
+                     such as 'summary_ratio', 'max_sentences', or 'min_sentences'.
 
         Returns:
-            Any: The simulated summarized text (a string).
+            A string containing the summarized text.
 
         Raises:
-            TypeError: If the input `data` is not a string.
+            TypeError: If the input 'data' is not a string.
+            ValueError: If 'summary_ratio' or 'max_sentences' in context are invalid.
         """
         if not isinstance(data, str):
-            logger.error(
-                f"[{self.node_name}] Input data must be a string for summarization. "
-                f"Received type: {type(data).__name__}. Data: {data!r}"
-            )
-            raise TypeError(
-                f"Invalid input type for {self.node_name}. Expected str, "
-                f"got {type(data).__name__}."
-            )
+            logger.error(f"TextSummarizerNode received non-string data: {type(data)}. Expected str.")
+            raise TypeError("TextSummarizerNode requires string input for summarization.")
 
-        text_to_summarize = data.strip()
-        if not text_to_summarize:
-            logger.warning(
-                f"[{self.node_name}] Received an empty string for summarization. "
-                f"Returning empty string."
-            )
+        if not data.strip():
+            logger.warning("TextSummarizerNode received empty or whitespace-only data. Returning empty string.")
             return ""
 
-        # Retrieve summarization parameters from context or use sensible defaults
-        target_word_count = context.get("summarizer_target_words", 50)
-        min_original_length_for_summary = context.get("summarizer_min_original_length", 100)
+        # Default summarization parameters
+        default_summary_ratio = 0.3
+        default_max_sentences = 5
+        default_min_sentences = 1
 
-        if not isinstance(target_word_count, int) or target_word_count <= 0:
-            logger.warning(
-                f"[{self.node_name}] Invalid 'summarizer_target_words' in context "
-                f"({target_word_count!r}). Using default of 50."
-            )
-            target_word_count = 50
+        summary_ratio = context.get('summary_ratio', default_summary_ratio)
+        max_sentences_config = context.get('max_sentences')
+        min_sentences_config = context.get('min_sentences', default_min_sentences)
+
+        if not (0.0 <= summary_ratio <= 1.0):
+            logger.error(f"Invalid 'summary_ratio' in context: {summary_ratio}. Must be between 0.0 and 1.0.")
+            raise ValueError("Context 'summary_ratio' must be between 0.0 and 1.0.")
         
-        if not isinstance(min_original_length_for_summary, int) or min_original_length_for_summary < 0:
-            logger.warning(
-                f"[{self.node_name}] Invalid 'summarizer_min_original_length' in context "
-                f"({min_original_length_for_summary!r}). Using default of 100."
-            )
-            min_original_length_for_summary = 100
+        if not isinstance(min_sentences_config, int) or min_sentences_config < 0:
+            logger.error(f"Invalid 'min_sentences' in context: {min_sentences_config}. Must be a non-negative integer.")
+            raise ValueError("Context 'min_sentences' must be a non-negative integer.")
 
+        # A simple approach to split into sentences, handling common delimiters
+        # This is a simulation; real NLP would use more sophisticated tokenizers.
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', data) if s.strip()]
+        original_sentence_count = len(sentences)
 
-        words = text_to_summarize.split()
-        original_word_count = len(words)
+        if original_sentence_count == 0:
+            return "" # No sentences found
 
-        if original_word_count <= target_word_count:
-            # If the text is already shorter than or equal to the target, no actual summarization is needed.
-            logger.debug(
-                f"[{self.node_name}] Original text ({original_word_count} words) "
-                f"is already within or below target_word_count ({target_word_count}). "
-                f"Returning full text."
-            )
-            return text_to_summarize
+        target_sentence_count = 0
+        if max_sentences_config is not None:
+            if not isinstance(max_sentences_config, int) or max_sentences_config < 0:
+                logger.error(f"Invalid 'max_sentences' in context: {max_sentences_config}. Must be a non-negative integer.")
+                raise ValueError("Context 'max_sentences' must be a non-negative integer.")
+            
+            target_sentence_count = min(max_sentences_config, original_sentence_count)
+            logger.debug(f"Using 'max_sentences' from context: {max_sentences_config}. Target sentences: {target_sentence_count}")
+        else:
+            target_sentence_count = int(original_sentence_count * summary_ratio)
+            logger.debug(f"Using 'summary_ratio' from context: {summary_ratio}. Target sentences: {target_sentence_count}")
+
+        # Ensure we always return at least min_sentences, but not more than original_sentence_count
+        final_sentence_count = max(min_sentences_config, min(target_sentence_count, original_sentence_count))
         
-        if original_word_count <= min_original_length_for_summary:
-            # If the text is considered "short" based on min_original_length_for_summary,
-            # but still longer than the target_word_count, we still summarize.
-            # This is to handle cases where min_original_length is larger than target.
-            logger.debug(
-                f"[{self.node_name}] Original text ({original_word_count} words) "
-                f"is considered short but still longer than target. "
-                f"Applying summarization."
-            )
+        # Take the first 'final_sentence_count' sentences for simplicity in simulation
+        summarized_sentences = sentences[:final_sentence_count]
+        summary = " ".join(summarized_sentences)
 
-
-        # Simulate summarization by truncating to target_word_count words
-        summary_words = words[:target_word_count]
-        summarized_text = " ".join(summary_words) + "..."
+        original_length = len(data)
+        summary_length = len(summary)
 
         logger.info(
-            f"[{self.node_name}] Summarized text from {original_word_count} words "
-            f"to approximately {len(summary_words)} words (target: {target_word_count})."
+            f"Summarized text from {original_sentence_count} sentences ({original_length} chars) "
+            f"to {final_sentence_count} sentences ({summary_length} chars) "
+            f"using '{'max_sentences' if max_sentences_config is not None else 'summary_ratio'}'."
         )
-        return summarized_text
+
+        return summary
+
