@@ -1,113 +1,103 @@
 import logging
 from typing import Any, Dict
 
+# Assuming vishustra_core.nodes.base_node exists in the project structure
+# In a real scenario, this would be `from vishustra.core.nodes.base_node import BaseNode`
+# or similar, depending on the exact project layout.
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class IntentClassifierNode(BaseNode):
     """
-    A Vishustra node designed to classify the user's intent from input text.
+    A Vishustra processing node that classifies the intent of a given text input.
 
-    This node simulates intent classification based on a set of predefined
-    keyword rules. It expects the input `data` to be either a string representing
-    the user's query or a dictionary containing a 'text' key with the query string.
+    This node simulates intent classification based on simple keyword matching.
+    In a real-world production setup, this would typically wrap a sophisticated
+    machine learning model (e.g., a transformer-based model fine-tuned for intent
+    recognition or a rules-based system with advanced NLP techniques).
     """
-
-    def __init__(self):
-        """
-        Initializes the IntentClassifierNode with a set of simulated intent rules.
-        """
-        self._intent_rules = {
-            "greeting": ["hello", "hi", "hey", "good morning", "good evening"],
-            "order_status": ["order", "status", "track", "delivery", "where is my package"],
-            "product_inquiry": ["product", "price", "info", "specifications", "feature", "cost of"],
-            "account_management": ["account", "profile", "settings", "password", "username"],
-            "support": ["help", "support", "contact us", "technical issue"],
-            "goodbye": ["bye", "goodbye", "see you", "farewell"]
-        }
-        logger.debug(f"IntentClassifierNode initialized with intent rules for: {', '.join(self._intent_rules.keys())}")
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of the node.
-        """
+        """Returns the descriptive name of the node."""
         return "IntentClassifierNode"
+
+    def _simulate_intent_classification(self, text: str) -> Dict[str, Any]:
+        """
+        Performs a simulated intent classification based on keywords.
+        This method serves as a placeholder for a more complex ML model inference.
+
+        Args:
+            text: The input text to classify.
+
+        Returns:
+            A dictionary containing the classified intent and a simulated confidence score.
+        """
+        lower_text = text.lower()
+
+        if any(keyword in lower_text for keyword in ["hello", "hi", "hey", "good morning", "greetings"]):
+            return {"intent": "greeting", "confidence": 0.98}
+        elif any(keyword in lower_text for keyword in ["weather", "forecast", "temperature", "climate"]):
+            return {"intent": "weather_query", "confidence": 0.92}
+        elif any(keyword in lower_text for keyword in ["book flight", "travel plans", "reservation", "ticket"]):
+            return {"intent": "flight_booking", "confidence": 0.89}
+        elif any(keyword in lower_text for keyword in ["order food", "pizza", "sushi", "restaurant", "menu"]):
+            return {"intent": "food_ordering", "confidence": 0.85}
+        elif any(keyword in lower_text for keyword in ["set alarm", "reminder", "timer"]):
+            return {"intent": "utility_alarm_timer", "confidence": 0.87}
+        elif any(keyword in lower_text for keyword in ["play music", "song", "artist", "album"]):
+            return {"intent": "music_playback", "confidence": 0.90}
+        elif any(keyword in lower_text for keyword in ["what is", "tell me about", "who is", "information on"]):
+            return {"intent": "information_retrieval", "confidence": 0.80}
+        else:
+            return {"intent": "unclassified", "confidence": 0.50}
 
     def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Processes the input data to classify its underlying intent.
 
-        The node extracts text from the input `data` (either directly as a string
-        or from a 'text' key in a dictionary) and attempts to match it against
-        predefined keyword rules to determine the user's intent.
+        The `data` input is expected to be a string representing a user query or text snippet.
+        The `context` dictionary can be used to pass additional information such as
+        user language, session history, or configuration parameters for the
+        underlying intent classification model (though not used in this simulated version).
 
         Args:
-            data: The input data, expected to be a string (user query) or
-                  a dictionary containing a 'text' key with the query string.
-            context: A dictionary containing additional contextual information,
-                     which can be leveraged for more advanced classification
-                     or passed through to subsequent nodes.
+            data: The input data to be processed. Expected to be a string.
+            context: A dictionary containing contextual information.
 
         Returns:
-            A dictionary containing:
-            - 'intent': The classified intent (e.g., "greeting", "order_status", "unknown").
-            - 'confidence': A simulated confidence score (e.g., 0.9 for a match, 0.5 for unknown).
-            - 'processed_text': The original text that was classified.
-            - 'error_message': (Optional) If an error occurred during processing.
-            - Any other keys from the original input dictionary (excluding 'text').
+            A dictionary containing the classified intent and its confidence.
+            Example: {"intent": "greeting", "confidence": 0.98}
+                     {"intent": "unclassified", "confidence": 0.50}
+
+        Raises:
+            ValueError: If the input `data` is not a string, indicating an invalid input type.
+            RuntimeError: If an unexpected error occurs during the classification process.
         """
-        query_text = None
-        output_data = {}
+        logger.debug(f"[{self.node_name}] Attempting to classify intent for input data.")
 
-        if isinstance(data, str):
-            query_text = data
-        elif isinstance(data, dict) and 'text' in data and isinstance(data['text'], str):
-            query_text = data['text']
-            # Carry over other dictionary keys to the output
-            output_data.update({k: v for k, v in data.items() if k != 'text'})
-        else:
-            logger.warning(
-                f"IntentClassifierNode received invalid input data type or structure. "
-                f"Expected string or dict with 'text' key. Got: {type(data)} -> {data}"
+        if not isinstance(data, str):
+            error_msg = (
+                f"[{self.node_name}] Invalid input data type. "
+                f"Expected 'str', received '{type(data).__name__}'."
             )
-            return {
-                "intent": "error",
-                "confidence": 1.0,
-                "processed_text": str(data),
-                "error_message": "Invalid input data format for intent classification.",
-                **output_data
-            }
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
-        if not query_text.strip():
-            logger.info("Received empty query text for intent classification.")
-            return {
-                "intent": "no_input",
-                "confidence": 1.0,
-                "processed_text": query_text,
-                **output_data
-            }
-
-        normalized_query = query_text.lower()
-        classified_intent = "unknown"
-        confidence = 0.5  # Default confidence for unknown intent
-
-        # Simulate intent classification by checking for keywords
-        for intent, keywords in self._intent_rules.items():
-            if any(keyword in normalized_query for keyword in keywords):
-                classified_intent = intent
-                confidence = 0.9  # Higher confidence for a matched intent
-                break  # Take the first matched intent for simplicity
-
-        logger.info(
-            f"Classified intent for query '{query_text[:75]}{'...' if len(query_text) > 75 else ''}' "
-            f"as '{classified_intent}' with confidence {confidence:.2f}"
-        )
-
-        return {
-            "intent": classified_intent,
-            "confidence": confidence,
-            "processed_text": query_text,
-            **output_data
-        }
+        try:
+            # Perform the actual (or simulated) intent classification
+            classified_result = self._simulate_intent_classification(data)
+            logger.info(
+                f"[{self.node_name}] Classified '{data[:70]}{'...' if len(data) > 70 else ''}' "
+                f"as intent: '{classified_result['intent']}' with confidence: {classified_result['confidence']:.2f}."
+            )
+            return classified_result
+        except Exception as e:
+            # Catch any unexpected errors from the classification logic
+            error_msg = (
+                f"[{self.node_name}] An unexpected error occurred during intent classification for data: "
+                f"'{data[:100]}{'...' if len(data) > 100 else ''}'. Error: {e}"
+            )
+            logger.exception(error_msg)  # Log exception details
+            raise RuntimeError(error_msg) from e
