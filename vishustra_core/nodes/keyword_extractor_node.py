@@ -1,5 +1,6 @@
 import logging
 import re
+from collections import Counter
 from typing import Any, Dict, List
 
 from vishustra_core.nodes.base_node import BaseNode
@@ -8,83 +9,113 @@ logger = logging.getLogger(__name__)
 
 class KeywordExtractorNode(BaseNode):
     """
-    A processing node designed to extract keywords from textual data.
+    A Vishustra processing node responsible for extracting keywords from text data.
 
-    This node expects the input `data` to be a string. It performs a basic
-    keyword extraction process by tokenizing the text, sanitizing it by
-    removing non-alphabetic characters, converting all words to lowercase,
-    and then filtering words based on a minimum length threshold.
-    The output is a sorted list of unique keywords.
+    This node preprocesses input text by converting it to lowercase, removing
+    punctuation, and splitting it into individual words. It then filters these
+    words based on a configurable list of stopwords and a minimum word length.
+    Finally, it identifies and returns the most frequently occurring words
+    as keywords, up to a specified maximum count.
 
-    Context Parameters:
-    - 'min_word_length' (int, optional): The minimum character length a word
-      must have to be considered a keyword. Defaults to 3 if not provided.
+    Configuration parameters can be passed via the 'context' dictionary, allowing
+    flexible control over the extraction process.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the programmatic name of this node."""
+        """Returns the descriptive name of this node."""
         return "KeywordExtractor"
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Executes the keyword extraction process on the input data.
+        Processes the input data (expected to be a string of text) to extract relevant keywords.
 
         Args:
-            data: The input payload, expected to be a string containing the text
-                  from which keywords are to be extracted.
-            context: A dictionary containing runtime parameters for the node.
-                     Supports 'min_word_length' (int) to customize filtering.
+            data: The input text from which keywords are to be extracted. Must be a string.
+            context: A dictionary containing configuration parameters for keyword extraction.
+                     Supported keys:
+                     - 'max_keywords_to_extract' (int, optional): The maximum number of
+                       keywords to return. Defaults to 5.
+                     - 'min_word_length' (int, optional): The minimum length a word must
+                       have to be considered a keyword. Defaults to 3.
+                     - 'stopwords' (List[str], optional): A list of additional words to
+                       exclude from keyword consideration. Merged with a default set.
 
         Returns:
-            A sorted list of unique strings, each representing an extracted keyword.
+            A list of strings, where each string is an extracted keyword, sorted
+            by frequency in descending order.
 
         Raises:
-            TypeError: If the 'data' input is not a string.
-            ValueError: If 'min_word_length' in the context is not a positive integer.
+            TypeError: If the input 'data' is not a string, indicating an invalid
+                       data contract.
         """
         if not isinstance(data, str):
             logger.error(
-                "KeywordExtractorNode received invalid data type. Expected 'str', got '%s'.",
-                type(data).__name__
+                f"KeywordExtractorNode received invalid input type. Expected 'str', "
+                f"but got '{type(data).__name__}'. Unable to process."
             )
             raise TypeError(
-                f"KeywordExtractorNode expects string data, but received {type(data).__name__}."
+                f"KeywordExtractorNode requires string input, but received {type(data).__name__}."
             )
 
-        # Handle empty or whitespace-only strings gracefully
+        # Handle empty or purely whitespace input gracefully
         if not data.strip():
-            logger.info("KeywordExtractorNode received an empty or whitespace-only string. Returning an empty list.")
+            logger.info("KeywordExtractorNode received an empty or whitespace-only string. Returning an empty list of keywords.")
             return []
 
-        # Retrieve min_word_length from context or use default
-        min_word_length = context.get("min_word_length", 3)
-        if not isinstance(min_word_length, int) or min_word_length <= 0:
-            logger.error(
-                "Invalid 'min_word_length' value in context: '%s'. Must be a positive integer.",
-                min_word_length
-            )
-            raise ValueError(
-                f"'min_word_length' in context must be a positive integer, got {min_word_length}."
-            )
+        # --- Retrieve configuration from context with sensible defaults ---
+        max_keywords = context.get('max_keywords_to_extract', 5)
+        min_word_length = context.get('min_word_length', 3)
+
+        # Default common English stopwords. This list can be extended or overridden.
+        default_stopwords = {
+            "a", "an", "the", "is", "are", "was", "were", "and", "or", "but", "for",
+            "not", "in", "on", "at", "to", "from", "with", "as", "by", "of", "it",
+            "its", "he", "she", "they", "we", "you", "i", "me", "him", "her", "us",
+            "them", "my", "your", "our", "their", "this", "that", "these", "those",
+            "what", "when", "where", "why", "how", "which", "who", "whom", "be",
+            "been", "being", "have", "has", "had", "do", "does", "did", "can", "will",
+            "would", "should", "could", "get", "go", "said", "say", "also", "many",
+            "much", "more", "most", "some", "any", "no", "just", "only", "then",
+            "now", "here", "there", "up", "down", "out", "off", "over", "under",
+            "again", "further", "all", "both", "each", "few", "other", "such",
+            "s", "t", "don", "shouldn", "nor", "too", "very", "etc"
+        }
+        custom_stopwords = set(context.get('stopwords', []))
+        stopwords = default_stopwords.union(custom_stopwords)
 
         logger.debug(
-            "Processing data with min_word_length=%d. Data snippet: '%s...'",
-            min_word_length,
-            data[:100] # Log a snippet for debug context
+            f"KeywordExtractorNode starting processing with "
+            f"max_keywords={max_keywords}, min_word_length={min_word_length}."
         )
 
-        # Convert text to lowercase and use regex to find all sequences of alphabetic characters.
-        # This effectively removes punctuation and splits words.
-        words = re.findall(r'\b[a-zA-Z]+\b', data.lower())
+        # --- Text Preprocessing and Tokenization ---
+        # Convert text to lowercase to standardize words
+        text_lower = data.lower()
+        # Use regex to find all sequences of word characters, effectively splitting
+        # by spaces and removing punctuation.
+        words = re.findall(r'\b\w+\b', text_lower)
 
-        extracted_keywords = set()
-        for word in words:
-            if len(word) >= min_word_length:
-                extracted_keywords.add(word)
+        # --- Filtering words ---
+        filtered_words = [
+            word for word in words
+            if word not in stopwords and len(word) >= min_word_length
+        ]
 
-        # Convert the set of unique keywords to a sorted list
-        result_keywords = sorted(list(extracted_keywords))
+        if not filtered_words:
+            logger.info(
+                "No significant words found after applying stopwords and "
+                "minimum length filters. Returning an empty list."
+            )
+            return []
 
-        logger.debug("Successfully extracted %d unique keywords.", len(result_keywords))
-        return result_keywords
+        # --- Keyword Extraction (Frequency Counting) ---
+        word_counts = Counter(filtered_words)
+
+        # Get the 'max_keywords' most common words
+        # Counter.most_common returns a list of (word, count) tuples
+        top_keywords_with_counts = word_counts.most_common(max_keywords)
+        extracted_keywords = [keyword for keyword, count in top_keywords_with_counts]
+
+        logger.debug(f"Successfully extracted {len(extracted_keywords)} keywords: {extracted_keywords}")
+        return extracted_keywords
