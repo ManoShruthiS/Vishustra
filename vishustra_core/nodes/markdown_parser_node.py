@@ -1,136 +1,81 @@
-
 import logging
-import re
 from typing import Any, Dict
 
+# Assuming vishustra_core.nodes.base_node exists in the project structure
 from vishustra_core.nodes.base_node import BaseNode
+
+# A robust markdown parsing library for converting markdown to HTML
+from markdown_it import MarkdownIt
 
 logger = logging.getLogger(__name__)
 
 class MarkdownParserNode(BaseNode):
     """
-    A Vishustra processing node responsible for parsing Markdown text and
-    transforming it into a basic HTML representation.
+    A Vishustra processing node that parses Markdown text into HTML.
 
-    This node provides a simulated conversion of common Markdown elements to HTML,
-    making it suitable for ingestion into further processing steps that expect HTML.
+    This node leverages a robust markdown parser to convert input markdown strings
+    into their corresponding HTML representations, making it suitable for content
+    rendering pipelines. It's designed to be stateless concerning the markdown
+    parsing process, treating each `process` call independently.
     """
+
+    def __init__(self):
+        """
+        Initializes the MarkdownParserNode and its internal markdown parser instance.
+        """
+        # We instantiate the markdown parser here to reuse it across process calls,
+        # avoiding overhead of re-initialization.
+        self._parser = MarkdownIt()
+        logger.debug("MarkdownParserNode initialized with markdown-it-py parser.")
 
     @property
     def node_name(self) -> str:
         """
-        Returns the descriptive name of this processing node.
+        Returns the descriptive name of the node.
         """
-        return "MarkdownParserNode"
+        return "MarkdownParser"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, expecting a Markdown string, and converts it
-        into a dictionary containing the generated HTML string.
-
-        This method performs a basic, line-by-line conversion of Markdown syntax
-        to HTML. It handles headers, unordered lists, paragraphs, and common
-        inline formatting such as bold, italic, links, and inline code.
+        Parses the input data (expected to be a Markdown string) into HTML.
 
         Args:
-            data (Any): The input data, which is expected to be a string
-                        containing Markdown content.
-            context (Dict[str, Any]): A dictionary providing contextual information
-                                       or parameters for the processing operation.
-                                       Currently, this node does not utilize context.
+            data: The input data, expected to be a string containing Markdown content.
+            context: A dictionary containing contextual information for the node's
+                     operation. While not directly used by this specific node, it
+                     is part of the standard `BaseNode` API contract.
 
         Returns:
-            Dict[str, Any]: A dictionary containing the parsed HTML representation
-                            under the 'html' key. Returns `{"html": ""}` for
-                            empty or whitespace-only input.
+            A string containing the HTML representation of the input Markdown.
 
         Raises:
-            TypeError: If the input `data` is not a string, indicating an invalid
-                       input type for Markdown parsing.
+            TypeError: If the input 'data' is not a string, as this node
+                       specifically requires string input for markdown parsing.
+            RuntimeError: If an unexpected error occurs during the markdown
+                          parsing process itself, indicating a failure to convert.
         """
         if not isinstance(data, str):
             logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected 'str', "
-                f"but received '{type(data).__name__}'."
+                f"[{self.node_name}] Invalid input data type. "
+                f"Expected string, but received {type(data).__name__}."
             )
             raise TypeError(
-                f"Input 'data' for '{self.node_name}' must be a string, "
-                f"but received '{type(data).__name__}'."
+                f"{self.node_name} expects input data of type 'str', "
+                f"but received {type(data).__name__}."
             )
 
-        if not data.strip():
-            logger.warning(
-                f"[{self.node_name}] Received empty or whitespace-only Markdown content. "
-                f"Returning empty HTML."
+        markdown_content: str = data
+        parsed_html: str = ""
+        try:
+            parsed_html = self._parser.render(markdown_content)
+            logger.info(f"[{self.node_name}] Successfully parsed markdown content.")
+        except Exception as e:
+            # Catching a broad exception to ensure robustness against unexpected
+            # issues within the external markdown parsing library.
+            logger.exception(
+                f"[{self.node_name}] An unexpected error occurred during "
+                f"markdown parsing: {e}"
             )
-            return {"html": ""}
+            raise RuntimeError(f"Failed to parse markdown content in {self.node_name}.") from e
 
-        logger.info(f"[{self.node_name}] Starting Markdown parsing for the input data.")
-
-        html_lines = []
-        lines = data.split('\n')
-        in_list = False
-
-        for line in lines:
-            stripped_line = line.strip()
-
-            if not stripped_line:
-                if in_list:
-                    html_lines.append('</ul>')
-                    in_list = False
-                continue
-
-            # Headers (e.g., # Heading, ## Subheading)
-            if stripped_line.startswith('#'):
-                match = re.match(r'(#+)\s*(.*)', stripped_line)
-                if match:
-                    level = len(match.group(1))
-                    content = match.group(2).strip()
-                    html_lines.append(f'<h{level}>{content}</h{level}>')
-                    if in_list: # Headers break list context
-                        html_lines.append('</ul>')
-                        in_list = False
-                    continue
-
-            # Unordered lists (e.g., - Item, * Item)
-            if stripped_line.startswith(('- ', '* ')):
-                if not in_list:
-                    html_lines.append('<ul>')
-                    in_list = True
-                content = stripped_line[2:].strip()
-                # Apply inline formatting to list item content
-                content = self._apply_inline_formatting(content)
-                html_lines.append(f'<li>{content}</li>')
-                continue
-
-            # If we reached here, it's not a header or list item.
-            # Close any open list and treat it as a paragraph.
-            if in_list:
-                html_lines.append('</ul>')
-                in_list = False
-
-            # Paragraphs and inline formatting
-            temp_line = self._apply_inline_formatting(stripped_line)
-            html_lines.append(f'<p>{temp_line}</p>')
-
-        # Close any list that might still be open at the end of the document
-        if in_list:
-            html_lines.append('</ul>')
-
-        parsed_html = "\n".join(html_lines)
-        logger.info(f"[{self.node_name}] Successfully parsed Markdown to HTML.")
-        return {"html": parsed_html}
-
-    def _apply_inline_formatting(self, text: str) -> str:
-        """
-        Applies basic inline Markdown formatting to a given text string.
-        """
-        # Bold: **text** -> <strong>text</strong> (order matters: bold before italic)
-        text = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', text)
-        # Italic: *text* -> <em>text</em>
-        text = re.sub(r'\*(.*?)\*', r'<em>\1</em>', text)
-        # Links: [link text](url) -> <a href="url">link text</a>
-        text = re.sub(r'\[(.*?)\]\((.*?)\)', r'<a href="\2">\1</a>', text)
-        # Inline Code: `code` -> <code>code</code>
-        text = re.sub(r'`(.*?)`', r'<code>\1</code>', text)
-        return text
+        return parsed_html
