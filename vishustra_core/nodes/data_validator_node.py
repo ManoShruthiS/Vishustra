@@ -1,149 +1,199 @@
 import logging
-from typing import Any, Dict, List, Type, Union
-
+from typing import Any, Dict, List, Union
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-class ValidationError(ValueError):
-    """Custom exception raised when data fails validation against a schema."""
+class NodeConfigurationError(ValueError):
+    """Exception raised for errors in node configuration (e.g., missing required context)."""
     pass
 
-class DataValidator(BaseNode):
+class DataValidationError(ValueError):
+    """Exception raised when the input data fails validation against defined rules."""
+    pass
+
+class DataValidatorNode(BaseNode):
     """
-    A Vishustra processing node that validates input data against a predefined schema.
-
-    This node enforces data integrity and structure, raising a ValidationError if
-    the input data does not conform to the specified rules. It supports checks for:
-    - Overall data type (e.g., dict, list, str, int).
-    - Presence of required keys (for dictionaries).
-    - Types of specific keys within a dictionary.
-    - Length constraints (minimum and maximum) for strings, lists, and dictionaries.
-
-    Configuration Schema Example:
-    A schema dictionary passed during initialization configures the validation rules.
+    A processing node that validates input data against a specified schema or set of rules.
+    
+    The validation rules are expected to be provided in the `context` dictionary
+    under the key 'validation_schema'.
+    
+    Example `validation_schema` structure:
     {
-        "expected_type": dict,  # Required: The overall expected type of the 'data'
-        "required_keys": ["id", "name"], # Optional: List of keys that must exist if data is a dict
-        "key_types": { # Optional: Dictionary mapping keys to their expected types if data is a dict
-            "id": int,
-            "name": str,
-            "metadata": dict
-        },
-        "min_length": 1, # Optional: Minimum length for string, list, or dict data
-        "max_length": 100 # Optional: Maximum length for string, list, or dict data
+        "field_name_1": {"type": "str", "required": True, "min_length": 5},
+        "field_name_2": {"type": "int", "required": False, "min_value": 0, "max_value": 100},
+        "field_name_3": {"type": "list", "items_type": "str", "required": True, "min_items": 1},
+        "field_name_4": {"type": "bool", "required": True},
+        "field_name_5": {"type": "dict", "required": False, "schema": {"sub_field": {"type": "str", "required": True}}},
     }
     """
 
-    def __init__(self, schema: Dict[str, Any]):
-        """
-        Initializes the DataValidator node with a validation schema.
-
-        Args:
-            schema: A dictionary defining the validation rules.
-                    It must contain at least 'expected_type'.
-                    Example:
-                    {
-                        "expected_type": dict,
-                        "required_keys": ["field1"],
-                        "key_types": {"field1": str},
-                        "min_length": 1,
-                        "max_length": 50
-                    }
-        Raises:
-            ValueError: If the provided schema is invalid or missing 'expected_type'.
-        """
-        if not isinstance(schema, dict):
-            raise ValueError("Validation schema must be a dictionary.")
-        if "expected_type" not in schema:
-            raise ValueError("Validation schema must define an 'expected_type'.")
-        if not isinstance(schema["expected_type"], type):
-            raise ValueError("'expected_type' in schema must be a type (e.g., dict, str, int).")
-
-        self._schema = schema
-        logger.info(f"DataValidator node initialized with schema: {schema}")
-
     @property
     def node_name(self) -> str:
-        """Returns the programmatic name of the node."""
-        return "DataValidator"
+        """Returns the name of the node."""
+        return "DataValidatorNode"
+
+    def _validate_field(self, field_name: str, field_value: Any, rules: Dict[str, Any]) -> None:
+        """
+        Validates a single field against its defined rules.
+        """
+        is_required = rules.get("required", False)
+
+        if field_value is None:
+            if is_required:
+                raise DataValidationError(f"Field '{field_name}' is required but received None.")
+            else:
+                return # Not required and not present, so no further validation needed.
+
+        expected_type_str = rules.get("type")
+        if not expected_type_str:
+            logger.debug(f"No type specified for field '{field_name}', skipping type check.")
+        else:
+            expected_type_map = {
+                "str": str,
+                "int": int,
+                "float": float,
+                "bool": bool,
+                "list": list,
+                "dict": dict,
+                "any": Any
+            }
+            expected_type = expected_type_map.get(expected_type_str)
+            if expected_type is None:
+                logger.warning(f"Unknown type '{expected_type_str}' specified for field '{field_name}'. Skipping type validation.")
+            elif not isinstance(field_value, expected_type):
+                raise DataValidationError(
+                    f"Field '{field_name}' expected type '{expected_type_str}', "
+                    f"but received '{type(field_value).__name__}' with value '{field_value}'."
+                )
+
+        if expected_type_str == "str":
+            min_length = rules.get("min_length")
+            if min_length is not None and len(field_value) < min_length:
+                raise DataValidationError(
+                    f"Field '{field_name}' (string) has length {len(field_value)}, "
+                    f"which is less than the required minimum of {min_length}."
+                )
+            max_length = rules.get("max_length")
+            if max_length is not None and len(field_value) > max_length:
+                raise DataValidationError(
+                    f"Field '{field_name}' (string) has length {len(field_value)}, "
+                    f"which exceeds the maximum allowed length of {max_length}."
+                )
+
+        elif expected_type_str in ["int", "float"]:
+            min_value = rules.get("min_value")
+            if min_value is not None and field_value < min_value:
+                raise DataValidationError(
+                    f"Field '{field_name}' has value {field_value}, "
+                    f"which is less than the required minimum of {min_value}."
+                )
+            max_value = rules.get("max_value")
+            if max_value is not None and field_value > max_value:
+                raise DataValidationError(
+                    f"Field '{field_name}' has value {field_value}, "
+                    f"which exceeds the maximum allowed value of {max_value}."
+                )
+
+        elif expected_type_str == "list":
+            min_items = rules.get("min_items")
+            if min_items is not None and len(field_value) < min_items:
+                raise DataValidationError(
+                    f"Field '{field_name}' (list) has {len(field_value)} items, "
+                    f"which is less than the required minimum of {min_items}."
+                )
+            max_items = rules.get("max_items")
+            if max_items is not None and len(field_value) > max_items:
+                raise DataValidationError(
+                    f"Field '{field_name}' (list) has {len(field_value)} items, "
+                    f"which exceeds the maximum allowed items of {max_items}."
+                )
+            items_type_str = rules.get("items_type")
+            if items_type_str and field_value: # Only validate items if list is not empty
+                items_expected_type = expected_type_map.get(items_type_str)
+                if items_expected_type:
+                    for i, item in enumerate(field_value):
+                        if not isinstance(item, items_expected_type):
+                            raise DataValidationError(
+                                f"Field '{field_name}' (list) item at index {i} expected type "
+                                f"'{items_type_str}', but received '{type(item).__name__}'."
+                            )
+                else:
+                    logger.warning(f"Unknown item type '{items_type_str}' for list field '{field_name}'. Skipping item type validation.")
+
+        elif expected_type_str == "dict":
+            sub_schema = rules.get("schema")
+            if sub_schema is not None:
+                # Recursively validate sub-dictionary
+                try:
+                    self._validate_data_against_schema(field_value, sub_schema)
+                except DataValidationError as e:
+                    raise DataValidationError(f"Validation failed for sub-dictionary in field '{field_name}': {e}") from e
+
+
+    def _validate_data_against_schema(self, data: Any, schema: Dict[str, Any]) -> None:
+        """
+        Validates the given data against the provided schema.
+        Assumes data is a dictionary if schema is provided.
+        """
+        if not isinstance(data, dict):
+            raise DataValidationError(f"Expected data to be a dictionary for schema validation, but got {type(data).__name__}.")
+
+        for field_name, rules in schema.items():
+            field_value = data.get(field_name)
+
+            if rules.get("required", False) and field_value is None:
+                raise DataValidationError(f"Required field '{field_name}' is missing or None.")
+            
+            # If field is not required and not present, skip further validation for this field
+            if field_value is None and not rules.get("required", False):
+                logger.debug(f"Optional field '{field_name}' is missing; skipping validation for this field.")
+                continue
+
+            self._validate_field(field_name, field_value, rules)
+
+        logger.debug("All fields validated successfully against the schema.")
+
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Validates the input data against the configured schema.
+        Validates the input data based on the 'validation_schema' provided in the context.
 
         Args:
-            data: The data to be validated.
-            context: A dictionary containing context-specific information,
-                     such as a 'node_id' for logging.
+            data: The input data to be validated. Expected to be a dictionary for schema validation.
+            context: A dictionary containing runtime information, including
+                     'validation_schema' which defines the rules for validation.
 
         Returns:
-            The original data if validation is successful.
+            The original data if validation passes.
 
         Raises:
-            ValidationError: If the data does not conform to the schema.
-            RuntimeError: If an unexpected internal error occurs during validation.
+            NodeConfigurationError: If 'validation_schema' is missing or malformed in context.
+            DataValidationError: If the input data fails any of the defined validation rules.
         """
-        node_id = context.get('node_id', self.node_name)
-        logger.debug(f"[{node_id}] Starting data validation for incoming data.")
+        logger.info(f"[{self.node_name}] Starting data validation.")
+
+        validation_schema = context.get("validation_schema")
+
+        if not validation_schema:
+            raise NodeConfigurationError(
+                f"[{self.node_name}] 'validation_schema' not found in context. "
+                "The DataValidatorNode requires a schema to operate."
+            )
+        if not isinstance(validation_schema, dict):
+            raise NodeConfigurationError(
+                f"[{self.node_name}] 'validation_schema' in context must be a dictionary, "
+                f"but received '{type(validation_schema).__name__}'."
+            )
 
         try:
-            # 1. Validate overall type
-            expected_type = self._schema["expected_type"] # Guaranteed to exist by __init__
-            if not isinstance(data, expected_type):
-                raise ValidationError(
-                    f"[{node_id}] Data type mismatch. Expected '{expected_type.__name__}', "
-                    f"got '{type(data).__name__}'."
-                )
-
-            # 2. Validate length (for string, list, dict)
-            if isinstance(data, (str, list, dict)):
-                min_length = self._schema.get("min_length")
-                max_length = self._schema.get("max_length")
-                data_length = len(data)
-
-                if min_length is not None and data_length < min_length:
-                    raise ValidationError(
-                        f"[{node_id}] Data length ({data_length}) is less than minimum required length ({min_length})."
-                    )
-                if max_length is not None and data_length > max_length:
-                    raise ValidationError(
-                        f"[{node_id}] Data length ({data_length}) exceeds maximum allowed length ({max_length})."
-                    )
-
-            # 3. Validate dictionary-specific rules
-            # Apply these only if the data is expected to be or is a dictionary.
-            if expected_type is dict or (expected_type is None and isinstance(data, dict)):
-                if not isinstance(data, dict):
-                    # This case should ideally be caught by expected_type check above,
-                    # but provides a fallback for robustness if schema implies dict checks on Any type.
-                    raise ValidationError(
-                        f"[{node_id}] Expected dictionary for key/type validation, but received '{type(data).__name__}'."
-                    )
-
-                # Required keys
-                required_keys = self._schema.get("required_keys", [])
-                for key in required_keys:
-                    if key not in data:
-                        raise ValidationError(f"[{node_id}] Required key '{key}' is missing from data.")
-
-                # Key types
-                key_types = self._schema.get("key_types", {})
-                for key, expected_key_type in key_types.items():
-                    if key in data: # Only validate type if the key is present
-                        if not isinstance(data[key], expected_key_type):
-                            raise ValidationError(
-                                f"[{node_id}] Type mismatch for key '{key}'. Expected '{expected_key_type.__name__}', "
-                                f"got '{type(data[key]).__name__}'."
-                            )
-
-            logger.info(f"[{node_id}] Data successfully validated against schema.")
+            self._validate_data_against_schema(data, validation_schema)
+            logger.info(f"[{self.node_name}] Data successfully passed all validation checks.")
             return data
-
-        except ValidationError as e:
-            logger.error(f"[{node_id}] Data validation failed: {e}")
-            raise # Re-raise the validation error as it's an expected failure type
+        except DataValidationError as e:
+            logger.error(f"[{self.node_name}] Data validation failed: {e}")
+            raise
         except Exception as e:
-            logger.critical(f"[{node_id}] An unexpected error occurred during validation: {e}", exc_info=True)
-            # Wrap unexpected errors in a RuntimeError for consistency in higher-level error handling
-            raise RuntimeError(f"[{node_id}] Failed to process data due to an internal error.") from e
+            logger.critical(f"[{self.node_name}] An unexpected error occurred during validation: {e}", exc_info=True)
+            raise DataValidationError(f"An unexpected error occurred during validation: {e}") from e
