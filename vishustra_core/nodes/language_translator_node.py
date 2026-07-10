@@ -1,104 +1,139 @@
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
+# Assuming vishustra_core.nodes.base_node exists as specified
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-
-class LanguageTranslator(BaseNode):
+class LanguageTranslatorNode(BaseNode):
     """
-    A Vishustra node that simulates language translation of text data.
+    A Vishustra processing node that simulates language translation of text.
 
-    This node expects the input 'data' to be a string (the text to translate)
-    and the 'context' dictionary to contain a 'target_language' key,
-    specifying the language code (e.g., 'es' for Spanish, 'fr' for French).
-    An optional 'source_language' key can also be provided.
+    This node expects a string `data` to be translated and
+    a `target_language` in the `context` dictionary.
+    An optional `source_language` can also be provided in the context,
+    defaulting to 'en' (English) if not specified.
+
+    For demonstration purposes, translation is simulated using an internal
+    mapping of common phrases. In a production system, this would integrate
+    with a robust external translation API (e.g., Google Translate, DeepL).
     """
+
+    # A simple, static translation map for simulation purposes.
+    # Keys are (source_language, target_language, original_phrase_lowercase).
+    # Values are the translated phrase.
+    _TRANSLATION_MAP = {
+        ("en", "es", "hello"): "hola",
+        ("en", "fr", "hello"): "bonjour",
+        ("en", "de", "hello"): "hallo",
+        ("en", "es", "world"): "mundo",
+        ("en", "fr", "world"): "monde",
+        ("en", "de", "world"): "welt",
+        ("en", "es", "how are you?"): "¿cómo estás?",
+        ("en", "fr", "how are you?"): "comment allez-vous?",
+        ("en", "de", "how are you?"): "wie geht es dir?",
+        ("en", "es", "thank you"): "gracias",
+        ("en", "fr", "thank you"): "merci",
+        ("en", "de", "thank you"): "danke schön",
+        ("en", "es", "goodbye"): "adiós",
+        ("en", "fr", "goodbye"): "au revoir",
+        ("en", "de", "goodbye"): "auf wiedersehen",
+        # Example for Spanish to English
+        ("es", "en", "hola"): "hello",
+        ("es", "en", "gracias"): "thank you",
+        # More complex phrases for robustness test
+        ("en", "es", "this is a test sentence"): "esta es una frase de prueba",
+        ("en", "fr", "this is a test sentence"): "c'est une phrase de test",
+    }
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
-        return "LanguageTranslator"
+        """Returns the descriptive name of the node."""
+        return "LanguageTranslatorNode"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
+    def process(self, data: Any, context: Dict[str, Any]) -> str:
         """
-        Processes the input text data by simulating translation to a target language.
+        Translates the input text `data` to the `target_language` specified in `context`.
 
         Args:
-            data (Any): The input data, expected to be a string for translation.
-            context (Dict[str, Any]): A dictionary containing processing context.
-                                      Must include 'target_language' (str).
-                                      Can optionally include 'source_language' (str).
+            data: The text data to be translated. Expected to be a string.
+            context: A dictionary containing operational parameters.
+                     Must include 'target_language' (str, e.g., 'es', 'fr', 'de').
+                     Can optionally include 'source_language' (str, defaults to 'en').
 
         Returns:
-            Any: The simulated translated text (string).
+            The translated text as a string. If a translation is not found in the
+            internal map, a warning is logged, and the original text is returned
+            prefixed with a placeholder indicating untranslated status.
 
         Raises:
-            TypeError: If 'data' is not a string.
-            ValueError: If 'target_language' is missing from 'context' or is not a string.
+            TypeError: If `data` is not a string.
+            ValueError: If `target_language` is missing from `context` or is not a string.
+            ValueError: If `source_language` is provided but is not a string.
         """
-        logger.debug(
-            f"[{self.node_name}] Starting process for data (first 50 chars): {str(data)[:50]}..."
-        )
-
-        # --- Input validation for data ---
         if not isinstance(data, str):
             logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected 'str', got '{type(data).__name__}'."
+                f"[{self.node_name}] Invalid input data type. Expected 'str', "
+                f"but received '{type(data).__name__}'."
             )
             raise TypeError(
-                f"[{self.node_name}] Input 'data' must be a string for translation. "
-                f"Got type: {type(data).__name__}."
+                f"Input 'data' for {self.node_name} must be a string, "
+                f"but got '{type(data).__name__}'."
             )
 
-        # --- Context validation for target_language ---
         target_language = context.get("target_language")
-        if not target_language or not isinstance(target_language, str):
+        if not isinstance(target_language, str):
             logger.error(
-                f"[{self.node_name}] Missing or invalid 'target_language' in context. "
-                f"Context provided keys: {list(context.keys())}"
+                f"[{self.node_name}] 'target_language' is missing or not a string in the context. "
+                f"Context received: {context}"
             )
             raise ValueError(
-                f"[{self.node_name}] 'target_language' (string) must be provided in the context for translation."
+                f"'target_language' must be provided as a string in the context for {self.node_name}."
             )
 
-        source_language = context.get("source_language", "auto")
-        logger.info(
-            f"[{self.node_name}] Attempting to translate from '{source_language}' to '{target_language}'."
-        )
-
-        # --- Simulate translation ---
-        # In a real-world scenario, this section would involve an API call to
-        # an external translation service (e.g., Google Translate, DeepL, Azure Translator).
-        # For this simulation, we'll append a descriptive string indicating the target language.
-        simulated_translations_map = {
-            "en": "[translated to English]",
-            "es": "[traducido al español]",
-            "fr": "[traduit en français]",
-            "de": "[ins Deutsche übersetzt]",
-            "zh": "[翻译成中文]",
-            "ja": "[日本語に翻訳されました]",
-            "hi": "[हिंदी में अनुवादित]",
-        }
-
-        # Normalize target language for lookup (e.g., 'EN' -> 'en')
-        normalized_target_lang = target_language.lower()
-        translation_suffix = simulated_translations_map.get(normalized_target_lang)
-
-        translated_data = data
-        if translation_suffix:
-            translated_data = f"{data} {translation_suffix}"
-            logger.info(
-                f"[{self.node_name}] Successfully simulated translation to '{target_language}'."
+        source_language = context.get("source_language", "en") # Default to English if not specified
+        if not isinstance(source_language, str):
+            logger.error(
+                f"[{self.node_name}] 'source_language' must be a string if provided in the context. "
+                f"Context received: {context}"
             )
-        else:
-            logger.warning(
-                f"[{self.node_name}] Unsupported target language '{target_language}' for simulation. "
-                f"Returning original data without modification."
+            raise ValueError(
+                f"'source_language' must be a string if provided in the context for {self.node_name}."
             )
 
         logger.debug(
-            f"[{self.node_name}] Finished process. Result (first 50 chars): {translated_data[:50]}..."
+            f"[{self.node_name}] Attempting to translate text "
+            f"from '{source_language}' to '{target_language}'. "
+            f"Data snippet: '{data[:70]}{'...' if len(data) > 70 else ''}'"
         )
-        return translated_data
+
+        # Normalize languages and data to lowercase for consistent map lookups.
+        # This simplifies the mock but a real service would handle case sensitivity.
+        source_language_lower = source_language.lower()
+        target_language_lower = target_language.lower()
+        data_lower = data.lower()
+
+        # Attempt to retrieve a translation from the internal map
+        translated_text = self._TRANSLATION_MAP.get(
+            (source_language_lower, target_language_lower, data_lower)
+        )
+
+        if translated_text:
+            logger.info(
+                f"[{self.node_name}] Successfully translated from '{source_language}' "
+                f"to '{target_language}'. Original: '{data}', Translated: '{translated_text}'"
+            )
+            return translated_text
+        else:
+            warning_msg = (
+                f"[{self.node_name}] No direct translation found in the internal mock map "
+                f"for the phrase ('{source_language}', '{target_language}', '{data}'). "
+                "Returning original text with a placeholder indicating untranslated status. "
+                "Consider expanding the mock map or integrating a real translation service."
+            )
+            logger.warning(warning_msg)
+            # In a real-world scenario, this might trigger a fallback,
+            # send to a more general translation API, or raise a specific exception.
+            # For this simulation, we return a modified string.
+            return f"[UNTRANSLATED:{source_language.upper()}->{target_language.upper()}]: {data}"
