@@ -1,110 +1,90 @@
 import logging
 import re
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List
 
-# Assuming BaseNode is available at this path as per project context
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class KeywordExtractorNode(BaseNode):
     """
-    A Vishustra processing node that extracts keywords from a given text.
-    It performs a basic text cleaning, tokenization, stop-word removal,
-    and returns a list of unique keywords.
-    """
+    A processing node designed to extract keywords from textual data.
 
-    # A simple set of common English stop words for demonstration.
-    # In a real-world scenario, this might be loaded from a more comprehensive
-    # NLTK or SpaCy list, or configurable via node parameters.
-    _STOP_WORDS: Set[str] = {
-        "a", "an", "the", "is", "are", "be", "was", "were",
-        "and", "or", "but", "not", "for", "on", "in", "at", "of",
-        "to", "from", "with", "by", "as", "it", "its", "i", "you",
-        "he", "she", "we", "they", "me", "him", "her", "us", "them",
-        "my", "your", "his", "our", "their", "this", "that", "these",
-        "those", "what", "which", "who", "whom", "where", "when", "why",
-        "how", "all", "any", "both", "each", "few", "more", "most",
-        "other", "some", "such", "no", "nor", "only", "own", "same",
-        "so", "than", "too", "very", "can", "will", "just", "don", "should",
-        "now", "here", "there", "up", "down", "out", "off", "over", "under",
-        "again", "further", "then", "once", "about", "could", "would",
-        "had", "has", "have", "do", "does", "did", "am", "if", "else", "elsewhere"
-    }
-    _MIN_KEYWORD_LENGTH: int = 3 # Minimum length for a word to be considered a keyword
+    This node expects the input `data` to be a string. It performs a basic
+    keyword extraction process by tokenizing the text, sanitizing it by
+    removing non-alphabetic characters, converting all words to lowercase,
+    and then filtering words based on a minimum length threshold.
+    The output is a sorted list of unique keywords.
+
+    Context Parameters:
+    - 'min_word_length' (int, optional): The minimum character length a word
+      must have to be considered a keyword. Defaults to 3 if not provided.
+    """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "Keyword Extractor"
+        """Returns the programmatic name of this node."""
+        return "KeywordExtractor"
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Processes the input data to extract keywords.
-
-        This method expects the `data` to be a string representing the text
-        from which keywords are to be extracted. It performs the following steps:
-        1. Converts the text to lowercase.
-        2. Removes punctuation and numbers.
-        3. Splits the text into individual words.
-        4. Filters out common stop words defined in `_STOP_WORDS`.
-        5. Filters out words shorter than `_MIN_KEYWORD_LENGTH`.
-        6. Returns a list of unique extracted keywords, sorted alphabetically.
-
-        Expected `data` type: `str`
-        The `context` dictionary is available for future extensions or
-        workflow-specific parameters, but is not used in this basic implementation.
+        Executes the keyword extraction process on the input data.
 
         Args:
-            data: The text string from which to extract keywords.
-            context: A dictionary containing contextual information for processing,
-                     passed through the Vishustra orchestration.
+            data: The input payload, expected to be a string containing the text
+                  from which keywords are to be extracted.
+            context: A dictionary containing runtime parameters for the node.
+                     Supports 'min_word_length' (int) to customize filtering.
 
         Returns:
-            A list of unique strings representing the extracted keywords.
+            A sorted list of unique strings, each representing an extracted keyword.
 
         Raises:
-            TypeError: If the input `data` is not a string.
+            TypeError: If the 'data' input is not a string.
+            ValueError: If 'min_word_length' in the context is not a positive integer.
         """
         if not isinstance(data, str):
             logger.error(
-                f"[{self.node_name}] Input data must be a string, "
-                f"but received type: {type(data).__name__}"
+                "KeywordExtractorNode received invalid data type. Expected 'str', got '%s'.",
+                type(data).__name__
             )
-            raise TypeError(f"'{self.node_name}' node expects string input, got {type(data).__name__}")
-
-        logger.info(f"[{self.node_name}] Starting keyword extraction for input data.")
-
-        # Step 1: Normalize text to lowercase
-        text = data.lower()
-
-        # Step 2: Remove punctuation, numbers, and replace with space
-        # This regex replaces any character that is not a lowercase letter or a space
-        # with a single space.
-        cleaned_text = re.sub(r'[^a-z\s]', ' ', text)
-
-        # Step 3: Tokenize the cleaned text into words
-        # and remove extra spaces that might result from punctuation removal
-        words = cleaned_text.split()
-        
-        if not words:
-            logger.warning(
-                f"[{self.node_name}] No valid words found after cleaning and tokenization. "
-                "Returning an empty list of keywords."
+            raise TypeError(
+                f"KeywordExtractorNode expects string data, but received {type(data).__name__}."
             )
-            return [] # No words to process, return empty list
 
-        # Step 4 & 5: Filter out stop words and short words
-        keywords: Set[str] = set()
-        for word in words:
-            if word not in self._STOP_WORDS and len(word) >= self._MIN_KEYWORD_LENGTH:
-                keywords.add(word)
+        # Handle empty or whitespace-only strings gracefully
+        if not data.strip():
+            logger.info("KeywordExtractorNode received an empty or whitespace-only string. Returning an empty list.")
+            return []
 
-        # Convert set to a sorted list for consistent and predictable output.
-        extracted_keywords = sorted(list(keywords))
+        # Retrieve min_word_length from context or use default
+        min_word_length = context.get("min_word_length", 3)
+        if not isinstance(min_word_length, int) or min_word_length <= 0:
+            logger.error(
+                "Invalid 'min_word_length' value in context: '%s'. Must be a positive integer.",
+                min_word_length
+            )
+            raise ValueError(
+                f"'min_word_length' in context must be a positive integer, got {min_word_length}."
+            )
 
-        logger.info(
-            f"[{self.node_name}] Finished processing. "
-            f"Extracted {len(extracted_keywords)} unique keywords."
+        logger.debug(
+            "Processing data with min_word_length=%d. Data snippet: '%s...'",
+            min_word_length,
+            data[:100] # Log a snippet for debug context
         )
-        return extracted_keywords
+
+        # Convert text to lowercase and use regex to find all sequences of alphabetic characters.
+        # This effectively removes punctuation and splits words.
+        words = re.findall(r'\b[a-zA-Z]+\b', data.lower())
+
+        extracted_keywords = set()
+        for word in words:
+            if len(word) >= min_word_length:
+                extracted_keywords.add(word)
+
+        # Convert the set of unique keywords to a sorted list
+        result_keywords = sorted(list(extracted_keywords))
+
+        logger.debug("Successfully extracted %d unique keywords.", len(result_keywords))
+        return result_keywords
