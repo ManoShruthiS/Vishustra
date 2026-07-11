@@ -1,81 +1,107 @@
 import logging
+import re
 from typing import Any, Dict
 
 # Assuming vishustra_core.nodes.base_node exists in the project structure
+# For local testing, you might need to adjust this import path or create a dummy base_node.py
 from vishustra_core.nodes.base_node import BaseNode
-
-# A robust markdown parsing library for converting markdown to HTML
-from markdown_it import MarkdownIt
 
 logger = logging.getLogger(__name__)
 
 class MarkdownParserNode(BaseNode):
     """
-    A Vishustra processing node that parses Markdown text into HTML.
-
-    This node leverages a robust markdown parser to convert input markdown strings
-    into their corresponding HTML representations, making it suitable for content
-    rendering pipelines. It's designed to be stateless concerning the markdown
-    parsing process, treating each `process` call independently.
+    A processing node that parses markdown-formatted text and converts it
+    into a simplified HTML representation. This node aims to simulate common
+    markdown-to-HTML transformations.
     """
-
-    def __init__(self):
-        """
-        Initializes the MarkdownParserNode and its internal markdown parser instance.
-        """
-        # We instantiate the markdown parser here to reuse it across process calls,
-        # avoiding overhead of re-initialization.
-        self._parser = MarkdownIt()
-        logger.debug("MarkdownParserNode initialized with markdown-it-py parser.")
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of the node.
-        """
+        """Returns the descriptive name of the node."""
         return "MarkdownParser"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
+    def process(self, data: Any, context: Dict[str, Any]) -> str:
         """
-        Parses the input data (expected to be a Markdown string) into HTML.
+        Processes the input data, expecting a markdown string, and transforms it
+        into a simplified HTML string. The transformation covers basic elements
+        like headers, bold, italic, and links.
 
         Args:
-            data: The input data, expected to be a string containing Markdown content.
-            context: A dictionary containing contextual information for the node's
-                     operation. While not directly used by this specific node, it
-                     is part of the standard `BaseNode` API contract.
+            data: The input data, expected to be a string containing markdown.
+            context: A dictionary of contextual information. This node does not
+                     directly utilize the context for its core parsing logic but
+                     it is available for potential future extensions or logging.
 
         Returns:
-            A string containing the HTML representation of the input Markdown.
+            A string containing the HTML representation of the markdown.
 
         Raises:
-            TypeError: If the input 'data' is not a string, as this node
-                       specifically requires string input for markdown parsing.
-            RuntimeError: If an unexpected error occurs during the markdown
-                          parsing process itself, indicating a failure to convert.
+            TypeError: If the input `data` is not a string.
+            ValueError: If parsing encounters an unexpected issue during the
+                        transformation process.
         """
         if not isinstance(data, str):
             logger.error(
-                f"[{self.node_name}] Invalid input data type. "
-                f"Expected string, but received {type(data).__name__}."
+                f"Invalid input type for MarkdownParserNode. Expected string, "
+                f"got {type(data).__name__}."
             )
             raise TypeError(
-                f"{self.node_name} expects input data of type 'str', "
-                f"but received {type(data).__name__}."
+                f"MarkdownParserNode expects string input, but received {type(data).__name__}."
             )
 
-        markdown_content: str = data
-        parsed_html: str = ""
+        if not data.strip():
+            logger.debug("Received empty or whitespace-only markdown string. Returning empty string.")
+            return ""
+
+        parsed_text = data
+
         try:
-            parsed_html = self._parser.render(markdown_content)
-            logger.info(f"[{self.node_name}] Successfully parsed markdown content.")
-        except Exception as e:
-            # Catching a broad exception to ensure robustness against unexpected
-            # issues within the external markdown parsing library.
-            logger.exception(
-                f"[{self.node_name}] An unexpected error occurred during "
-                f"markdown parsing: {e}"
+            # Convert Headers: # H1, ## H2, etc. up to H6
+            # Regex captures the number of '#' characters and the header text.
+            parsed_text = re.sub(
+                r'^(#{1,6})\s*(.*)$',
+                lambda m: f'<h{len(m.group(1))}>{m.group(2).strip()}</h{len(m.group(1))}>',
+                parsed_text,
+                flags=re.MULTILINE
             )
-            raise RuntimeError(f"Failed to parse markdown content in {self.node_name}.") from e
+            
+            # Convert Bold: **text** or __text__
+            # This regex handles both patterns by putting the content in different groups.
+            # \1\2 ensures that whichever group matched (or both if overlapping, but that's
+            # less common for simple bold), its content is used.
+            parsed_text = re.sub(r'\*\*(.*?)\*\*|__(.*?)__', r'<strong>\1\2</strong>', parsed_text)
+            
+            # Convert Italic: *text* or _text_
+            # Similar logic to bold.
+            parsed_text = re.sub(r'\*(.*?)\*|_(.*?)_', r'<em>\1\2</em>', parsed_text)
 
-        return parsed_html
+            # Convert Links: [text](url)
+            # Captures link text (\1) and URL (\2).
+            parsed_text = re.sub(r'\[(.*?)\]\((.*?)\)', r'<a href="\2">\1</a>', parsed_text)
+            
+            # Basic Paragraph handling: Wrap lines that are not already block elements.
+            # This is a simplification; a full parser would analyze block context.
+            lines = parsed_text.split('\n')
+            processed_lines = []
+            for line in lines:
+                stripped_line = line.strip()
+                # Check if the line is not empty and doesn't start with a known HTML block tag
+                # (h1-h6, strong, em, a, p - though p might be what we're adding).
+                # This prevents double-wrapping already converted elements.
+                if stripped_line and not re.match(r'<(h[1-6]|strong|em|a|p|ul|ol|li|div|table|blockquote)', stripped_line, re.IGNORECASE):
+                    processed_lines.append(f"<p>{stripped_line}</p>")
+                else:
+                    processed_lines.append(line)
+            parsed_text = "\n".join(processed_lines)
+
+            logger.info("Successfully parsed markdown string into simplified HTML.")
+            return parsed_text
+        except Exception as e:
+            logger.error(
+                f"An unexpected error occurred during markdown parsing in MarkdownParserNode: {e}",
+                exc_info=True
+            )
+            raise ValueError(
+                f"Failed to parse markdown due to an internal error: {e}. "
+                "Check logs for more details."
+            ) from e
