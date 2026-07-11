@@ -1,123 +1,100 @@
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, Union
+
+# Assuming the project context's import path for BaseNode
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class FactCheckerNode(BaseNode):
     """
-    A processing node designed to simulate fact-checking of textual statements.
-
-    This node takes a statement as input and compares it against a simplistic,
-    internal "database" of known facts to determine its veracity. In a production
-    environment, this would integrate with external fact-checking APIs, knowledge
-    bases, or more sophisticated verification models.
+    A processing node designed to simulate fact-checking a given statement.
+    It attempts to verify the veracity of a statement against an optional
+    internal knowledge base provided in the processing context.
     """
-
-    def __init__(self):
-        """
-        Initializes the FactCheckerNode with a predefined set of known truths
-        and falsehoods for demonstration purposes.
-        """
-        # In a real-world application, these would be loaded from a persistent
-        # store, an external knowledge graph, or configured via a constructor
-        # parameter or a dependency injection mechanism.
-        self._known_truths: List[str] = [
-            "The Earth revolves around the Sun.",
-            "Water is H2O.",
-            "Oxygen is a gas.",
-            "The capital of France is Paris.",
-            "Jupiter is the largest planet in our solar system."
-        ]
-        self._known_falsehoods: List[str] = [
-            "The Earth is flat.",
-            "The sky is green.",
-            "Birds are mammals.",
-            "Humans can photosynthesize.",
-            "The moon is made of cheese."
-        ]
-        logger.debug("FactCheckerNode initialized with internal fact database for simulation.")
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """Returns the descriptive name of this node."""
         return "FactChecker"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
+    def process(self, data: Union[str, Dict[str, Any]], context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input data to fact-check a given statement.
+        Processes the input data to simulate a fact-checking operation.
 
-        The `data` input is expected to be a dictionary containing at least
-        a 'statement' key, whose value is the string to be checked.
+        This method expects `data` to be either a string representing the statement
+        to be checked, or a dictionary containing a 'statement' key.
+        The `context` dictionary can optionally contain a 'known_facts' key,
+        which should be a dictionary mapping known statements (str) to their
+        boolean veracity (True/False).
 
         Args:
-            data: A dictionary containing the statement to be fact-checked.
-                  Expected format: `{"statement": "The statement to check."}`
-            context: A dictionary containing workflow-specific context or
-                     configuration parameters. This simulation does not directly
-                     utilize the context for fact-checking logic but it's
-                     available for future extensions (e.g., passing API keys).
+            data: The input data, which can be a string statement directly
+                  or a dictionary with a 'statement' key.
+            context: A dictionary that may contain a 'known_facts' key
+                     for internal verification purposes.
 
         Returns:
-            A dictionary containing the original statement, its derived veracity
-            status, and a brief explanation.
-            Example:
-            ```json
-            {
-                "original_statement": "The Earth is flat.",
-                "fact_check_result": "FALSE",
-                "explanation": "This statement contradicts established scientific facts."
-            }
-            ```
+            A dictionary containing the following keys:
+            - 'original_statement': The statement that was subjected to the check.
+            - 'verdict': A string indicating the verification outcome (e.g., 'TRUE',
+                         'FALSE', 'UNVERIFIABLE_INTERNAL', 'ERROR').
+            - 'reason': A descriptive string explaining the given verdict.
 
         Raises:
-            ValueError: If the input data is not a dictionary, or if the
-                        'statement' key is missing, not a string, or empty.
-            RuntimeError: If an unexpected error occurs during the fact-checking
-                          logic execution.
+            TypeError: If the input `data` is neither a string nor a dictionary.
+            ValueError: If `data` is a dictionary but lacks the required 'statement' key.
         """
-        if not isinstance(data, dict):
-            logger.error("Invalid input data type for FactCheckerNode. Expected 'dict', received '%s'.", type(data))
-            raise ValueError("FactCheckerNode expects 'data' to be a dictionary.")
-
-        statement_raw = data.get("statement")
-        if not isinstance(statement_raw, str) or not statement_raw.strip():
-            logger.error(
-                "Missing or invalid 'statement' key in input data. Expected a non-empty string. Data: %s",
-                data
-            )
-            raise ValueError(
-                "FactCheckerNode requires a non-empty 'statement' string "
-                "in the input data dictionary."
-            )
-
-        statement = statement_raw.strip()
-        result: Dict[str, Any] = {
-            "original_statement": statement,
-            "fact_check_result": "UNVERIFIED",
-            "explanation": "Could not conclusively verify or refute the statement based on known facts."
-        }
+        original_statement: str = ""
+        verdict: str = "ERROR"
+        reason: str = "An unhandled error prevented verification."
 
         try:
-            if statement in self._known_truths:
-                result["fact_check_result"] = "TRUE"
-                result["explanation"] = "This statement is known to be factually accurate."
-                logger.info("Statement '%s' fact-checked as TRUE.", statement)
-            elif statement in self._known_falsehoods:
-                result["fact_check_result"] = "FALSE"
-                result["explanation"] = "This statement is known to be factually inaccurate."
-                logger.info("Statement '%s' fact-checked as FALSE.", statement)
+            if isinstance(data, str):
+                original_statement = data
+            elif isinstance(data, dict):
+                if 'statement' not in data:
+                    error_msg = f"Input data dictionary missing 'statement' key for fact-checking: {data}"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+                original_statement = str(data['statement'])
             else:
-                logger.info("Statement '%s' remains UNVERIFIED.", statement)
+                error_msg = f"Invalid input data type for FactCheckerNode: {type(data)}. Expected str or dict."
+                logger.error(error_msg)
+                raise TypeError(error_msg)
 
+            # Retrieve known facts from context, defaulting to an empty dict if not present
+            known_facts: Any = context.get("known_facts", {})
+            
+            # Ensure known_facts is actually a dictionary before proceeding
+            if not isinstance(known_facts, dict):
+                logger.warning(
+                    f"Context 'known_facts' key contained an invalid type ({type(known_facts)}). "
+                    "Expected a dictionary. Skipping internal fact-checking for this reason."
+                )
+                known_facts = {} # Reset to empty to prevent further errors
+
+            if original_statement in known_facts:
+                is_true = known_facts[original_statement]
+                verdict = "TRUE" if is_true else "FALSE"
+                reason = "Matched against internal knowledge base."
+                logger.info(f"Statement '{original_statement}' found in internal knowledge. Verdict: {verdict}")
+            else:
+                verdict = "UNVERIFIABLE_INTERNAL"
+                reason = "Statement not found in internal knowledge base. Further external verification may be required."
+                logger.info(f"Statement '{original_statement}' not found internally. Verdict: {verdict}")
+
+        except (TypeError, ValueError) as e:
+            verdict = "ERROR"
+            reason = f"Input validation or data extraction failed: {e}"
+            logger.error(f"FactCheckerNode failed due to an input-related error: {e}", exc_info=True)
         except Exception as e:
-            # Catching broad exceptions to ensure robustness for unforeseen issues
-            logger.exception(
-                "An unexpected error occurred during fact-checking for statement: '%s'.",
-                statement
-            )
-            raise RuntimeError(
-                f"FactCheckerNode failed to process statement '{statement}' due to an internal error."
-            ) from e
-
-        return result
+            verdict = "ERROR"
+            reason = f"An unexpected error occurred during processing: {e}"
+            logger.critical(f"FactCheckerNode encountered an unhandled exception: {e}", exc_info=True)
+        
+        return {
+            "original_statement": original_statement,
+            "verdict": verdict,
+            "reason": reason
+        }
