@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, Optional, Callable, Hashable
+from typing import Any, Dict
 
 from vishustra_core.nodes.base_node import BaseNode
 
@@ -7,122 +7,100 @@ logger = logging.getLogger(__name__)
 
 class CacheManagerNode(BaseNode):
     """
-    A processing node designed to manage data caching within Vishustra orchestration workflows.
+    A processing node that manages data caching operations within Vishustra.
 
-    This node primarily serves as a cache reader. It attempts to retrieve data from a provided
-    cache instance based on a derived or explicit cache key.
+    This node facilitates 'get' and 'set' operations on a shared cache store,
+    which is expected to be provided via the processing context. It offers
+    a standardized interface for interacting with a simple key-value cache.
 
-    Behavior of `process` method:
-    - If a cache hit occurs (data is found in the cache), the node returns the cached data.
-      The `context` dictionary will be updated with `context['cache_hit'] = True`.
-    - If a cache miss occurs (data is not found in the cache), the node returns the original
-      input `data`. This signals to downstream nodes that the data needs to be computed.
-      The `context` dictionary will be updated with `context['cache_hit'] = False`.
+    Input `data` for the `process` method should be a dictionary structured as follows:
+    - `"operation"` (str): Must be either "get" to retrieve a value or "set" to store a value.
+    - `"key"` (Any): The cache key to perform the operation on.
+    - `"value"` (Any, required for "set" operation): The value to store in the cache.
 
-    Configuration expected in the `context` dictionary for `process`:
-    - `cache_instance`: **Required**. The actual cache object. This object is expected
-      to have a `get(key)` method. Examples include `dict`, `functools.lru_cache`,
-      or custom cache implementations.
-    - `cache_key`: **Optional**. An explicit, hashable key to use for cache lookup.
-      If provided, `data` is ignored for key generation.
-    - `cache_key_transform_func`: **Optional**. A callable of type `Callable[[Any, Dict[str, Any]], Hashable]`.
-      If `cache_key` is not provided, this function will be used to transform the input `data`
-      and the current `context` into a hashable cache key.
-    - If neither `cache_key` nor `cache_key_transform_func` is provided, `str(data)` will be
-      used as the default cache key.
+    The `context` dictionary passed to `process` must contain:
+    - `"cache_store"`: A mutable dictionary-like object that serves as the cache.
 
-    Output updates to the `context` dictionary:
-    - `cache_hit`: A `bool` indicating `True` for a cache hit or `False` for a cache miss.
-    - `cache_key_used`: The specific hashable key that was used for the cache lookup.
-
-    Error Handling:
-    - Raises `ValueError` if `cache_instance` is missing or `cache_key` is not hashable.
-    - Raises `AttributeError` if `cache_instance` lacks a `get` method.
-    - Raises `RuntimeError` for unexpected failures during cache lookup.
+    Returns:
+    - For a "get" operation: The cached value if the key is found; otherwise, `None` for a cache miss.
+    - For a "set" operation: The value that was successfully stored in the cache.
     """
+
+    def __init__(self):
+        """
+        Initializes the CacheManagerNode.
+        """
+        logger.debug("CacheManagerNode initialized.")
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of this processing node."""
-        return "CacheManager"
+        """Returns the descriptive name of the node."""
+        return "CacheManagerNode"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
+    def process(self, data: Dict[str, Any], context: Dict[str, Any]) -> Any:
         """
-        Attempts to retrieve data from the configured cache.
+        Executes the specified cache operation based on the input data.
 
         Args:
-            data: The input data for the node. In case of a cache miss, this `data`
-                  is returned, typically to be passed to a downstream computation node.
-                  It also serves as the basis for cache key derivation if no explicit
-                  key is provided.
-            context: A dictionary containing runtime parameters, including the cache
-                     instance and key configuration.
+            data: A dictionary containing the details of the cache operation.
+                  Expected keys: "operation", "key", and optionally "value".
+            context: A dictionary holding shared runtime resources, crucially
+                     including the "cache_store" dictionary.
 
         Returns:
-            The cached value if a hit is detected, or the original `data` if a miss occurs.
-            The `context` dictionary will always be updated with cache status.
+            Any: The retrieved cache value (or None) for "get", or the stored
+                 value for "set" operations.
 
         Raises:
-            ValueError: If critical configuration (`cache_instance`, `cache_key` type) is invalid.
-            AttributeError: If `cache_instance` does not implement the expected interface (e.g., `get` method).
-            RuntimeError: For any unexpected errors during the cache operation.
+            ValueError: If the input `data` dictionary is malformed, missing
+                        required keys, or specifies an unrecognized operation.
+            KeyError: If the "cache_store" is absent from the `context`.
+            TypeError: If the object provided as "cache_store" in `context`
+                       is not a standard dictionary.
+            Exception: Catches any other unforeseen errors during the cache
+                       operation to ensure robustness.
         """
-        cache_instance = context.get('cache_instance')
-        if not cache_instance:
-            logger.error("CacheManagerNode: 'cache_instance' is required in the context.")
-            raise ValueError("Missing 'cache_instance' in context for CacheManagerNode.")
-
-        cache_key: Hashable
-        if 'cache_key' in context:
-            cache_key = context['cache_key']
-            if not isinstance(cache_key, Hashable):
-                logger.error(f"CacheManagerNode: Provided 'cache_key' in context is not hashable (type: {type(cache_key)}).")
-                raise ValueError("The 'cache_key' provided in context must be hashable.")
-        else:
-            key_transform_func: Optional[Callable[[Any, Dict[str, Any]], Hashable]] = context.get('cache_key_transform_func')
-            if key_transform_func:
-                if not callable(key_transform_func):
-                    logger.error(f"CacheManagerNode: 'cache_key_transform_func' is provided but is not a callable (type: {type(key_transform_func)}).")
-                    raise ValueError("'cache_key_transform_func' must be a callable.")
-                try:
-                    cache_key = key_transform_func(data, context)
-                    if not isinstance(cache_key, Hashable):
-                        logger.error(f"CacheManagerNode: Transform function returned a non-hashable key (type: {type(cache_key)}).")
-                        raise ValueError("The 'cache_key_transform_func' must return a hashable key.")
-                except Exception as e:
-                    logger.error(f"CacheManagerNode: Error transforming cache key with provided function: {e}", exc_info=True)
-                    raise ValueError(f"Failed to transform cache key: {e}") from e
-            else:
-                try:
-                    cache_key = str(data)  # Default key derivation
-                except Exception as e:
-                    logger.error(f"CacheManagerNode: Error converting input data to string for cache key: {e}", exc_info=True)
-                    raise ValueError(f"Could not derive cache key from data: {e}") from e
-                
-        context['cache_key_used'] = cache_key
-        logger.debug(f"CacheManagerNode: Attempting to retrieve from cache with key: '{cache_key}'")
-
         try:
-            # We expect cache_instance to have a 'get' method.
-            # Using .get() returns None for missing keys without raising an error.
-            cached_value = cache_instance.get(cache_key)
-            
-            # Differentiate between a missing key and a key explicitly cached as None.
-            # If the cache_instance supports `__contains__`, use it for a precise check.
-            is_key_present = hasattr(cache_instance, '__contains__') and cache_key in cache_instance
+            if not isinstance(data, dict):
+                raise ValueError("Input 'data' must be a dictionary.")
 
-            if cached_value is not None or is_key_present:
-                context['cache_hit'] = True
-                logger.debug(f"CacheManagerNode: Cache hit for key '{cache_key}'.")
-                return cached_value
-            else:
-                # Key is not present, and get() returned None.
-                context['cache_hit'] = False
-                logger.debug(f"CacheManagerNode: Cache miss for key '{cache_key}'. Returning original data.")
-                return data
-        except AttributeError:
-            logger.error(f"CacheManagerNode: 'cache_instance' object of type {type(cache_instance)} does not have a 'get' method.")
-            raise AttributeError(f"Invalid cache_instance: object of type {type(cache_instance)} must have a 'get' method.")
+            operation = data.get("operation")
+            key = data.get("key")
+
+            if operation not in ["get", "set"]:
+                raise ValueError(
+                    f"Invalid cache operation: '{operation}'. Must be 'get' or 'set'."
+                )
+            if key is None:
+                raise ValueError("Cache operation 'key' cannot be None.")
+
+            if "cache_store" not in context:
+                raise KeyError("Missing 'cache_store' in context for CacheManagerNode.")
+            
+            cache_store = context["cache_store"]
+            if not isinstance(cache_store, dict):
+                raise TypeError("'cache_store' in context must be a dictionary.")
+
+            if operation == "get":
+                if key in cache_store:
+                    value = cache_store[key]
+                    logger.debug(f"Cache hit for key '{key}'.")
+                    return value
+                else:
+                    logger.debug(f"Cache miss for key '{key}'.")
+                    return None
+            elif operation == "set":
+                if "value" not in data:
+                    raise ValueError("Missing 'value' in data for 'set' operation.")
+                
+                value_to_set = data["value"]
+                cache_store[key] = value_to_set
+                logger.debug(f"Cached value for key '{key}'.")
+                return value_to_set
+
+        except (ValueError, KeyError, TypeError) as e:
+            logger.error(f"CacheManagerNode encountered a configuration or input error: {e}")
+            raise
         except Exception as e:
-            logger.error(f"CacheManagerNode: An unexpected error occurred during cache lookup for key '{cache_key}': {e}", exc_info=True)
-            raise RuntimeError(f"Cache lookup failed for key '{cache_key}': {e}") from e
+            logger.exception(f"An unexpected error occurred in CacheManagerNode: {e}")
+            raise
