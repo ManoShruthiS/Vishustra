@@ -1,28 +1,17 @@
 import logging
 from typing import Any, Dict
 
-# Assuming vishustra_core is a package accessible in the project
-# For local development/testing, this might need adjustment, e.g., from .base_node import BaseNode
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
+
 class ToneConverterNode(BaseNode):
     """
-    A processing node that simulates the conversion of text data to a specified tone.
-    This node expects a string as input data and a 'target_tone' in the context.
+    A Vishustra processing node designed to simulate converting the tone of an input text.
+    The desired tone for conversion is specified via the 'target_tone' key within the
+    'context' dictionary provided during processing.
     """
-
-    # A simple mapping for simulated tone transformations.
-    # In a real-world scenario, this would involve LLM calls or sophisticated NLP.
-    _tone_transformations = {
-        "professional": lambda text: f"Regarding the matter at hand, it is imperative to convey: {text}.",
-        "casual": lambda text: f"Hey there! Just wanted to share: {text}!",
-        "formal": lambda text: f"It is with considerable deference that we present the following: {text}.",
-        "humorous": lambda text: f"Get this, you won't believe it: {text} (just kidding... mostly!)",
-        "sarcastic": lambda text: f"Oh, how absolutely unexpected that {text} (said no one ever).",
-        "neutral": lambda text: text, # Default, no change
-    }
 
     @property
     def node_name(self) -> str:
@@ -31,61 +20,90 @@ class ToneConverterNode(BaseNode):
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data by converting its tone based on the 'target_tone'
-        specified in the context.
+        Processes the input data, simulating a tone conversion based on the
+        'target_tone' specified in the context.
 
         Args:
-            data: The input data, expected to be a string (text).
-            context: A dictionary containing operational parameters.
-                     Expects 'target_tone' (str) to specify the desired output tone.
+            data (Any): The input data to be processed. Expected to be a string
+                        containing the text whose tone needs to be converted.
+            context (Dict[str, Any]): A dictionary containing additional processing
+                                       parameters. It must contain a 'target_tone' key
+                                       whose value is a string representing the desired tone.
 
         Returns:
-            A string with the converted tone, or the original data if conversion fails.
+            Any: The simulated tone-converted text (string). If the input data is not
+                 a string, or if 'target_tone' is missing/invalid in context,
+                 the original data or a less-transformed version may be returned
+                 after logging appropriate warnings/errors.
 
         Raises:
-            TypeError: If the input 'data' is not a string.
-            ValueError: If 'target_tone' is missing or unsupported in the context,
-                        and no suitable fallback can be applied.
+            ValueError: If the input 'data' is not of type string, as this node
+                        is designed to operate on textual content.
         """
         if not isinstance(data, str):
             logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected string, got {type(data).__name__}."
+                f"[{self.node_name}] Invalid input data type. Expected string, "
+                f"but received {type(data)}. Cannot perform tone conversion."
             )
-            raise TypeError(
-                f"[{self.node_name}] Input 'data' must be a string, but received {type(data).__name__}."
+            raise ValueError(
+                f"[{self.node_name}] Input data must be a string for tone conversion. "
+                f"Received type: {type(data)}."
             )
 
+        original_text = data
         target_tone = context.get("target_tone")
-        if target_tone is None:
+
+        if not target_tone or not isinstance(target_tone, str):
             logger.warning(
-                f"[{self.node_name}] 'target_tone' not specified in context. "
-                "Defaulting to 'neutral' tone."
+                f"[{self.node_name}] 'target_tone' not found or is not a string in "
+                f"context. Cannot convert tone. Returning original text."
             )
-            target_tone = "neutral"
+            return original_text
+
+        logger.info(
+            f"[{self.node_name}] Attempting to convert tone for text (first 80 chars): "
+            f"'{original_text[:80].replace('\'', '\"')}...' to target tone: '{target_tone}'."
+        )
+
+        converted_text = original_text  # Default to original if no specific conversion
+
+        # Simple simulation of tone conversion based on common target tones
+        # In a real-world scenario, this would involve NLP models or sophisticated templating.
+        lower_target_tone = target_tone.lower()
+        if lower_target_tone == "formal":
+            converted_text = (
+                f"Esteemed recipient, kindly be advised that, following due consideration, "
+                f"it has been determined: {original_text}. Your prompt attention to this matter "
+                f"is greatly appreciated. Respectfully."
+            )
+        elif lower_target_tone == "informal":
+            converted_text = (
+                f"Hey there! Just wanted to quickly fill you in: {original_text}. "
+                f"Catch ya later!"
+            )
+        elif lower_target_tone == "sarcastic":
+            converted_text = (
+                f"Oh, how absolutely *thrilling*! Prepare to be astonished by this "
+                f"earth-shattering revelation: {original_text}. What a truly unique insight!"
+            )
+        elif lower_target_tone == "joyful":
+            converted_text = (
+                f"Wonderful news! I'm absolutely delighted to share: {original_text}! "
+                f"Isn't that just fantastic?!"
+            )
+        elif lower_target_tone == "serious":
+            converted_text = (
+                f"Please take a moment to absorb this critical information: {original_text}. "
+                f"The gravity of this situation cannot be overstated."
+            )
         else:
-            target_tone = str(target_tone).lower() # Ensure it's a string and lowercased
-
-        transformer_func = self._tone_transformations.get(target_tone)
-
-        if transformer_func is None:
             logger.warning(
-                f"[{self.node_name}] Unsupported target tone '{target_tone}' requested. "
-                "Falling back to 'neutral' tone."
+                f"[{self.node_name}] Unsupported 'target_tone': '{target_tone}'. "
+                f"Returning original text without conversion."
             )
-            transformer_func = self._tone_transformations["neutral"]
 
-        try:
-            converted_data = transformer_func(data)
-            logger.info(
-                f"[{self.node_name}] Successfully converted text to '{target_tone}' tone."
-            )
-            return converted_data
-        except Exception as e:
-            logger.exception(
-                f"[{self.node_name}] An unexpected error occurred during tone conversion to '{target_tone}': {e}"
-            )
-            # Depending on framework policy, might re-raise, return original, or a specific error object.
-            # For robustness, returning original data as a fallback is often acceptable for non-critical failures.
-            raise RuntimeError(
-                f"[{self.node_name}] Failed to convert tone to '{target_tone}': {e}"
-            ) from e
+        logger.info(
+            f"[{self.node_name}] Tone conversion simulated successfully. Result (first 80 chars): "
+            f"'{converted_text[:80].replace('\'', '\"')}...'."
+        )
+        return converted_text
