@@ -1,8 +1,6 @@
 import logging
-import random
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
-# Assuming BaseNode is located at this path within the project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
@@ -11,123 +9,140 @@ class FactCheckerNode(BaseNode):
     """
     A Vishustra processing node that simulates fact-checking a given statement.
 
-    This node takes a statement (string or part of a dictionary) and attempts
-    to determine its factual accuracy, returning a structured result including
-    a verdict, confidence score, and simulated sources.
+    This node takes an input containing a statement and attempts to verify its
+    factual accuracy against a simulated internal knowledge base. It returns a
+    structured result indicating the factual status, confidence, and simulated sources.
+    This is a conceptual implementation and would interface with real-world
+    fact-checking services or knowledge graphs in a production environment.
     """
-
-    def __init__(self, config: Dict[str, Any] = None):
-        """
-        Initializes the FactCheckerNode with an optional configuration.
-
-        Args:
-            config (Dict[str, Any], optional): Configuration parameters for
-                                               the fact-checking process.
-                                               Currently not used in simulation.
-        """
-        self._config = config or {}
-        logger.debug(f"FactCheckerNode initialized with config: {self._config}")
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "Fact Checker"
+        """Returns the name of the node."""
+        return "FactCheckerNode"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Union[str, bool, None, List[str], Any]]:
         """
-        Simulates fact-checking the input data.
+        Processes the input data to perform fact-checking on a statement.
 
-        The `data` input is expected to be either:
-        1. A string: This string is treated directly as the statement to check.
-        2. A dictionary: This dictionary must contain a 'statement' key whose
-           value is the string to be fact-checked. Other keys are ignored.
+        Expects `data` to be a dictionary, with the statement to be checked
+        under the key "statement". Other keys in the input dictionary will be
+        preserved in the output.
 
-        The `context` dictionary can be used to pass global session information
-        or shared resources, though it's not directly utilized in this
-        simulation.
+        Args:
+            data: The input data, expected to be a dictionary containing at least
+                  a "statement" key with the text to check.
+            context: A dictionary containing contextual information for the node.
+                     This can include configuration, session data, or shared resources.
 
-        Returns a dictionary containing the fact-checking results:
-        - 'original_statement': The statement that was checked.
-        - 'is_factual': A boolean indicating the simulated factual verdict.
-        - 'confidence_score': A float (0.0 to 1.0) representing the simulated
-                              confidence in the verdict.
-        - 'checked_claims': A list of dictionaries detailing individual claims
-                            and their simulated verdicts/details.
-        - 'sources': A list of simulated sources for the fact-check.
-        - 'processing_status': 'success', 'failed', or 'error'.
-        - 'error_message': Detailed error message if processing failed.
+        Returns:
+            A dictionary containing the original data, augmented with fact-checking
+            results:
+            - "original_statement": The statement that was checked.
+            - "is_factual": True, False, or None if the statement could not be verified.
+            - "confidence": A string indicating the confidence level ("HIGH", "MEDIUM", "LOW", "NONE").
+            - "reason": A brief explanation of the fact-checking outcome.
+            - "sources": A list of simulated sources.
+            - "error": An error message if processing failed (e.g., invalid input).
+            Any other keys from the input `data` will also be present.
         """
-        statement_to_check: str = ""
-        result: Dict[str, Any] = {
-            "original_statement": None,
-            "is_factual": False,
-            "confidence_score": 0.0,
-            "checked_claims": [],
-            "sources": [],
-            "processing_status": "error",
-            "error_message": "An unexpected error occurred."
+        if not isinstance(data, dict):
+            error_msg = (
+                f"{self.node_name} received invalid input data. Expected a dictionary, "
+                f"but got type {type(data).__name__}."
+            )
+            logger.error(error_msg)
+            return {
+                "original_data": data, # Preserve the erroneous input for debugging
+                "error": error_msg,
+                "is_factual": None,
+                "confidence": "NONE",
+                "reason": "Invalid input data type.",
+                "sources": []
+            }
+
+        statement = data.get("statement")
+        if not isinstance(statement, str) or not statement.strip():
+            error_msg = (
+                f"{self.node_name} requires a non-empty string 'statement' "
+                f"key in the input data dictionary. Received: {statement!r}."
+            )
+            logger.error(error_msg)
+            return {
+                **data, # Include original data if it was a dict
+                "error": error_msg,
+                "is_factual": None,
+                "confidence": "NONE",
+                "reason": "Missing or invalid 'statement' in input data.",
+                "sources": []
+            }
+        
+        # Initialize result with defaults, preserving all original input data
+        result: Dict[str, Union[str, bool, None, List[str], Any]] = {
+            **data,
+            "original_statement": statement,
+            "is_factual": None,
+            "confidence": "LOW",
+            "reason": "Could not definitively verify or refute with available internal knowledge.",
+            "sources": []
         }
 
-        try:
-            if isinstance(data, str):
-                statement_to_check = data
-            elif isinstance(data, dict):
-                statement_to_check = data.get("statement", "")
-                if not statement_to_check:
-                    raise ValueError("Input dictionary must contain a non-empty 'statement' key for fact-checking.")
-            else:
-                raise TypeError(
-                    "Input data must be a string or a dictionary containing a 'statement' key."
-                    f" Received type: {type(data).__name__}"
-                )
+        # --- Simulated Fact-Checking Logic ---
+        # In a real-world scenario, this section would involve complex logic:
+        # - Querying a knowledge graph or database.
+        # - Calling external fact-checking APIs.
+        # - Utilizing NLP models for evidence extraction and verification.
+        # - Incorporating user feedback or expert reviews.
+        lower_statement = statement.lower().strip()
 
-            result["original_statement"] = statement_to_check
+        if "vishustra is an orchestration framework" in lower_statement:
+            result.update({
+                "is_factual": True,
+                "confidence": "HIGH",
+                "reason": "Matches Vishustra's core project definition and documentation.",
+                "sources": ["Vishustra Internal Docs", "vishustra.io/about"]
+            })
+            logger.debug(f"Statement '{statement}' identified as factual (HIGH confidence).")
+        elif "the moon is made of cheese" in lower_statement:
+            result.update({
+                "is_factual": False,
+                "confidence": "HIGH",
+                "reason": "Widely known scientific fact contradicts this statement.",
+                "sources": ["General Astronomy Knowledge", "NASA Publications"]
+            })
+            logger.debug(f"Statement '{statement}' identified as false (HIGH confidence).")
+        elif "python is slow" in lower_statement:
+            result.update({
+                "is_factual": False, # Often an oversimplification
+                "confidence": "MEDIUM",
+                "reason": "Python's performance is context-dependent. While it can be slower than compiled languages for CPU-bound tasks, it excels in I/O-bound tasks and is often optimized with C extensions, making the blanket statement 'slow' misleading.",
+                "sources": ["Python Performance Guides", "Community Benchmarks", "Official Python Documentation"]
+            })
+            logger.debug(f"Statement '{statement}' identified as false (MEDIUM confidence).")
+        elif "global temperatures will rise by 5 degrees in 2024" in lower_statement:
+            # Example of a speculative statement that is highly unlikely and not currently verifiable
+            result.update({
+                "is_factual": False,
+                "confidence": "HIGH",
+                "reason": "This is a speculative future prediction, and such a rapid increase in global temperatures within a single year is not supported by current climate models or scientific consensus.",
+                "sources": ["IPCC Reports", "Climate Science Institutions"]
+            })
+            logger.debug(f"Statement '{statement}' identified as false (HIGH confidence) based on scientific consensus.")
+        elif "vishustra will be production ready next month" in lower_statement:
+            # Example of an unverifiable, future-looking statement
+            result.update({
+                "is_factual": None,
+                "confidence": "LOW",
+                "reason": "This is a future-looking statement about project timelines and cannot be definitively fact-checked at the current moment.",
+                "sources": []
+            })
+            logger.info(f"Statement '{statement}' identified as unverifiable (LOW confidence).")
+        else:
+            logger.info(f"Statement '{statement}' could not be definitively verified or refuted by FactCheckerNode's internal knowledge.")
+            # Defaults are already set for this case
 
-            if not statement_to_check.strip():
-                raise ValueError("Statement to check cannot be empty or consist only of whitespace.")
-
-            # --- Start Fact-Checking Simulation ---
-            logger.info(f"Simulating fact-check for statement: '{statement_to_check[:120]}...'")
-
-            # Simple heuristic: statements containing certain keywords are more likely to be "factual"
-            known_truth_keywords = ["sun", "earth", "gravity", "water", "sky", "science", "mathematics"]
-            is_likely_factual_by_keyword = any(
-                keyword in statement_to_check.lower() for keyword in known_truth_keywords
-            )
-
-            # Introduce randomness to simulate imperfect real-world fact-checking
-            random_chance = random.random() # Value between 0.0 and 1.0
-
-            if is_likely_factual_by_keyword and random_chance > 0.3: # 70% chance of being true if keyword matches
-                result["is_factual"] = True
-                result["confidence_score"] = round(0.75 + random.random() * 0.25, 2) # Score between 0.75 and 1.0
-                result["sources"] = ["Verified Research Database", "Reputable Encyclopedia"]
-                result["checked_claims"].append(
-                    {"claim": statement_to_check, "verdict": "TRUE", "details": "Matches widely accepted knowledge based on keyword analysis and high confidence score."}
-                )
-            else:
-                result["is_factual"] = False
-                result["confidence_score"] = round(random.random() * 0.6, 2) # Score between 0.0 and 0.6
-                result["sources"] = ["Online Forum", "Social Media Post (unverified)"]
-                result["checked_claims"].append(
-                    {"claim": statement_to_check, "verdict": "FALSE", "details": "Insufficient evidence or conflicting information found during simulated check."}
-                )
-
-            result["processing_status"] = "success"
-            result["error_message"] = None
-            logger.debug(
-                f"Fact-checking simulation complete for '{statement_to_check[:60]}...'. "
-                f"Verdict: {'Factual' if result['is_factual'] else 'Not Factual'} "
-                f"with confidence: {result['confidence_score']}"
-            )
-
-        except (ValueError, TypeError) as e:
-            logger.error(f"FactCheckerNode received invalid input: {e}", exc_info=True)
-            result["error_message"] = str(e)
-            result["processing_status"] = "failed_validation"
-        except Exception as e:
-            logger.error(f"An unexpected error occurred during fact-checking simulation: {e}", exc_info=True)
-            result["error_message"] = f"Unexpected processing error: {type(e).__name__} - {str(e)}"
-            result["processing_status"] = "failed_runtime"
-        finally:
-            return result
+        logger.info(
+            f"{self.node_name} processed statement: '{statement}'. "
+            f"Result: is_factual={result['is_factual']}, confidence={result['confidence']}"
+        )
+        return result
