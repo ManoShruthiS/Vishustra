@@ -1,168 +1,120 @@
 import logging
-import re
 from typing import Any, Dict
 
-# This import assumes vishustra_core is installed and available in the Python path.
-# The BaseNode definition is provided in the project context.
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class IntentClassifierNode(BaseNode):
     """
-    A Vishustra processing node designed to classify the intent of a given text input.
+    A Vishustra processing node designed to classify the intent of an input text.
 
-    This node simulates intent classification based on a predefined set of keywords
-    and regular expression patterns. It is intended to process user queries
-    and identify their primary intention (e.g., greeting, order status, product inquiry).
+    This node simulates intent classification, typically using a keyword-based
+    approach or by integrating with an external intent recognition service/model.
+    In a production environment, this would involve loading and running a
+    machine learning model (e.g., a fine-tuned transformer model or a simpler
+    rules engine).
 
-    The node expects a string as input data and returns a structured dictionary
-    containing the classified intent, a confidence score, and the original query.
+    Configuration can be provided during initialization or dynamically via
+    the `context` dictionary during processing.
     """
 
-    def __init__(self):
+    def __init__(self, classification_rules: Dict[str, str] = None, default_intent: str = "unrecognized"):
         """
-        Initializes the IntentClassifierNode with a predefined intent mapping.
-        Each intent is associated with keywords and optional regex patterns,
-        along with a default confidence level for that intent.
-        In a production environment, this mapping would typically be loaded
-        from a configuration file, a dedicated service, or a machine learning model.
+        Initializes the IntentClassifierNode with optional classification rules
+        and a default intent.
+
+        Args:
+            classification_rules (Dict[str, str], optional): A dictionary
+                where keys are keywords (or phrases) and values are the
+                corresponding intent names (e.g., {"hello": "greeting"}).
+                Keys are matched in a case-insensitive manner against the input text.
+                If None, a basic set of internal rules is used.
+            default_intent (str, optional): The intent to return if no
+                specific intent is matched by the provided rules.
+                Defaults to "unrecognized".
         """
-        self._intent_map = {
-            "greeting": {
-                "keywords": ["hello", "hi", "hey", "good morning", "good evening"],
-                "patterns": [r"^(hi|hello|hey)\b", r"\bgood (morning|evening)\b"],
-                "confidence": 0.95
-            },
-            "farewell": {
-                "keywords": ["bye", "goodbye", "see you", "farewell"],
-                "patterns": [r"^(bye|goodbye)\b", r"\bsee you (later)?\b"],
-                "confidence": 0.90
-            },
-            "order_status": {
-                "keywords": ["order status", "my order", "where is", "track my"],
-                "patterns": [r"^(where is|what is the status of) my order", r"\btrack my order\b"],
-                "confidence": 0.98
-            },
-            "account_info": {
-                "keywords": ["my account", "account details", "change password", "update profile"],
-                "patterns": [r"\bmy account\b", r"\baccount details\b", r"\bchange my password\b"],
-                "confidence": 0.85
-            },
-            "product_inquiry": {
-                "keywords": ["product", "item", "about", "information on", "tell me about"],
-                "patterns": [r"\btell me about (.+)\b", r"\binformation on (.+)\b", r"\bproduct (.+)\b"],
-                "confidence": 0.80
-            },
-            "unclassified": {
-                "keywords": [],
-                "patterns": [],
-                "confidence": 0.10 # Default low confidence for unclassified queries
-            }
+        # Internal default rules to provide a baseline if none are specified
+        self._internal_default_rules = {
+            "hello": "greeting", "hi": "greeting", "hey": "greeting",
+            "buy": "purchase_intent", "order": "purchase_intent", "purchase": "purchase_intent",
+            "support": "support_request", "help": "support_request", "issue": "support_request",
+            "cancel": "cancellation_request", "undo": "cancellation_request",
+            "thanks": "acknowledgement", "thank you": "acknowledgement",
+            "faq": "information_query", "question": "information_query", "how to": "information_query",
+            "price": "pricing_query", "cost": "pricing_query",
         }
-        logger.debug("IntentClassifierNode initialized with predefined intent map.")
+
+        # Combine provided rules with internal defaults, allowing user rules to override
+        self._classification_rules = self._internal_default_rules.copy()
+        if classification_rules:
+            self._classification_rules.update({k.lower(): v for k, v in classification_rules.items()})
+
+        self._default_intent = default_intent
+        logger.debug(f"IntentClassifierNode initialized with rules: {list(self._classification_rules.keys())} and default intent: '{self._default_intent}'")
 
     @property
     def node_name(self) -> str:
         """
-        Returns the programmatic name of this node, 'IntentClassifier'.
-        This name can be used for identification within the Vishustra framework.
+        Returns the descriptive name of the node.
         """
-        return "IntentClassifier"
+        return "IntentClassifierNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input data (a user query string) to classify its intent.
+        Classifies the intent of the input text data.
 
-        The classification is performed by matching the query against a set of
-        predefined keywords and regular expression patterns associated with
-        various intents. Pattern matches are generally given higher priority
-        than keyword matches due to their specificity and typically higher
-        configured confidence.
+        The node expects the `data` to be a string representing the user's
+        utterance or a piece of text to be analyzed. It uses a keyword-matching
+        logic, enhanced by rules potentially provided in the `context`.
 
         Args:
-            data (Any): The input data, which is expected to be a string
-                        representing the user's query.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                       relevant to the current processing flow.
-                                       This node does not currently utilize the context,
-                                       but it is passed through as part of the Vishustra
-                                       node interface.
+            data (Any): The input data to be processed. Expected to be a string.
+                        If not a string, an 'error_invalid_input_type' intent is returned.
+            context (Dict[str, Any]): A dictionary containing contextual information.
+                                     This can be used to dynamically pass additional
+                                     `intent_classification_rules` or other configuration
+                                     for a more complex classification model.
 
         Returns:
-            Dict[str, Any]: A dictionary containing the classification result:
-                            - "intent": The identified intent (e.g., "greeting", "order_status").
-                            - "confidence": A float representing the confidence score (0.0 to 1.0).
-                            - "original_query": The original input query string.
-
-        Raises:
-            ValueError: If the input `data` is not a string, indicating an invalid
-                        input type for intent classification.
+            Dict[str, Any]: A dictionary containing the 'intent' (str) and a
+                            simulated 'confidence' (float) for the classification.
+                            Example: `{"intent": "greeting", "confidence": 0.95}`.
+                            For invalid input types, it returns:
+                            `{"intent": "error_invalid_input_type", "confidence": 0.0}`.
+                            For an empty text input or no match, it returns the
+                            `default_intent` with lower confidence.
         """
         if not isinstance(data, str):
-            error_msg = f"IntentClassifierNode received invalid data type. Expected string, got {type(data).__name__}."
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            logger.error(f"IntentClassifierNode received non-string data of type: {type(data).__name__}. Expected 'str'.")
+            return {"intent": "error_invalid_input_type", "confidence": 0.0}
 
-        query = data.lower().strip()
-        
-        best_intent = "unclassified"
-        best_confidence = self._intent_map["unclassified"]["confidence"]
-        
-        # Store potential matches with their confidence and source (pattern/keyword)
-        # Patterns are generally more specific, so they can influence confidence weighting.
-        potential_matches: Dict[str, Dict[str, Any]] = {}
+        text = data.lower().strip()
+        logger.debug(f"Attempting to classify intent for text: '{text}'")
 
-        # Evaluate patterns first, as they often indicate stronger intent
-        for intent_name, config in self._intent_map.items():
-            for pattern_str in config.get("patterns", []):
-                if re.search(pattern_str, query):
-                    # If this intent hasn't been matched yet, or if this pattern match
-                    # offers higher confidence than a previous match for the same intent
-                    current_match = potential_matches.get(intent_name)
-                    if not current_match or config["confidence"] > current_match["confidence"]:
-                        potential_matches[intent_name] = {"confidence": config["confidence"], "source": "pattern"}
-                        logger.debug(f"Pattern match for intent '{intent_name}': '{pattern_str}' in '{query}'")
+        # Create a mutable copy of rules, allowing context to provide dynamic overrides/additions
+        current_rules = self._classification_rules.copy()
+        if 'intent_classification_rules' in context and isinstance(context['intent_classification_rules'], dict):
+            context_rules = {k.lower(): v for k, v in context['intent_classification_rules'].items()}
+            current_rules.update(context_rules)
+            logger.debug(f"Dynamic intent rules from context applied. Total rules: {len(current_rules)}.")
 
-        # Then, evaluate keywords. A keyword match for an intent should only override
-        # an existing match for that same intent if it provides strictly higher confidence,
-        # or if the existing match was also a keyword match with lower confidence.
-        # It should not easily override a pattern match for the same intent unless specifically configured.
-        for intent_name, config in self._intent_map.items():
-            for keyword in config.get("keywords", []):
-                if keyword in query: # Simple substring match for keywords
-                    current_match = potential_matches.get(intent_name)
-                    
-                    if not current_match: # No previous match for this intent
-                        potential_matches[intent_name] = {"confidence": config["confidence"], "source": "keyword"}
-                        logger.debug(f"Keyword match for intent '{intent_name}': '{keyword}' in '{query}' (initial)")
-                    elif current_match["source"] == "keyword" and config["confidence"] > current_match["confidence"]:
-                        # Existing match was also keyword, and this one is stronger
-                        potential_matches[intent_name] = {"confidence": config["confidence"], "source": "keyword"}
-                        logger.debug(f"Keyword match for intent '{intent_name}': '{keyword}' in '{query}' (overriding existing keyword)")
-                    elif current_match["source"] == "pattern" and config["confidence"] > current_match["confidence"]:
-                        # Existing match was a pattern, but this keyword is configured with higher confidence
-                        potential_matches[intent_name] = {"confidence": config["confidence"], "source": "keyword"}
-                        logger.debug(f"Keyword match for intent '{intent_name}': '{keyword}' in '{query}' (overriding existing pattern due to higher confidence)")
+        matched_intent = self._default_intent
+        confidence = 0.1  # Default low confidence for unrecognized or empty intent
 
-        # Determine the best intent from all potential matches
-        if potential_matches:
-            # Sort matches:
-            # Primary sort key: confidence (descending).
-            # Secondary sort key: source type (pattern preferred over keyword if confidences are equal).
-            # Assigning numerical values (1 for pattern, 0 for keyword) allows for simple sorting.
-            sorted_matches = sorted(
-                potential_matches.items(),
-                key=lambda item: (item[1]["confidence"], 1 if item[1]["source"] == "pattern" else 0),
-                reverse=True
-            )
-            best_intent, match_info = sorted_matches[0]
-            best_confidence = match_info["confidence"]
-        
-        logger.info(f"Classified intent for query '{data}': '{best_intent}' with confidence {best_confidence:.2f}")
+        if not text:
+            logger.debug("Input text is empty. Returning default intent.")
+            return {"intent": self._default_intent, "confidence": confidence}
 
-        return {
-            "intent": best_intent,
-            "confidence": best_confidence,
-            "original_query": data
-        }
+        # Perform keyword-based intent classification
+        for keyword, intent in current_rules.items():
+            if keyword in text:
+                matched_intent = intent
+                confidence = 0.95  # Simulate high confidence for a direct keyword match
+                logger.info(f"Intent classified as '{matched_intent}' based on keyword '{keyword}'.")
+                break # Return the first matching intent found
+
+        if matched_intent == self._default_intent:
+            logger.info(f"No specific intent matched for text: '{text}'. Returning default intent: '{self._default_intent}'.")
+
+        return {"intent": matched_intent, "confidence": confidence}
