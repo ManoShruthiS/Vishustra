@@ -1,188 +1,133 @@
 import logging
-from typing import Any, Dict, List, Tuple
+import random
+from typing import Any, Dict, List, Union
 
+# Assuming BaseNode is located at this path within the project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class FactCheckerNode(BaseNode):
     """
-    A processing node designed to simulate fact-checking statements against a predefined
-    or context-provided knowledge base. It aims to verify the veracity of textual claims.
+    A Vishustra processing node that simulates fact-checking a given statement.
+
+    This node takes a statement (string or part of a dictionary) and attempts
+    to determine its factual accuracy, returning a structured result including
+    a verdict, confidence score, and simulated sources.
     """
 
-    # --- Internal simulated knowledge base for demonstration ---
-    _KNOWN_FACTS: Dict[str, str] = {
-        "The capital of France is Paris.": "VERIFIED",
-        "Water boils at 100 degrees Celsius at sea level.": "VERIFIED",
-        "The sun revolves around the Earth.": "UNVERIFIED", # This is a false statement
-        "Vishustra is a highly modular LLM orchestration framework.": "VERIFIED",
-        "Artificial intelligence is sentient.": "UNCERTAIN", # A nuanced example
-        "The moon is made of cheese.": "UNVERIFIED",
-        "Elephants can fly.": "UNVERIFIED",
-        "Birds can fly.": "VERIFIED",
-    }
-    _KEYWORDS_TO_TRUTH: Dict[str, str] = {
-        "Paris": "VERIFIED",
-        "France capital": "VERIFIED",
-        "water boils": "VERIFIED",
-        "sun revolves around earth": "UNVERIFIED",
-        "AI sentient": "UNCERTAIN",
-        "Vishustra framework": "VERIFIED",
-        "moon cheese": "UNVERIFIED",
-        "elephants fly": "UNVERIFIED",
-        "birds fly": "VERIFIED",
-        "earth is flat": "UNVERIFIED",
-    }
-    # --- End of internal simulated knowledge base ---
+    def __init__(self, config: Dict[str, Any] = None):
+        """
+        Initializes the FactCheckerNode with an optional configuration.
+
+        Args:
+            config (Dict[str, Any], optional): Configuration parameters for
+                                               the fact-checking process.
+                                               Currently not used in simulation.
+        """
+        self._config = config or {}
+        logger.debug(f"FactCheckerNode initialized with config: {self._config}")
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
-        return "FactCheckerNode"
+        """Returns the descriptive name of the node."""
+        return "Fact Checker"
 
-    def _check_statement_against_kb(self, statement: str) -> Tuple[str, List[str]]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Simulates checking a single statement against the node's internal knowledge base.
-        Returns a tuple of (status, details_list).
+        Simulates fact-checking the input data.
+
+        The `data` input is expected to be either:
+        1. A string: This string is treated directly as the statement to check.
+        2. A dictionary: This dictionary must contain a 'statement' key whose
+           value is the string to be fact-checked. Other keys are ignored.
+
+        The `context` dictionary can be used to pass global session information
+        or shared resources, though it's not directly utilized in this
+        simulation.
+
+        Returns a dictionary containing the fact-checking results:
+        - 'original_statement': The statement that was checked.
+        - 'is_factual': A boolean indicating the simulated factual verdict.
+        - 'confidence_score': A float (0.0 to 1.0) representing the simulated
+                              confidence in the verdict.
+        - 'checked_claims': A list of dictionaries detailing individual claims
+                            and their simulated verdicts/details.
+        - 'sources': A list of simulated sources for the fact-check.
+        - 'processing_status': 'success', 'failed', or 'error'.
+        - 'error_message': Detailed error message if processing failed.
         """
-        statement_lower = statement.lower()
-        details: List[str] = []
+        statement_to_check: str = ""
+        result: Dict[str, Any] = {
+            "original_statement": None,
+            "is_factual": False,
+            "confidence_score": 0.0,
+            "checked_claims": [],
+            "sources": [],
+            "processing_status": "error",
+            "error_message": "An unexpected error occurred."
+        }
 
-        # Check for exact matches first
-        for fact, status in self._KNOWN_FACTS.items():
-            if statement_lower == fact.lower():
-                details.append(f"Exact match found in internal known facts. Status: {status}.")
-                logger.debug(f"Statement '{statement}' exact matched to '{fact}', status: {status}")
-                return status, details
-
-        # Check for keyword matches
-        for keyword, status in self._KEYWORDS_TO_TRUTH.items():
-            if keyword.lower() in statement_lower:
-                details.append(f"Keyword match found in internal knowledge base for '{keyword}'. Status: {status}.")
-                logger.debug(f"Statement '{statement}' keyword matched to '{keyword}', status: {status}")
-                return status, details
-        
-        details.append("No direct match or significant keyword found in the simulated knowledge base.")
-        logger.debug(f"Statement '{statement}' did not find a direct or keyword match.")
-        return "UNCERTAIN", details
-
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
-        """
-        Processes the input data to perform fact-checking.
-
-        This method supports various input formats and attempts to extract
-        statements for verification. It prioritizes an external fact-checking
-        service provided in the `context` if available, otherwise, it falls
-        back to its internal simulated knowledge base.
-
-        Expected `data` formats:
-        - A `str` representing a single statement to check.
-        - A `Dict[str, Any]` containing a 'statement' key with the text to check.
-        - A `List[str]` where each string is a statement.
-        - A `List[Dict[str, Any]]` where each dict contains a 'statement' key.
-
-        Expected `context` keys (optional):
-        - `fact_checking_service`: A callable (e.g., a function or method) that
-          takes a `str` statement and returns a `Tuple[str, List[str]]`
-          (status, details). If provided, this service will be used instead
-          of the internal simulation.
-
-        Returns:
-            A dictionary if the input `data` was a single item (str or dict),
-            or a list of dictionaries if the input `data` was a list. Each
-            result dictionary contains:
-            - 'original_text': The text that was checked.
-            - 'status': One of 'VERIFIED', 'UNVERIFIED', 'UNCERTAIN', 'ERROR'.
-            - 'details': A list of strings explaining the verification process or findings.
-            - 'original_input_structure': The original piece of data that was processed
-                                          (e.g., the string or the dict it came from).
-        
-        Raises:
-            TypeError: If the input `data` is of an unsupported type.
-        """
-        logger.info(f"FactCheckerNode processing data of type: {type(data)}")
-        results: List[Dict[str, Any]] = []
-
-        statements_to_check: List[str] = []
-        original_data_mapping: List[Any] = [] # To map results back to original structure
-
-        # Normalize input data into a list of statements
-        if isinstance(data, str):
-            statements_to_check.append(data)
-            original_data_mapping.append(data)
-        elif isinstance(data, dict):
-            if "statement" in data and isinstance(data["statement"], str):
-                statements_to_check.append(data["statement"])
-                original_data_mapping.append(data)
+        try:
+            if isinstance(data, str):
+                statement_to_check = data
+            elif isinstance(data, dict):
+                statement_to_check = data.get("statement", "")
+                if not statement_to_check:
+                    raise ValueError("Input dictionary must contain a non-empty 'statement' key for fact-checking.")
             else:
-                logger.warning(
-                    "Input dict does not contain a 'statement' key or its value is not a string. "
-                    "Returning an error status for this item."
+                raise TypeError(
+                    "Input data must be a string or a dictionary containing a 'statement' key."
+                    f" Received type: {type(data).__name__}"
                 )
-                return {
-                    "status": "ERROR",
-                    "details": ["Invalid input format for dictionary data. Expected a 'statement' key with a string value."],
-                    "original_input_structure": data
-                }
-        elif isinstance(data, list):
-            for i, item in enumerate(data):
-                if isinstance(item, str):
-                    statements_to_check.append(item)
-                    original_data_mapping.append(item)
-                elif isinstance(item, dict) and "statement" in item and isinstance(item["statement"], str):
-                    statements_to_check.append(item["statement"])
-                    original_data_mapping.append(item)
-                else:
-                    logger.warning(f"List item at index {i} of unexpected format: {type(item)}. Skipping processing for this item.")
-                    results.append({
-                        "original_data_item": item,
-                        "status": "ERROR",
-                        "details": ["Invalid format for list item. Expected string or dict with 'statement' key."],
-                        "original_input_structure": item
-                    })
-        else:
-            logger.error(f"Unsupported data type for FactCheckerNode: {type(data)}")
-            raise TypeError(
-                f"FactCheckerNode received unsupported data type: {type(data)}. "
-                "Expected str, dict with 'statement', or list of these."
+
+            result["original_statement"] = statement_to_check
+
+            if not statement_to_check.strip():
+                raise ValueError("Statement to check cannot be empty or consist only of whitespace.")
+
+            # --- Start Fact-Checking Simulation ---
+            logger.info(f"Simulating fact-check for statement: '{statement_to_check[:120]}...'")
+
+            # Simple heuristic: statements containing certain keywords are more likely to be "factual"
+            known_truth_keywords = ["sun", "earth", "gravity", "water", "sky", "science", "mathematics"]
+            is_likely_factual_by_keyword = any(
+                keyword in statement_to_check.lower() for keyword in known_truth_keywords
             )
 
-        if not statements_to_check and not results: # If no valid statements extracted and no errors added to results
-            logger.info("No valid statements found to fact-check in the input data.")
-            # Return empty list for list input, or a specific status for single item input
-            return [] if isinstance(data, list) else {"status": "UNCERTAIN", "details": ["No statements processed."], "original_input_structure": data}
+            # Introduce randomness to simulate imperfect real-world fact-checking
+            random_chance = random.random() # Value between 0.0 and 1.0
 
+            if is_likely_factual_by_keyword and random_chance > 0.3: # 70% chance of being true if keyword matches
+                result["is_factual"] = True
+                result["confidence_score"] = round(0.75 + random.random() * 0.25, 2) # Score between 0.75 and 1.0
+                result["sources"] = ["Verified Research Database", "Reputable Encyclopedia"]
+                result["checked_claims"].append(
+                    {"claim": statement_to_check, "verdict": "TRUE", "details": "Matches widely accepted knowledge based on keyword analysis and high confidence score."}
+                )
+            else:
+                result["is_factual"] = False
+                result["confidence_score"] = round(random.random() * 0.6, 2) # Score between 0.0 and 0.6
+                result["sources"] = ["Online Forum", "Social Media Post (unverified)"]
+                result["checked_claims"].append(
+                    {"claim": statement_to_check, "verdict": "FALSE", "details": "Insufficient evidence or conflicting information found during simulated check."}
+                )
 
-        # Process each extracted statement
-        for i, statement in enumerate(statements_to_check):
-            current_original_input = original_data_mapping[i]
-            try:
-                # Prioritize external fact-checking service if provided in context
-                if "fact_checking_service" in context and callable(context["fact_checking_service"]):
-                    logger.debug("Using external fact-checking service from context for statement: '%s'", statement)
-                    status, details = context["fact_checking_service"](statement)
-                else:
-                    logger.debug("Using internal simulated knowledge base for statement: '%s'", statement)
-                    status, details = self._check_statement_against_kb(statement)
+            result["processing_status"] = "success"
+            result["error_message"] = None
+            logger.debug(
+                f"Fact-checking simulation complete for '{statement_to_check[:60]}...'. "
+                f"Verdict: {'Factual' if result['is_factual'] else 'Not Factual'} "
+                f"with confidence: {result['confidence_score']}"
+            )
 
-                results.append({
-                    "original_text": statement,
-                    "status": status,
-                    "details": details,
-                    "original_input_structure": current_original_input
-                })
-            except Exception as e:
-                logger.exception(f"Error fact-checking statement '{statement}': {e}")
-                results.append({
-                    "original_text": statement,
-                    "status": "ERROR",
-                    "details": [f"An unexpected error occurred during processing: {str(e)}"],
-                    "original_input_structure": current_original_input
-                })
-
-        # If the original input was a single item (str or dict), return a single result dict
-        if isinstance(data, (str, dict)) and len(results) == 1:
-            return results[0]
-        
-        return results
+        except (ValueError, TypeError) as e:
+            logger.error(f"FactCheckerNode received invalid input: {e}", exc_info=True)
+            result["error_message"] = str(e)
+            result["processing_status"] = "failed_validation"
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during fact-checking simulation: {e}", exc_info=True)
+            result["error_message"] = f"Unexpected processing error: {type(e).__name__} - {str(e)}"
+            result["processing_status"] = "failed_runtime"
+        finally:
+            return result
