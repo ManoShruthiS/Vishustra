@@ -1,72 +1,91 @@
 import logging
 from typing import Any, Dict
 
+# Assuming this path from the problem description
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class LanguageTranslatorNode(BaseNode):
     """
-    A Vishustra processing node that simulates language translation of text data.
+    A Vishustra processing node that simulates language translation.
 
-    This node expects a string as input data and a 'target_language' key
-    in the context dictionary to determine the language for translation.
+    This node takes a string as input and "translates" it to a specified
+    target language. The target language can be set during node instantiation
+    or overridden via the processing context.
     """
+
+    def __init__(self, default_target_language: str = "en"):
+        """
+        Initializes the LanguageTranslatorNode.
+
+        Args:
+            default_target_language (str): The default language to "translate" to
+                                           if not specified in the context.
+                                           Expected to be a valid language code (e.g., "en", "es", "fr").
+        """
+        if not isinstance(default_target_language, str) or not default_target_language.strip():
+            logger.error(f"Invalid default_target_language '{default_target_language}' provided during initialization.")
+            raise ValueError("default_target_language must be a non-empty string.")
+
+        self._default_target_language = default_target_language.lower()
+        logger.debug(f"LanguageTranslatorNode initialized with default target language: '{self._default_target_language}'")
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "LanguageTranslator"
+        """Returns the name of the node."""
+        return "language_translator"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
         Processes the input data by simulating translation to a target language.
 
+        The target language is determined in the following order:
+        1. 'target_language' key in the provided `context` dictionary.
+        2. The `default_target_language` provided during node initialization.
+
         Args:
-            data (Any): The input data, expected to be a string for translation.
-            context (Dict[str, Any]): A dictionary containing contextual information.
-                                      Must include 'target_language' (str)
-                                      specifying the language to translate to (e.g., 'es', 'fr', 'de').
+            data (Any): The input data to be translated. Expected to be a string.
+            context (Dict[str, Any]): A dictionary containing additional
+                                     information for processing.
+                                     Can include 'target_language' (str) to
+                                     override the default target language for this specific
+                                     processing run.
 
         Returns:
-            Any: The translated string.
+            Any: The "translated" string.
 
         Raises:
-            TypeError: If the input 'data' is not a string.
-            ValueError: If 'target_language' is missing in context or is unsupported.
+            ValueError: If the input data is not a string, or if no valid
+                        target language can be determined.
+            RuntimeError: For unexpected issues during the simulated translation.
         """
         if not isinstance(data, str):
-            logger.error("LanguageTranslatorNode received non-string data. Type: %s", type(data).__name__)
-            raise TypeError(f"LanguageTranslatorNode expects string data, but received {type(data).__name__}.")
+            logger.error(f"Node '{self.node_name}' received non-string data (type: {type(data)}). Expected string for translation.")
+            raise ValueError(f"LanguageTranslatorNode requires string input for translation, but received {type(data)}.")
 
-        target_language_raw = context.get("target_language")
-        if not target_language_raw:
-            logger.error("LanguageTranslatorNode context missing 'target_language' key.")
-            raise ValueError("Context must include 'target_language' for LanguageTranslatorNode.")
-        
-        target_language = str(target_language_raw).lower() # Normalize target language string
+        if not data.strip():
+            logger.warning(f"Node '{self.node_name}' received an empty or whitespace-only string for translation. Returning original data.")
+            return data
 
-        logger.info("Attempting to translate data (first 50 chars): '%s' to '%s'.", 
-                    data[:50] + ("..." if len(data) > 50 else ""), target_language)
+        # Determine the target language, prioritizing context over instance default
+        target_language_from_context = context.get("target_language")
+        current_target_language = (
+            str(target_language_from_context).lower()
+            if isinstance(target_language_from_context, str) and target_language_from_context.strip()
+            else self._default_target_language
+        )
 
-        translated_data: str
-        if target_language == "es":
-            translated_data = f"[ES] {data} [Traducido al español]"
-        elif target_language == "fr":
-            translated_data = f"[FR] {data} [Traduit en français]"
-        elif target_language == "de":
-            translated_data = f"[DE] {data} [Ins Deutsche übersetzt]"
-        elif target_language == "ja":
-            translated_data = f"[JA] {data} [日本語に翻訳されました]"
-        elif target_language == "zh":
-            translated_data = f"[ZH] {data} [翻译成中文]"
-        else:
-            logger.error("LanguageTranslatorNode received unsupported target_language: '%s'.", target_language)
-            raise ValueError(
-                f"Unsupported target_language: '{target_language}'. "
-                "Supported languages for simulation include: es, fr, de, ja, zh."
-            )
+        if not current_target_language:
+            logger.error(f"Node '{self.node_name}' could not determine a valid target language from context or default settings.")
+            raise ValueError("Target language must be specified either in node configuration or context.")
 
-        logger.debug("Translation complete. Original (first 50 chars): '%s', Translated (first 50 chars): '%s'", 
-                     data[:50], translated_data[:50])
-        return translated_data
+        try:
+            # Simulate translation by prepending a tag
+            translated_text = f"[Translated to {current_target_language}]: {data}"
+            logger.info(f"Node '{self.node_name}' successfully 'translated' data to '{current_target_language}'. "
+                        f"Original content snippet: '{data[:50]}'")
+            return translated_text
+        except Exception as e:
+            logger.exception(f"Node '{self.node_name}' encountered an unexpected error during 'translation' simulation.")
+            raise RuntimeError(f"Translation simulation failed in '{self.node_name}': {e}") from e
