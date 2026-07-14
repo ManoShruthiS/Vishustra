@@ -1,115 +1,117 @@
 import logging
+import re
 from typing import Any, Dict
 
-# Assuming vishustra_core.nodes.base_node exists in the project structure
+# Assuming vishustra_core is installed or available in the Python path
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class TextSummarizerNode(BaseNode):
     """
-    A Vishustra processing node that simulates text summarization.
+    A Vishustra processing node that summarizes input text.
 
-    This node takes a string as input and returns a truncated version
-    based on 'summarization_max_length' or 'summarization_ratio' provided
-    in the context, simulating a content condensation process.
+    This node takes a string as input and produces a condensed summary.
+    The summarization logic is configurable via the `context` dictionary,
+    allowing for control over the length and filtering of the summary.
     """
 
     @property
     def node_name(self) -> str:
         """Returns the name of the node."""
-        return "TextSummarizerNode"
+        return "TextSummarizer"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
+    def process(self, data: Any, context: Dict[str, Any]) -> str:
         """
-        Processes the input data by simulating text summarization.
+        Summarizes the input text based on parameters provided in the context.
 
-        Expects `data` to be a string.
-        Context can contain:
-        - 'summarization_max_length': int, maximum characters for the summary.
-        - 'summarization_ratio': float, ratio of original text length to keep.
-                                 Takes precedence if both are provided.
-
-        If neither is provided, a default max_length of 250 characters is used.
+        The `context` dictionary can contain:
+        - `max_sentences` (int): The maximum number of sentences to include in the summary.
+                                 Defaults to 3 if not provided or invalid.
+        - `min_words_per_sentence` (int): Minimum words a sentence must have to be considered for summarization.
+                                          Defaults to 5. Sentences shorter than this will be ignored.
 
         Args:
-            data: The text content (str) to be summarized.
-            context: A dictionary containing operational parameters,
-                     e.g., 'summarization_max_length' or 'summarization_ratio'.
+            data (Any): The input data, expected to be a string containing the text to summarize.
+            context (Dict[str, Any]): A dictionary containing configuration parameters
+                                      for summarization.
 
         Returns:
-            A string representing the summarized text.
+            str: The summarized text. Returns an empty string if input is empty
+                 or no valid sentences can be extracted.
 
         Raises:
-            TypeError: If `data` is not a string.
-            ValueError: If summarization parameters are invalid (e.g., negative length or invalid ratio).
+            TypeError: If `data` is not a string or `context` is not a dictionary.
         """
-        logger.info(f"[{self.node_name}] Starting text summarization process.")
-
         if not isinstance(data, str):
-            logger.error(f"[{self.node_name}] Invalid input data type: Expected string, got {type(data).__name__}.")
-            raise TypeError(f"Input data for {self.node_name} must be a string, got {type(data).__name__}.")
+            logger.error("TextSummarizerNode received non-string data: %s", type(data))
+            raise TypeError(f"TextSummarizerNode expects 'data' to be a string, but got {type(data)}")
 
-        if not data.strip():
-            logger.warning(f"[{self.node_name}] Input data is an empty or whitespace-only string. Returning as-is.")
+        if not isinstance(context, dict):
+            logger.error("TextSummarizerNode received non-dict context: %s", type(context))
+            raise TypeError(f"TextSummarizerNode expects 'context' to be a dictionary, but got {type(context)}")
+
+        original_text = data.strip()
+        if not original_text:
+            logger.warning("TextSummarizerNode received empty text for summarization.")
             return ""
 
-        original_length = len(data)
-        max_length = 250  # Default max characters if no context parameters are given
+        # --- Context Parameter Extraction and Validation ---
+        max_sentences = context.get("max_sentences", 3)
+        min_words_per_sentence = context.get("min_words_per_sentence", 5)
 
-        # Prioritize 'summarization_ratio' if present
-        if 'summarization_ratio' in context:
-            try:
-                ratio = float(context['summarization_ratio'])
-                if not (0.0 < ratio <= 1.0):
-                    logger.error(f"[{self.node_name}] 'summarization_ratio' must be between 0.0 (exclusive) and 1.0 (inclusive), got {ratio}.")
-                    raise ValueError(f"'summarization_ratio' must be between 0.0 (exclusive) and 1.0 (inclusive), got {ratio}.")
-                max_length = int(original_length * ratio)
-                logger.debug(f"[{self.node_name}] Using summarization_ratio: {ratio}. Calculated max_length: {max_length}")
-            except (ValueError, TypeError) as e:
-                logger.error(f"[{self.node_name}] Invalid 'summarization_ratio' in context: {e}. Attempting to use 'summarization_max_length'.")
-                # Fallback: if ratio is invalid, try max_length if available
-                if 'summarization_max_length' in context:
-                    try:
-                        max_length = int(context['summarization_max_length'])
-                        logger.debug(f"[{self.node_name}] Falling back to summarization_max_length: {max_length}")
-                    except (ValueError, TypeError) as e:
-                        logger.warning(f"[{self.node_name}] Invalid 'summarization_max_length' in context: {e}. Using default max_length: {max_length}")
-                else:
-                    logger.warning(f"[{self.node_name}] No valid 'summarization_max_length' found, using default max_length: {max_length}")
+        if not isinstance(max_sentences, int) or max_sentences <= 0:
+            logger.warning(
+                "Invalid 'max_sentences' in context: %s (must be a positive integer). Defaulting to 3.",
+                max_sentences
+            )
+            max_sentences = 3
+        
+        if not isinstance(min_words_per_sentence, int) or min_words_per_sentence <= 0:
+            logger.warning(
+                "Invalid 'min_words_per_sentence' in context: %s (must be a positive integer). Defaulting to 5.",
+                min_words_per_sentence
+            )
+            min_words_per_sentence = 5
 
-        elif 'summarization_max_length' in context:
-            try:
-                max_length = int(context['summarization_max_length'])
-                if max_length < 0:
-                    logger.error(f"[{self.node_name}] 'summarization_max_length' cannot be negative, got {max_length}.")
-                    raise ValueError(f"'summarization_max_length' cannot be negative, got {max_length}.")
-                logger.debug(f"[{self.node_name}] Using summarization_max_length: {max_length}")
-            except (ValueError, TypeError) as e:
-                logger.error(f"[{self.node_name}] Invalid 'summarization_max_length' in context: {e}. Using default max_length: {max_length}")
-        else:
-            logger.debug(f"[{self.node_name}] No summarization parameters found in context. Using default max_length: {max_length}")
+        logger.debug(
+            "Attempting to summarize text with max_sentences=%d, min_words_per_sentence=%d",
+            max_sentences, min_words_per_sentence
+        )
 
-        if max_length <= 0:
-            logger.warning(f"[{self.node_name}] Calculated or provided max_length is {max_length}. Returning empty string for summarization.")
+        # --- Simple Sentence Tokenization ---
+        # This regex aims to split sentences by common terminal punctuation (period, exclamation, question mark)
+        # followed by one or more whitespace characters. While pragmatic for a simulation,
+        # more advanced NLP libraries offer robust sentence tokenization for production use.
+        sentences = re.split(r'(?<=[.!?])\s+', original_text)
+        
+        # Filter out empty strings and sentences that do not meet the minimum word count threshold.
+        valid_sentences = [
+            s.strip() for s in sentences 
+            if s.strip() and len(s.strip().split()) >= min_words_per_sentence
+        ]
+
+        if not valid_sentences:
+            logger.info(
+                "No valid sentences found after filtering for min_words_per_sentence=%d. Returning original text if short, otherwise empty.",
+                min_words_per_sentence
+            )
+            # If no sentences meet the criteria, and the original text is short (heuristic),
+            # return the original text. Otherwise, return an empty string as effective summarization
+            # was not possible based on the parameters.
+            if len(original_text.split()) < (min_words_per_sentence * 2):
+                return original_text
             return ""
 
-        # Ensure effective_max_length doesn't exceed original length by design, unless a very large max_length was given
-        effective_max_length = min(max_length, original_length)
+        # --- Summarization Logic ---
+        # Take the first 'max_sentences' valid sentences identified.
+        summary_sentences = valid_sentences[:max_sentences]
+        
+        summary = " ".join(summary_sentences)
+        
+        logger.info(
+            "Text summarized. Original characters: %d, Summary characters: %d. Used %d of %d potential sentences.",
+            len(original_text), len(summary), len(summary_sentences), len(valid_sentences)
+        )
 
-        if original_length <= effective_max_length:
-            logger.debug(f"[{self.node_name}] Original text length ({original_length}) is less than or equal to effective max_length ({effective_max_length}). Returning original text.")
-            return data
-
-        # Simulate summarization via truncation, adding an ellipsis if truncated
-        summarized_text = data
-        if original_length > effective_max_length:
-            if effective_max_length >= 3:
-                # Truncate to make space for "..."
-                summarized_text = data[:effective_max_length - 3] + "..."
-            else:
-                # If effective_max_length is too small for "...", just truncate
-                summarized_text = data[:effective_max_length]
-
-        logger.info(f"[{self.node_name}] Summarization complete. Original length: {original_length}, Summarized length: {len(summarized_text)}")
-        return summarized_text
+        return summary
