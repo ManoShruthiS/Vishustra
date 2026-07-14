@@ -1,194 +1,140 @@
-import logging
-from datetime import datetime, timedelta
-from typing import Any, Dict, Optional, Protocol
-
-# Assuming BaseNode is available at this path as per project context
 from vishustra_core.nodes.base_node import BaseNode
+import logging
+from typing import Any, Dict, Optional
+from collections.abc import Hashable
 
 logger = logging.getLogger(__name__)
 
-# --- Cache Client Protocol and In-Memory Implementation ---
-class CacheClient(Protocol):
-    """
-    Protocol for a cache client interface.
-    Ensures compatibility with various cache implementations (e.g., Redis, Memcached, in-memory).
-    """
-    def get(self, key: str) -> Optional[Any]:
-        """Retrieves a value from the cache by its key."""
-        ...
-
-    def set(self, key: str, value: Any, ttl_seconds: Optional[int] = None) -> None:
-        """Stores a value in the cache with an optional time-to-live."""
-        ...
-
-    def delete(self, key: str) -> None:
-        """Removes a value from the cache by its key."""
-        ...
-
-class InMemoryCacheClient:
-    """
-    A simple, thread-safe in-memory cache client for demonstration and testing purposes.
-    Supports basic get, set, and delete operations with optional TTL.
-
-    Note: For production environments, consider external caching solutions like Redis
-    or Memcached for better performance, persistence, and distributed capabilities.
-    """
-    def __init__(self):
-        # Stores {key: {"value": ..., "expiry_time": datetime_obj or None}}
-        self._cache: Dict[str, Dict[str, Any]] = {}
-        self._logger = logging.getLogger(self.__class__.__name__)
-        # In a real multi-threaded application, a threading.Lock would be essential
-        # for `_cache` operations to prevent race conditions. For this single-node
-        # example, we'll omit it for simplicity, assuming higher-level concurrency
-        # management or single-threaded node execution.
-
-    def get(self, key: str) -> Optional[Any]:
-        """Retrieves a value from the in-memory cache."""
-        entry = self._cache.get(key)
-        if entry:
-            expiry_time = entry.get("expiry_time")
-            if expiry_time is None or datetime.now() < expiry_time:
-                self._logger.debug(f"Cache hit for key: '{key}'")
-                return entry["value"]
-            else:
-                self._logger.debug(f"Cache entry for key: '{key}' expired. Removing.")
-                del self._cache[key] # Clean up expired entry
-        self._logger.debug(f"Cache miss for key: '{key}'")
-        return None
-
-    def set(self, key: str, value: Any, ttl_seconds: Optional[int] = None) -> None:
-        """Stores a value in the in-memory cache with an optional TTL."""
-        expiry_time = None
-        if ttl_seconds is not None and ttl_seconds > 0:
-            expiry_time = datetime.now() + timedelta(seconds=ttl_seconds)
-        self._cache[key] = {"value": value, "expiry_time": expiry_time}
-        self._logger.debug(f"Cache set for key: '{key}' with TTL: {ttl_seconds}s")
-
-    def delete(self, key: str) -> None:
-        """Removes a value from the in-memory cache."""
-        if key in self._cache:
-            del self._cache[key]
-            self._logger.debug(f"Cache deleted for key: '{key}'")
-        else:
-            self._logger.debug(f"Attempted to delete non-existent cache key: '{key}'")
-
-# --- CacheManagerNode Implementation ---
 class CacheManagerNode(BaseNode):
     """
-    A Vishustra node responsible for interacting with a caching system.
-    It can perform 'get', 'set', or 'invalidate' operations based on parameters
-    provided in the `context` dictionary.
+    A processing node designed for managing a simple in-memory cache within the Vishustra framework.
 
-    This node provides a flexible interface for integrating caching into
-    LLM orchestration workflows, allowing for result memoization, state sharing,
-    and reducing redundant computations.
+    This node provides mechanisms for both retrieving and storing data in a cache.
+    It expects a 'cache_operation' key in the context to determine the action.
 
-    Context parameters consumed by this node:
-    - `cache_key` (str): The unique identifier for the cache entry. (Required for all actions)
-    - `cache_action` (str): The desired cache operation: 'get', 'set', 'invalidate'.
-                            Defaults to 'passthrough' if not specified or invalid.
-    - `cache_ttl` (int, optional): Time-to-live in seconds for 'set' operations.
-                                   If omitted or non-positive, the entry may not expire.
+    Supported Operations:
+    - 'get': Attempts to retrieve a value from the cache. The cache key is derived from
+             'context['cache_key']' or, if not present, from the 'data' argument itself
+             (provided 'data' is hashable). If a cache hit occurs, the cached value is returned.
+             If a miss occurs, a special sentinel `CacheManagerNode.CACHE_MISS` is returned.
+    - 'set': Stores a value into the cache. The 'data' argument passed to `process` represents
+             the value to be cached. The cache key for this operation *must* be explicitly
+             provided in 'context['cache_key']'.
 
-    Context parameters updated by this node:
-    - `vishustra_cache_status` (str): Reports the outcome of the cache operation.
-      Possible values: 'HIT', 'MISS', 'SET', 'INVALIDATED', 'ERROR', 'NO_ACTION'.
-    - `vishustra_cached_value` (Any, optional): The value retrieved from the cache
-      if a 'get' action results in a cache hit.
+    This design allows the orchestration layer to first attempt a 'get', and upon a miss,
+    perform a computation and then use a 'set' operation to store the result.
     """
 
-    def __init__(self, cache_client: Optional[CacheClient] = None):
+    class CACHE_MISS:
+        """Sentinel object to represent a cache miss, distinguishing it from `None` which could be a valid cached value."""
+        def __repr__(self) -> str:
+            return "<CACHE_MISS>"
+    
+    CACHE_MISS = CACHE_MISS()
+
+    def __init__(self, initial_cache: Optional[Dict[Any, Any]] = None):
         """
         Initializes the CacheManagerNode.
 
         Args:
-            cache_client (Optional[CacheClient]): An optional cache client implementation
-                                                  conforming to the `CacheClient` protocol.
-                                                  If None, an `InMemoryCacheClient` is used by default.
+            initial_cache (Optional[Dict[Any, Any]]): An optional dictionary to pre-populate
+                                                        the cache. Defaults to an empty cache.
         """
-        self._cache_client: CacheClient = cache_client if cache_client is not None else InMemoryCacheClient()
-        logger.info(f"{self.node_name} initialized with cache client: {type(self._cache_client).__name__}")
+        self._cache: Dict[Any, Any] = initial_cache if initial_cache is not None else {}
+        logger.debug(f"CacheManagerNode initialized with {len(self._cache)} initial items.")
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "CacheManagerNode"
+        """Returns the descriptive name of this node."""
+        return "CacheManager"
+
+    def _derive_key_for_get(self, data: Any, context: Dict[str, Any]) -> Any:
+        """
+        Derives a cache key for a 'get' operation.
+        Prioritizes 'cache_key' from context, then attempts to use 'data' if hashable.
+        """
+        if 'cache_key' in context:
+            key = context['cache_key']
+            logger.debug(f"Derived 'get' cache key from context: {key}")
+            return key
+        elif isinstance(data, Hashable):
+            key = data
+            logger.debug(f"Derived 'get' cache key from hashable data: {key}")
+            return key
+        else:
+            raise ValueError(
+                "Could not derive cache key for 'get' operation. "
+                "Provide 'cache_key' in context or ensure input 'data' is hashable."
+            )
+
+    def _derive_key_for_set(self, context: Dict[str, Any]) -> Any:
+        """
+        Derives a cache key for a 'set' operation.
+        Requires 'cache_key' to be explicitly present in the context.
+        """
+        if 'cache_key' in context:
+            key = context['cache_key']
+            logger.debug(f"Derived 'set' cache key from context: {key}")
+            return key
+        else:
+            raise ValueError(
+                "Cache key for 'set' operation must be explicitly provided in 'context['cache_key']'."
+            )
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data by interacting with the configured cache client
-        based on `context` parameters.
+        Executes the cache operation ('get' or 'set') based on the context.
 
         Args:
-            data (Any): The input data to be processed. This data may be stored
-                        in the cache, or passed through, or represent a key to retrieve.
-            context (Dict[str, Any]): The shared context dictionary containing
-                                       parameters for cache operations and
-                                       where cache status will be reported.
+            data (Any):
+                For 'get' operation: This is the query input from which a key may be derived.
+                For 'set' operation: This is the actual value to be stored in the cache.
+            context (Dict[str, Any]):
+                A dictionary providing operational context. Must contain:
+                - 'cache_operation' (str, optional): Specifies the action ('get' or 'set'). Defaults to 'get'.
+                - 'cache_key' (Any, optional): The explicit key for cache operations.
+                                               Required for 'set'. Optional for 'get' if 'data' is hashable.
 
         Returns:
-            Any: If the `cache_action` is 'get' and results in a cache hit,
-                 the *cached value* is returned. For all other actions or a
-                 cache miss, the *original `data` input* to this node is returned,
-                 allowing subsequent nodes to continue processing or compute the value.
+            Any:
+                - If 'get' operation results in a hit: The cached value.
+                - If 'get' operation results in a miss: `CacheManagerNode.CACHE_MISS`.
+                - If 'set' operation: The value that was just stored.
+
+        Raises:
+            ValueError: If an invalid 'cache_operation' is specified, or if a required
+                        'cache_key' cannot be derived for the chosen operation.
         """
-        cache_key = context.get("cache_key")
-        cache_action = context.get("cache_action", "passthrough").lower()
-        cache_ttl = context.get("cache_ttl")
+        operation = context.get('cache_operation', 'get').lower()
+        
+        if operation == 'get':
+            try:
+                cache_key = self._derive_key_for_get(data, context)
+            except ValueError as e:
+                logger.warning(f"Failed to derive cache key for 'get' operation. Returning CACHE_MISS. Error: {e}")
+                return self.CACHE_MISS
 
-        # Initialize cache status in context to provide clear visibility
-        context["vishustra_cache_status"] = "NO_ACTION"
-        context.pop("vishustra_cached_value", None) # Ensure previous cached value is cleared
-
-        if cache_action != "passthrough" and not isinstance(cache_key, str):
-            logger.error(f"{self.node_name}: 'cache_key' must be a string for action '{cache_action}'. "
-                         f"Received type: {type(cache_key).__name__}. No cache operation performed.")
-            context["vishustra_cache_status"] = "ERROR"
-            return data
-
-        try:
-            if cache_action == "get":
-                cached_value = self._cache_client.get(cache_key)
-                if cached_value is not None:
-                    context["vishustra_cache_status"] = "HIT"
-                    context["vishustra_cached_value"] = cached_value
-                    logger.debug(f"{self.node_name}: Cache hit for key '{cache_key}'. Returning cached value.")
-                    return cached_value # On hit, return the cached data
-
-                context["vishustra_cache_status"] = "MISS"
-                logger.debug(f"{self.node_name}: Cache miss for key '{cache_key}'. Passing through original data.")
-                return data # On miss, pass through original data for computation
-
-            elif cache_action == "set":
-                if cache_ttl is not None and not isinstance(cache_ttl, int):
-                    logger.warning(f"{self.node_name}: 'cache_ttl' must be an integer for set operations. "
-                                   f"Received type: {type(cache_ttl).__name__}. Proceeding with no TTL (infinite).")
-                    cache_ttl = None
-                
-                self._cache_client.set(cache_key, data, cache_ttl)
-                context["vishustra_cache_status"] = "SET"
-                logger.debug(f"{self.node_name}: Cache set for key '{cache_key}'. Passing through original data.")
-                return data # After setting, pass through original data
-
-            elif cache_action == "invalidate":
-                self._cache_client.delete(cache_key)
-                context["vishustra_cache_status"] = "INVALIDATED"
-                logger.debug(f"{self.node_name}: Cache invalidated for key '{cache_key}'. Passing through original data.")
-                return data # After invalidating, pass through original data
-
-            elif cache_action == "passthrough":
-                logger.debug(f"{self.node_name}: No explicit cache action specified or required parameters missing. "
-                             f"Passing data through unchanged.")
-                return data
-
+            if cache_key in self._cache:
+                value = self._cache[cache_key]
+                logger.info(f"Cache hit for key '{cache_key}'.")
+                return value
             else:
-                logger.warning(f"{self.node_name}: Unknown or unsupported 'cache_action': '{cache_action}'. "
-                               f"Supported actions: 'get', 'set', 'invalidate'. Passing data through.")
-                context["vishustra_cache_status"] = "ERROR"
-                return data
+                logger.info(f"Cache miss for key '{cache_key}'.")
+                return self.CACHE_MISS
+        
+        elif operation == 'set':
+            try:
+                cache_key = self._derive_key_for_set(context)
+            except ValueError as e:
+                error_msg = f"Cannot perform 'set' operation: {e}"
+                logger.error(error_msg)
+                raise ValueError(error_msg) from e
 
-        except Exception as e:
-            logger.exception(f"{self.node_name}: An unexpected error occurred during cache operation for key '{cache_key}': {e}")
-            context["vishustra_cache_status"] = "ERROR"
-            # In case of any error, ensure the original data continues through the pipeline
-            return data
+            self._cache[cache_key] = data
+            logger.info(f"Cache set for key '{cache_key}'. Stored value type: {type(data).__name__}.")
+            return data # Return the stored value
+            
+        else:
+            error_msg = f"Invalid 'cache_operation': '{operation}'. Expected 'get' or 'set'."
+            logger.error(error_msg)
+            raise ValueError(error_msg)
