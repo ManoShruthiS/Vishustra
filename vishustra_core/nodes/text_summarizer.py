@@ -1,5 +1,6 @@
 import logging
-from typing import Any, Dict
+import re
+from typing import Any, Dict, List
 
 from vishustra_core.nodes.base_node import BaseNode
 
@@ -7,70 +8,103 @@ logger = logging.getLogger(__name__)
 
 class TextSummarizer(BaseNode):
     """
-    A Vishustra processing node that simulates text summarization.
+    A Vishustra processing node designed to simulate text summarization.
+    This node extracts key sentences from the input text based on configurable
+    length or ratio parameters provided in the execution context.
 
-    This node takes a string as input and produces a summarized version.
-    For demonstration purposes, summarization is simulated via truncation
-    to a configurable word count. In a production environment, this would
-    interface with a sophisticated summarization model or an LLM.
+    It aims to provide a concise representation of longer input text, useful
+    in various stages of an LLM orchestration pipeline for pre-processing
+    or intermediate summary generation.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """
+        Returns the unique and descriptive name of this processing node.
+        """
         return "TextSummarizer"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input text to generate a summary.
+        Processes the input data by performing a simulated text summarization.
+
+        The summarization logic is based on extracting the first N sentences
+        or a percentage of the original text's sentences, configurable via
+        the `context` dictionary.
 
         Args:
-            data (Any): The input data expected to be a string.
-            context (Dict[str, Any]): A dictionary containing runtime
-                                      information and configurable parameters.
-                                      Expected keys include:
-                                      - "target_word_count" (int, optional):
-                                        The desired maximum word count for the summary.
-                                        Defaults to 50 if not provided.
+            data: The input content to be summarized. Expected to be a string.
+            context: A dictionary containing runtime parameters for summarization:
+                     - 'summary_length' (int, optional): The target maximum number
+                       of sentences for the summary. If both 'summary_length' and
+                       'summary_ratio' are provided, 'summary_length' takes precedence.
+                     - 'summary_ratio' (float, optional): A float between 0.0 and 1.0
+                       representing the desired proportion of original sentences to keep.
+                       E.g., 0.3 for a 30% summary.
 
         Returns:
-            Any: The summarized text as a string.
+            A string containing the summarized version of the input text. Returns an
+            empty string if the input data is empty or invalid after processing.
 
         Raises:
-            TypeError: If the input 'data' is not a string.
+            TypeError: If the input `data` is not of type `str`.
         """
         if not isinstance(data, str):
-            logger.error("TextSummarizer received non-string input. Type: %s", type(data).__name__)
-            raise TypeError(
-                f"TextSummarizer expects 'data' to be a string, "
-                f"but received type: {type(data).__name__}"
-            )
+            logger.error(f"TextSummarizer received invalid data type: {type(data)}. Expected string.")
+            raise TypeError("TextSummarizer node expects 'data' to be a string.")
 
         if not data.strip():
-            logger.warning("TextSummarizer received an empty or whitespace-only string. Returning empty string.")
+            logger.warning("TextSummarizer received empty or whitespace-only data. Returning an empty string.")
             return ""
 
-        # Retrieve summarization parameters from context with a default fallback
-        target_word_count = context.get("target_word_count", 50)
+        # Simple sentence tokenization for simulation.
+        # This regex splits by common sentence-ending punctuation followed by a space.
+        sentences: List[str] = [s.strip() for s in re.split(r'(?<=[.!?])\s+', data.strip()) if s.strip()]
+        num_original_sentences = len(sentences)
 
-        if not isinstance(target_word_count, int) or target_word_count <= 0:
-            logger.warning(
-                "Invalid 'target_word_count' (%s) in context. "
-                "Defaulting to 50 words.",
-                target_word_count
-            )
-            target_word_count = 50
+        if num_original_sentences == 0:
+            logger.warning("TextSummarizer could not identify any distinct sentences in the input. Returning original data.")
+            return data.strip()
+        
+        target_num_sentences: int = 0
+        summary_length_param = context.get('summary_length')
+        summary_ratio_param = context.get('summary_ratio')
 
-        # Simulate summarization by truncating the text to the target word count.
-        # In a real scenario, this would involve calling a summarization model (e.g., LLM API).
-        words = data.split()
-
-        if len(words) <= target_word_count:
-            summary = data
-            logger.debug("Input text length (%d words) is within or below target word count (%d). Returning original text.", len(words), target_word_count)
+        # Prioritize 'summary_length' if provided and valid
+        if isinstance(summary_length_param, int) and summary_length_param > 0:
+            target_num_sentences = min(summary_length_param, num_original_sentences)
+            logger.debug(f"Context parameter 'summary_length' found: {summary_length_param}. Target: {target_num_sentences} sentences.")
+        # Otherwise, check 'summary_ratio'
+        elif isinstance(summary_ratio_param, (float, int)) and 0.0 < summary_ratio_param <= 1.0:
+            target_num_sentences = max(1, int(num_original_sentences * summary_ratio_param)) # Ensure at least 1 sentence
+            logger.debug(f"Context parameter 'summary_ratio' found: {summary_ratio_param}. Target: {target_num_sentences} sentences.")
         else:
-            summary_words = words[:target_word_count]
-            summary = " ".join(summary_words) + "..."
-            logger.debug("Summarized text to approximately %d words from %d original words.", target_word_count, len(words))
-            
-        return summary
+            # Default behavior: take the first 3 sentences or all if fewer than 3
+            default_length = 3
+            target_num_sentences = min(default_length, num_original_sentences)
+            if summary_length_param is not None or summary_ratio_param is not None:
+                logger.warning(
+                    f"Invalid or out-of-range 'summary_length' ({summary_length_param}) or 'summary_ratio' "
+                    f"({summary_ratio_param}) provided in context. Defaulting to first {target_num_sentences} sentences."
+                )
+            else:
+                logger.debug(f"No specific summary length/ratio in context. Defaulting to first {target_num_sentences} sentences.")
+
+        summarized_sentences = sentences[:target_num_sentences]
+        
+        # Fallback: if calculated target results in no sentences but original text had them, take the first.
+        if not summarized_sentences and num_original_sentences > 0:
+            logger.warning(
+                "Summarization logic resulted in an empty summary despite input having sentences. "
+                "Returning the first original sentence as a minimal fallback."
+            )
+            summarized_sentences = [sentences[0]]
+
+        # Join the selected sentences to form the summary, ensuring proper spacing.
+        summarized_text = ' '.join(summarized_sentences).strip()
+
+        logger.info(
+            f"Successfully summarized text from {num_original_sentences} sentences "
+            f"to {len(summarized_sentences)} sentences."
+        )
+        return summarized_text
