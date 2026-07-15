@@ -1,109 +1,96 @@
 import logging
 from typing import Any, Dict
 
+# Assuming BaseNode is correctly located in the project structure as specified
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-
 class ToneConverterNode(BaseNode):
     """
-    A Vishustra processing node designed to simulate converting the tone of an input text.
-    The desired tone for conversion is specified via the 'target_tone' key within the
-    'context' dictionary provided during processing.
+    A Vishustra processing node that simulates converting the tone of input text.
+
+    This node expects a string 'data' and a 'target_tone' in the 'context' dictionary.
+    Supported tones are 'formal', 'informal', and 'sarcastic'. The conversion
+    is simulated through basic string manipulations.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """Returns the name of this node."""
         return "ToneConverter"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, simulating a tone conversion based on the
-        'target_tone' specified in the context.
+        Processes the input data to convert its tone based on the provided context.
 
         Args:
-            data (Any): The input data to be processed. Expected to be a string
-                        containing the text whose tone needs to be converted.
-            context (Dict[str, Any]): A dictionary containing additional processing
-                                       parameters. It must contain a 'target_tone' key
-                                       whose value is a string representing the desired tone.
+            data: The input text to be converted. Expected to be a string.
+            context: A dictionary containing processing parameters.
+                     Must include 'target_tone' (str) with values like
+                     'formal', 'informal', 'sarcastic'.
 
         Returns:
-            Any: The simulated tone-converted text (string). If the input data is not
-                 a string, or if 'target_tone' is missing/invalid in context,
-                 the original data or a less-transformed version may be returned
-                 after logging appropriate warnings/errors.
+            The tone-converted string. Returns the original data if the
+            conversion fails due to an unexpected error or if an unsupported
+            tone is specified.
 
         Raises:
-            ValueError: If the input 'data' is not of type string, as this node
-                        is designed to operate on textual content.
+            TypeError: If 'data' is not a string.
+            ValueError: If 'target_tone' is missing from context.
         """
         if not isinstance(data, str):
+            logger.error(f"{self.node_name}: Received non-string data of type {type(data).__name__}. Expected str.")
+            raise TypeError(f"{self.node_name} expects 'data' to be a string, but received {type(data).__name__}.")
+
+        target_tone_raw = context.get("target_tone")
+        if not target_tone_raw:
+            logger.error(f"{self.node_name}: 'context' is missing the mandatory 'target_tone' key.")
+            raise ValueError(f"Context must contain 'target_tone' for {self.node_name}.")
+        
+        # Ensure target_tone is a string and standardize to lowercase for comparison
+        target_tone = str(target_tone_raw).lower()
+
+        original_text = data.strip() # Start with stripped text for cleaner processing
+        converted_text = original_text
+
+        logger.info(f"{self.node_name}: Attempting to convert text to '{target_tone}' tone.")
+
+        try:
+            if target_tone == "formal":
+                # Simulate formalization: capitalize first letter, replace informal greetings, add formal closing.
+                if converted_text: # Ensure not empty before accessing index
+                    converted_text = converted_text[0].upper() + converted_text[1:]
+                converted_text = converted_text.replace("hi", "Dear Sir/Madam").replace("hello", "Dear Sir/Madam")
+                if not converted_text.endswith(('.', '!', '?')): # Ensure proper punctuation before appending
+                    converted_text += '.'
+                converted_text += " Kind regards."
+            elif target_tone == "informal":
+                # Simulate informalization: lowercase first letter, replace formal greetings, add informal closing.
+                if converted_text: # Ensure not empty before accessing index
+                    converted_text = converted_text[0].lower() + converted_text[1:]
+                converted_text = converted_text.replace("Dear Sir/Madam", "Hey").replace("Kind regards.", "Cheers!")
+                if converted_text.endswith('.'): # Remove trailing period if it was added formally
+                    converted_text = converted_text.rstrip('.')
+                converted_text += " Cheers!"
+            elif target_tone == "sarcastic":
+                # Simulate sarcasm: A real LLM would rephrase intelligently, but for this simulation,
+                # we append a common sarcastic indicator.
+                converted_text = original_text + " (obviously...)"
+            else:
+                logger.warning(
+                    f"{self.node_name}: Unsupported target tone '{target_tone}' specified. "
+                    "Returning original data without conversion."
+                )
+                return original_text
+            
+            logger.info(f"{self.node_name}: Successfully converted text tone to '{target_tone}'.")
+            return converted_text
+
+        except Exception as e:
             logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected string, "
-                f"but received {type(data)}. Cannot perform tone conversion."
+                f"{self.node_name}: An unexpected error occurred during tone conversion: {e}", 
+                exc_info=True
             )
-            raise ValueError(
-                f"[{self.node_name}] Input data must be a string for tone conversion. "
-                f"Received type: {type(data)}."
-            )
-
-        original_text = data
-        target_tone = context.get("target_tone")
-
-        if not target_tone or not isinstance(target_tone, str):
-            logger.warning(
-                f"[{self.node_name}] 'target_tone' not found or is not a string in "
-                f"context. Cannot convert tone. Returning original text."
-            )
+            # In case of an unforeseen error during string manipulation, return original data
             return original_text
-
-        logger.info(
-            f"[{self.node_name}] Attempting to convert tone for text (first 80 chars): "
-            f"'{original_text[:80].replace('\'', '\"')}...' to target tone: '{target_tone}'."
-        )
-
-        converted_text = original_text  # Default to original if no specific conversion
-
-        # Simple simulation of tone conversion based on common target tones
-        # In a real-world scenario, this would involve NLP models or sophisticated templating.
-        lower_target_tone = target_tone.lower()
-        if lower_target_tone == "formal":
-            converted_text = (
-                f"Esteemed recipient, kindly be advised that, following due consideration, "
-                f"it has been determined: {original_text}. Your prompt attention to this matter "
-                f"is greatly appreciated. Respectfully."
-            )
-        elif lower_target_tone == "informal":
-            converted_text = (
-                f"Hey there! Just wanted to quickly fill you in: {original_text}. "
-                f"Catch ya later!"
-            )
-        elif lower_target_tone == "sarcastic":
-            converted_text = (
-                f"Oh, how absolutely *thrilling*! Prepare to be astonished by this "
-                f"earth-shattering revelation: {original_text}. What a truly unique insight!"
-            )
-        elif lower_target_tone == "joyful":
-            converted_text = (
-                f"Wonderful news! I'm absolutely delighted to share: {original_text}! "
-                f"Isn't that just fantastic?!"
-            )
-        elif lower_target_tone == "serious":
-            converted_text = (
-                f"Please take a moment to absorb this critical information: {original_text}. "
-                f"The gravity of this situation cannot be overstated."
-            )
-        else:
-            logger.warning(
-                f"[{self.node_name}] Unsupported 'target_tone': '{target_tone}'. "
-                f"Returning original text without conversion."
-            )
-
-        logger.info(
-            f"[{self.node_name}] Tone conversion simulated successfully. Result (first 80 chars): "
-            f"'{converted_text[:80].replace('\'', '\"')}...'."
-        )
-        return converted_text
