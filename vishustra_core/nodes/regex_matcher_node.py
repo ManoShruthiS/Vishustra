@@ -1,110 +1,86 @@
 import re
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
+
+# Assuming BaseNode is located in vishustra_core/nodes/base_node.py
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class RegexMatcherNode(BaseNode):
     """
-    A Vishustra node that performs regex matching on input string data.
+    A Vishustra processing node that applies a regular expression pattern to the input data
+    and returns all non-overlapping matches.
 
-    This node compiles a regular expression pattern upon initialization and uses it
-    to find all non-overlapping occurrences within the input data, returning the
-    full matched substrings.
+    This node expects the `context` dictionary to contain the 'regex_pattern' key
+    with a string value representing the regular expression. An optional 'regex_flags'
+    key (integer, e.g., re.IGNORECASE) can also be provided.
 
-    Configuration Parameters:
-    - pattern (str): The regular expression pattern string to be matched.
-    - flags (int, optional): Bitwise flags for regex compilation (e.g., re.IGNORECASE,
-                             re.MULTILINE). Defaults to 0 (no flags).
-
-    Returns:
-    - Optional[List[str]]: A list of all full matched substrings found in the data.
-                           Returns an empty list if no matches are found.
-                           Returns None if the input `data` is not a string.
+    Input `data` is expected to be a string.
+    The output is a list of strings, where each element is a match found by the regex.
     """
-
-    def __init__(self, pattern: str, flags: int = 0):
-        """
-        Initializes the RegexMatcherNode with a regex pattern and optional flags.
-
-        Args:
-            pattern (str): The regular expression pattern string.
-            flags (int, optional): Regex flags (e.g., re.IGNORECASE). Defaults to 0.
-
-        Raises:
-            ValueError: If the pattern is not a non-empty string or if it's an invalid regex.
-        """
-        if not isinstance(pattern, str) or not pattern:
-            logger.error("Attempted to initialize RegexMatcherNode with an invalid or empty pattern.")
-            raise ValueError("Regex pattern must be a non-empty string.")
-        
-        try:
-            self._compiled_pattern = re.compile(pattern, flags)
-            self._pattern_str = pattern # Store original pattern for logging and introspection
-            logger.debug(
-                f"RegexMatcherNode initialized successfully with pattern: '{pattern}' "
-                f"and flags: {flags}."
-            )
-        except re.error as e:
-            logger.error(f"Failed to compile regex pattern '{pattern}': {e}", exc_info=True)
-            raise ValueError(f"Invalid regex pattern provided: '{pattern}'") from e
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """Returns the descriptive name of this node."""
         return "RegexMatcher"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Optional[List[str]]:
+    def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Processes the input data by attempting to find all matches for the
-        configured regex pattern.
+        Processes the input data by applying a regular expression pattern.
 
         Args:
-            data (Any): The input data to process. This node expects a string.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                       for the processing flow. Not directly utilized
-                                       by this node for its core matching logic.
+            data (Any): The input data to be processed, expected to be a string.
+            context (Dict[str, Any]): A dictionary containing processing parameters.
+                                       Must include:
+                                       - 'regex_pattern' (str): The regular expression string.
+                                       Optional:
+                                       - 'regex_flags' (int): Flags for the `re` module (e.g., re.IGNORECASE).
+                                                              Defaults to 0 if not provided.
 
         Returns:
-            Optional[List[str]]: A list of all full matched substrings found.
-                                 Returns an empty list if `data` is a string but no
-                                 matches are found. Returns `None` if `data` is not
-                                 a string, indicating an incompatible input type.
+            List[str]: A list of all non-overlapping matches found in the data.
+                       Returns an empty list if no matches are found or if the input data
+                       is empty after type validation.
+
+        Raises:
+            ValueError: If `data` is not a string, or if 'regex_pattern' is missing,
+                        not a string, or empty in the context. Also if 'regex_flags'
+                        is present but not an integer.
+            re.error: If the provided 'regex_pattern' is syntactically invalid.
+            RuntimeError: For any other unexpected errors during processing.
         """
         if not isinstance(data, str):
-            logger.warning(
-                f"RegexMatcherNode received non-string data (type: {type(data).__name__}) "
-                f"for pattern '{self._pattern_str}'. Expected string for matching. "
-                f"Returning None."
-            )
-            return None
+            logger.error("RegexMatcherNode: Input data must be a string. Received type: %s", type(data))
+            raise ValueError(f"RegexMatcherNode: Input data must be a string, got {type(data).__name__}")
+
+        if not context:
+            logger.error("RegexMatcherNode: Context dictionary is required but was empty.")
+            raise ValueError("RegexMatcherNode: Context dictionary is required and must not be empty.")
+
+        regex_pattern = context.get("regex_pattern")
+        if not isinstance(regex_pattern, str) or not regex_pattern:
+            logger.error("RegexMatcherNode: 'regex_pattern' (str) is missing, empty, or not a string in context.")
+            raise ValueError("RegexMatcherNode: 'regex_pattern' (str) must be provided in context.")
+
+        regex_flags = context.get("regex_flags", 0)
+        if not isinstance(regex_flags, int):
+            logger.error("RegexMatcherNode: 'regex_flags' must be an integer. Received type: %s", type(regex_flags))
+            raise ValueError(f"RegexMatcherNode: 'regex_flags' must be an integer, got {type(regex_flags).__name__}")
 
         try:
-            # Using finditer and group(0) to consistently return full matched substrings
-            # regardless of whether the pattern contains capturing groups.
-            matches_iterator = self._compiled_pattern.finditer(data)
-            results = [match.group(0) for match in matches_iterator]
-            
-            if results:
-                logger.debug(
-                    f"RegexMatcherNode found {len(results)} matches for pattern "
-                    f"'{self._pattern_str}' in input data."
-                )
+            compiled_regex = re.compile(regex_pattern, regex_flags)
+            matches = compiled_regex.findall(data)
+
+            if not matches:
+                logger.debug("RegexMatcherNode: No matches found for pattern '%s' in data.", regex_pattern)
             else:
-                logger.debug(
-                    f"RegexMatcherNode found no matches for pattern "
-                    f"'{self._pattern_str}' in input data."
-                )
-            return results
+                logger.debug("RegexMatcherNode: Found %d matches for pattern '%s'.", len(matches), regex_pattern)
+            return matches
+
+        except re.error as e:
+            logger.error("RegexMatcherNode: Invalid regex pattern '%s' provided. Error: %s", regex_pattern, e)
+            raise re.error(f"RegexMatcherNode: Invalid regex pattern '{regex_pattern}'. Error: {e}") from e
         except Exception as e:
-            # This catch is for highly unexpected runtime errors, as a compiled regex
-            # applied to a string generally should not raise exceptions.
-            logger.error(
-                f"An unexpected error occurred during regex matching with pattern "
-                f"'{self._pattern_str}' on data snippet: '{str(data)[:100]}...'. Error: {e}",
-                exc_info=True
-            )
-            # In an orchestration framework, returning an empty list might be preferable
-            # to propagate an error for resilience.
-            return []
+            logger.critical("RegexMatcherNode: An unexpected error occurred during processing: %s", e, exc_info=True)
+            raise RuntimeError(f"RegexMatcherNode: An unexpected error occurred: {e}") from e
