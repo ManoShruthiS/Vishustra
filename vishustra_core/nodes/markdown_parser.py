@@ -1,82 +1,89 @@
 import logging
 from typing import Any, Dict
-import markdown # Assuming the 'markdown' package is installed and available
+
+# Assuming 'vishustra_core.nodes.base_node' exists in the project structure
 from vishustra_core.nodes.base_node import BaseNode
 
-# Initialize logger for this module
+# External dependency for Markdown parsing
+try:
+    import markdown
+except ImportError:
+    # This node explicitly requires the 'markdown' library to function.
+    # It's better to fail early and clearly if a core dependency is missing.
+    raise ImportError(
+        "The 'markdown' library is required for MarkdownParserNode. "
+        "Please install it using 'pip install markdown'."
+    )
+
 logger = logging.getLogger(__name__)
+
 
 class MarkdownParserNode(BaseNode):
     """
-    A Vishustra node that parses Markdown formatted text into HTML.
+    A Vishustra processing node that parses Markdown content and converts it
+    into HTML.
 
-    This node takes a string containing Markdown and converts it into its
-    corresponding HTML representation using the 'markdown' library. It can
-    optionally accept a list of Markdown extensions via the 'context' dictionary.
+    This node leverages the 'markdown' library to perform the conversion,
+    offering a robust way to transform textual data from Markdown syntax
+    to standard HTML for further rendering or processing within the pipeline.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "markdown_parser"
+        """
+        Returns the descriptive name of the node.
+        """
+        return "MarkdownParser"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Parses the input data (expected to be a Markdown string) into HTML.
+        Processes the input data, expecting a Markdown string, and converts it
+        to an HTML string.
 
         Args:
-            data: The input data, which must be a string containing Markdown text.
-            context: A dictionary containing additional information or configuration.
-                     It can include a key 'markdown_extensions' (list of str)
-                     to specify extensions for the Markdown parser.
+            data: The input data, which is expected to be a string containing
+                  Markdown content.
+            context: A dictionary containing contextual information for the
+                     node's processing. This node does not currently utilize
+                     context for its core logic, but it's available for
+                     future enhancements (e.g., passing markdown extensions).
 
         Returns:
             A string containing the HTML representation of the input Markdown.
 
         Raises:
-            ValueError: If the input data is not a string.
-            RuntimeError: If an unexpected error occurs during the Markdown parsing process.
+            TypeError: If the input 'data' is not a string, indicating an
+                       incorrect data type for Markdown parsing.
+            Exception: For any other unexpected errors that occur during the
+                       Markdown to HTML conversion process, ensuring pipeline
+                       failures are propagated.
         """
-        logger.debug(f"[{self.node_name}] Initiating Markdown parsing process.")
-
         if not isinstance(data, str):
-            error_msg = (
-                f"[{self.node_name}] Invalid input data type. "
-                f"Expected string, received {type(data).__name__}."
+            logger.error(
+                "[%s] Invalid input type: Expected string for Markdown parsing, "
+                "but received type %s.",
+                self.node_name,
+                type(data).__name__,
             )
-            logger.error(error_msg)
-            raise ValueError(error_msg)
-
-        # Retrieve markdown extensions from context, defaulting to an empty list
-        markdown_extensions = context.get("markdown_extensions", [])
-
-        if not isinstance(markdown_extensions, list):
-            logger.warning(
-                f"[{self.node_name}] 'markdown_extensions' in context is not a list. "
-                "Ignoring invalid value and proceeding without extensions."
+            raise TypeError(
+                f"{self.node_name} expects a string input for 'data', but "
+                f"received {type(data).__name__}."
             )
-            markdown_extensions = []
-        elif not all(isinstance(ext, str) for ext in markdown_extensions):
-            logger.warning(
-                f"[{self.node_name}] 'markdown_extensions' in context contains non-string elements. "
-                "Filtering invalid values and proceeding with valid string extensions only."
-            )
-            markdown_extensions = [ext for ext in markdown_extensions if isinstance(ext, str)]
 
+        logger.debug("[%s] Initiating Markdown to HTML conversion.", self.node_name)
 
         try:
-            logger.debug(
-                f"[{self.node_name}] Parsing Markdown data using extensions: {markdown_extensions}"
-            )
-            # Perform the Markdown to HTML conversion
-            html_output = markdown.markdown(data, extensions=markdown_extensions)
-
-            logger.debug(f"[{self.node_name}] Markdown parsing successfully completed.")
+            # Perform the conversion from Markdown to HTML.
+            # Additional configurations (e.g., extensions) could be passed
+            # via the 'context' dictionary if needed for more flexible parsing.
+            html_output = markdown.markdown(data)
+            logger.info("[%s] Successfully converted Markdown to HTML.", self.node_name)
             return html_output
         except Exception as e:
-            # Catch any unexpected errors during parsing and re-raise as a RuntimeError
-            error_msg = (
-                f"[{self.node_name}] An unexpected error occurred during Markdown parsing: {e}"
+            logger.exception(
+                "[%s] An unexpected error occurred during Markdown to HTML conversion.",
+                self.node_name,
             )
-            logger.exception(error_msg) # Logs the traceback automatically
-            raise RuntimeError(error_msg) from e
+            # Re-raise the exception to ensure that issues are not silently
+            # swallowed and the orchestration framework can handle them.
+            raise
