@@ -1,145 +1,122 @@
 import logging
-from typing import Any, Dict, Callable, List, Union
+from typing import Any, Dict, Type
+
+# Import BaseNode from the specified project path
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-class VishustraValidationError(ValueError):
-    """Custom exception raised for validation errors within Vishustra nodes."""
-    pass
-
 class DataValidatorNode(BaseNode):
     """
-    A Vishustra node for validating structured data (dictionaries) against a defined schema.
+    A Vishustra processing node that validates input data against a defined schema.
 
-    This node enforces data integrity by checking field types, applying custom callable
-    validation rules, and managing the presence of required fields as well as preventing
-    unexpected extra fields.
+    This node ensures that incoming data conforms to expected types and structure,
+    raising an error if validation fails. It primarily focuses on validating
+    top-level fields of a dictionary against specified Python types.
+
+    The `validation_schema` specifies expected field names and their corresponding types.
+    An optional `strict` mode can be enabled to disallow extra fields not present
+    in the schema.
     """
 
-    def __init__(
-        self,
-        schema: Dict[str, Union[type, Callable[[Any], bool], Callable[[Any, Dict[str, Any], Dict[str, Any]], bool]]],
-        required_fields: Union[List[str], None] = None,
-        allow_extra_fields: bool = False
-    ):
+    def __init__(self, validation_schema: Dict[str, Type], strict: bool = False):
         """
-        Initializes the DataValidatorNode with a validation schema and configuration.
+        Initializes the DataValidatorNode with a validation schema.
 
         Args:
-            schema: A dictionary where keys are field names and values are validation rules.
-                    Validation rules can be:
-                    - A Python type (e.g., `str`, `int`) to check `isinstance()`.
-                    - A callable `func(field_value)` that returns `True` for valid, `False` for invalid.
-                    - A callable `func(field_value, full_data_dict, context_dict)` for validations
-                      that require access to other data fields or the processing context.
-            required_fields: An optional list of field names that *must* be present in the input data.
-                             If `None`, all fields explicitly defined in the `schema` are considered required.
-                             If an empty list `[]`, no fields are strictly required for presence,
-                             but fields in the schema are still validated if present.
-            allow_extra_fields: If `False`, any field in the input data that is not defined in the `schema`
-                                will cause a `VishustraValidationError`. If `True`, unknown fields are ignored.
+            validation_schema (Dict[str, Type]):
+                A dictionary defining the expected structure and types of the input data.
+                Keys are field names (strings), and values are Python types (e.g., `str`, `int`, `list`, `dict`).
+                For example: `{'id': int, 'name': str, 'tags': list}`.
+                Note: This validator performs a shallow type check; for nested dictionaries or lists,
+                it checks the type of the container but not its contents.
+            strict (bool):
+                If True, any fields in the input `data` not defined in the `validation_schema`
+                will cause a validation error. Defaults to False.
+
+        Raises:
+            TypeError: If `validation_schema` is not a dictionary.
+            ValueError: If `validation_schema` contains non-string keys or non-type values.
         """
-        self._schema = schema
-        self._required_fields = required_fields if required_fields is not None else list(schema.keys())
-        self._allow_extra_fields = allow_extra_fields
+        if not isinstance(validation_schema, dict):
+            raise TypeError("validation_schema must be a dictionary.")
+        
+        for k, v in validation_schema.items():
+            if not isinstance(k, str):
+                raise ValueError(f"All keys in validation_schema must be strings, but found type {type(k).__name__}.")
+            if not isinstance(v, type):
+                raise ValueError(f"All values in validation_schema must be Python types (e.g., str, int), but found {v} of type {type(v).__name__}.")
+
+        self._validation_schema = validation_schema
+        self._strict = strict
         logger.debug(
-            f"DataValidatorNode initialized with schema keys: {list(self._schema.keys())}, "
-            f"explicitly required fields: {self._required_fields}, "
-            f"allow_extra_fields: {self._allow_extra_fields}"
+            "DataValidatorNode initialized with schema: %s, strict_mode: %s",
+            {k: v.__name__ for k, v in self._validation_schema.items()}, self._strict
         )
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "DataValidator"
+        """Returns the name of the node."""
+        return "DataValidatorNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data by validating it against the configured schema and rules.
+        Validates the input data against the configured schema.
 
         Args:
-            data: The input data, expected to be a dictionary for schema validation.
-            context: A dictionary containing contextual information relevant to the processing.
+            data (Any): The data to be validated. Expected to be a dictionary
+                        if a validation_schema is provided.
+            context (Dict[str, Any]): A dictionary containing context information
+                                     (not directly used for validation in this node,
+                                     but part of the BaseNode interface).
 
         Returns:
-            The original input data if all validation checks pass.
+            Any: The original data if validation is successful.
 
         Raises:
-            VishustraValidationError: If the data fails any validation rule, is not a dictionary
-                                    (when schema implies dictionary structure), is missing required fields,
-                                    or contains disallowed extra fields.
+            TypeError: If the input data's overall type does not match expectations (e.g., not a dictionary
+                       when a schema is defined), or if a field's type does not match its schema definition.
+            ValueError: If required fields are missing, or extra fields are present
+                        in strict mode.
         """
-        logger.info(f"Node '{self.node_name}' starting data validation.")
-
         if not isinstance(data, dict):
             error_msg = (
-                f"Input data for '{self.node_name}' must be a dictionary when a schema is provided, "
-                f"but received type: {type(data).__name__}."
+                f"Validation failed by {self.node_name}: "
+                f"Expected input data to be a dictionary, but received type: {type(data).__name__}."
             )
             logger.error(error_msg)
-            raise VishustraValidationError(error_msg)
+            raise TypeError(error_msg)
 
-        # 1. Validate required fields for presence
-        for field in self._required_fields:
-            if field not in data:
-                error_msg = f"Required field '{field}' is missing from the input data."
-                logger.error(error_msg)
-                raise VishustraValidationError(error_msg)
-
-        # 2. Validate fields against schema rules (type checks and custom callables)
-        for field_name, rule in self._schema.items():
+        # Validate required fields and types
+        for field_name, expected_type in self._validation_schema.items():
             if field_name not in data:
-                # Field is in schema but not in data. If it's not explicitly required,
-                # we don't need to validate it, as it's optional.
-                continue
-
-            field_value = data[field_name]
-            try:
-                if isinstance(rule, type):
-                    if not isinstance(field_value, rule):
-                        raise VishustraValidationError(
-                            f"Field '{field_name}' expected type {rule.__name__}, but received {type(field_value).__name__}."
-                        )
-                elif callable(rule):
-                    validation_passed = False
-                    try:
-                        # Attempt to call with the most verbose signature (value, data, context)
-                        validation_passed = rule(field_value, data, context)
-                    except TypeError:
-                        try:
-                            # Fallback to calling with just (value, data)
-                            validation_passed = rule(field_value, data)
-                        except TypeError:
-                            # Fallback to calling with just (value)
-                            validation_passed = rule(field_value)
-                    
-                    if not validation_passed:
-                        raise VishustraValidationError(f"Field '{field_name}' failed custom validation.")
-                else:
-                    raise VishustraValidationError(
-                        f"Invalid schema rule for field '{field_name}'. Expected a type or a callable."
-                    )
-            except VishustraValidationError as e:
-                logger.error(f"Validation failed for field '{field_name}': {e}")
-                raise
-            except Exception as e:
-                logger.exception(
-                    f"An unexpected error occurred during validation of field '{field_name}'. "
-                    f"Rule type: {type(rule).__name__}, Error: {e}"
+                error_msg = (
+                    f"Validation failed by {self.node_name}: "
+                    f"Required field '{field_name}' is missing in data."
                 )
-                raise VishustraValidationError(
-                    f"An unexpected internal error occurred during validation of field '{field_name}'."
-                ) from e
-
-        # 3. Check for disallowed extra fields
-        if not self._allow_extra_fields:
-            extra_fields = [field for field in data if field not in self._schema]
-            if extra_fields:
-                error_msg = f"Input data contains unexpected extra fields: {', '.join(extra_fields)}. " \
-                            f"To allow these, set 'allow_extra_fields=True' in node configuration."
                 logger.error(error_msg)
-                raise VishustraValidationError(error_msg)
+                raise ValueError(error_msg)
 
-        logger.info(f"Node '{self.node_name}' successfully validated data.")
+            if not isinstance(data[field_name], expected_type):
+                error_msg = (
+                    f"Validation failed by {self.node_name} for field '{field_name}': "
+                    f"Expected type {expected_type.__name__}, but received {type(data[field_name]).__name__} "
+                    f"with value '{data[field_name]}'."
+                )
+                logger.error(error_msg)
+                raise TypeError(error_msg)
+
+        # Validate for extra fields in strict mode
+        if self._strict:
+            extra_fields = set(data.keys()) - set(self._validation_schema.keys())
+            if extra_fields:
+                error_msg = (
+                    f"Validation failed by {self.node_name}: "
+                    f"Unexpected extra field(s) found: "
+                    f"{', '.join(sorted(extra_fields))} (strict mode enabled)."
+                )
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+
+        logger.info("%s successfully validated incoming data.", self.node_name)
         return data
