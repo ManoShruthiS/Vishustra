@@ -1,124 +1,113 @@
 import logging
 import re
-from collections import Counter
 from typing import Any, Dict, List, Set
 
+# Assuming vishustra_core.nodes.base_node is correctly configured in the project's Python path.
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class KeywordExtractorNode(BaseNode):
     """
-    A Vishustra node that extracts keywords from a given text.
+    A Vishustra node designed to extract keywords from a given text input.
 
-    This node performs a basic frequency-based keyword extraction,
-    filtering out common stop words and words shorter than a specified length.
-    It can be configured via the context dictionary to control the number
-    of keywords, minimum word length, and a custom set of stop words.
+    This node processes a string, normalizing it and then identifying
+    unique words based on configurable criteria such as minimum length
+    and a list of stopwords. The output is a sorted list of these
+    extracted keywords.
     """
-
-    # A simple set of default English stop words for demonstration purposes.
-    # In a production scenario, this list would be more comprehensive,
-    # potentially configurable through external means or integrated with
-    # a dedicated natural language processing library like NLTK or SpaCy.
-    _DEFAULT_STOP_WORDS: Set[str] = {
-        "a", "an", "the", "and", "or", "but", "if", "then", "else", "when",
-        "is", "are", "was", "were", "be", "been", "being", "have", "has",
-        "had", "do", "does", "did", "not", "no", "yes", "for", "with", "at",
-        "by", "from", "up", "down", "on", "off", "in", "out", "over", "under",
-        "again", "further", "then", "once", "this", "that", "these", "those",
-        "am", "i", "me", "my", "we", "us", "our", "you", "your", "he", "him",
-        "his", "she", "her", "it", "its", "they", "them", "their", "what",
-        "which", "who", "whom", "whose", "where", "why", "how", "all", "any",
-        "both", "each", "few", "more", "most", "other", "some", "such",
-        "only", "own", "same", "so", "than", "too", "very", "s", "t", "can",
-        "will", "just", "don", "should", "now", "would", "could", "shall"
-    }
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """
+        Returns the descriptive name of this node.
+        """
         return "KeywordExtractor"
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Extracts keywords from the input text data based on frequency.
+        Processes the input data to extract keywords using a simple heuristic.
 
-        The process involves lowercasing the text, tokenizing into words,
-        filtering out stop words and short words, and then identifying the
-        most frequent remaining words as keywords.
+        The input `data` is expected to be a string. The `context` dictionary
+        allows for customization of the extraction process, specifically
+        for minimum keyword length and a custom set of stopwords.
 
         Args:
-            data (Any): The input data to be processed. Expected to be a string
-                        containing the text from which to extract keywords.
-            context (Dict[str, Any]): A dictionary containing runtime parameters.
-                                      Supported parameters include:
-                                      - 'max_keywords' (int, optional): The maximum
-                                        number of keywords to return. Defaults to 5.
-                                      - 'min_word_length' (int, optional): Minimum
-                                        length a word must have to be considered
-                                        a keyword. Defaults to 3.
-                                      - 'stop_words' (list[str] or set[str], optional):
-                                        A custom list or set of stop words to filter
-                                        out. These will be added to the node's
-                                        default stop words.
+            data: The input text (string) from which keywords will be extracted.
+            context: A dictionary containing runtime configuration and metadata.
+                     Expected configurable keys include:
+                     - 'min_length' (int, optional): The minimum character length
+                                                    for a word to be considered a keyword.
+                                                    Defaults to 3.
+                     - 'stopwords' (List[str], optional): A list of words to be
+                                                         excluded from the keyword list.
+                                                         Defaults to a small, common English set.
 
         Returns:
-            List[str]: A list of extracted keywords, ordered by frequency
-                       (most frequent first).
+            A sorted list of unique strings identified as keywords.
 
         Raises:
-            ValueError: If the input 'data' is not a string, indicating an
-                        incorrect data type for this node's operation.
+            TypeError: If the input `data` is not a string.
         """
         if not isinstance(data, str):
             logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected string, "
-                f"but received {type(data)}. Cannot extract keywords."
+                "KeywordExtractorNode received non-string input. Expected 'str', got '%s'.",
+                type(data).__name__
             )
-            raise ValueError(f"Input data for '{self.node_name}' must be a string.")
+            raise TypeError(
+                f"KeywordExtractorNode expects string input, but received {type(data).__name__}"
+            )
 
-        text = data.lower()
+        # --- Configuration from context (with sensible defaults) ---
+        min_length = context.get('min_length', 3)
+        if not isinstance(min_length, int) or min_length < 1:
+            logger.warning(
+                "Invalid 'min_length' value in context: '%s'. Using default of 3.",
+                min_length
+            )
+            min_length = 3
 
-        # Retrieve parameters from context with sensible defaults
-        max_keywords = context.get('max_keywords', 5)
-        min_word_length = context.get('min_word_length', 3)
-        custom_stop_words = context.get('stop_words')
-
-        # Validate and combine default and custom stop words
-        effective_stop_words = set(self._DEFAULT_STOP_WORDS)
-        if custom_stop_words is not None:
-            if isinstance(custom_stop_words, (list, set)):
-                effective_stop_words.update({sw.lower() for sw in custom_stop_words})
-            else:
+        # A small set of common English stopwords for demonstration
+        default_stopwords: Set[str] = {
+            "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+            "and", "or", "but", "if", "then", "else", "when", "where", "why",
+            "how", "what", "which", "who", "whom", "this", "that", "these",
+            "those", "i", "you", "he", "she", "it", "we", "they", "me", "him",
+            "her", "us", "them", "my", "your", "his", "its", "our", "their",
+            "for", "at", "by", "with", "from", "up", "down", "in", "out", "on",
+            "off", "over", "under", "again", "further", "then", "once", "here",
+            "there", "all", "any", "both", "each", "few", "more", "most", "other",
+            "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than",
+            "too", "very", "s", "t", "can", "will", "just", "don", "should", "now"
+        }
+        
+        # Ensure custom stopwords are processed as a set for efficient lookup
+        custom_stopwords = context.get('stopwords')
+        if isinstance(custom_stopwords, list):
+            stopwords: Set[str] = set(custom_stopwords)
+        else:
+            stopwords = default_stopwords
+            if custom_stopwords is not None:
                 logger.warning(
-                    f"[{self.node_name}] 'stop_words' in context should be a list or set. "
-                    f"Received type '{type(custom_stop_words)}', ignoring custom stop words."
+                    "Invalid 'stopwords' value in context. Expected 'list', got '%s'. Using default stopwords.",
+                    type(custom_stopwords).__name__
                 )
 
-        logger.debug(
-            f"[{self.node_name}] Starting keyword extraction with parameters: "
-            f"max_keywords={max_keywords}, min_word_length={min_word_length}, "
-            f"custom_stop_words_provided={bool(custom_stop_words is not None)}"
-        )
-
-        # Use regex to find all word characters, which naturally handles punctuation
-        words = re.findall(r'\b\w+\b', text)
-
-        # Filter out stop words and words shorter than the minimum length
-        filtered_words = [
-            word for word in words
-            if word not in effective_stop_words and len(word) >= min_word_length
-        ]
-
-        # Count the frequency of each filtered word
-        word_counts = Counter(filtered_words)
-
-        # Get the top N most common words as keywords
-        keywords = [word for word, count in word_counts.most_common(max_keywords)]
-
+        text_lower = data.lower()
+        
+        # Use regex to find sequences of alphanumeric characters.
+        # This effectively removes most punctuation and splits words.
+        all_words = re.findall(r'\b[a-z0-9]+\b', text_lower)
+        
+        extracted_keywords: Set[str] = set()
+        for word in all_words:
+            if len(word) >= min_length and word not in stopwords:
+                extracted_keywords.add(word)
+                
         logger.info(
-            f"[{self.node_name}] Successfully extracted {len(keywords)} keywords: {keywords}"
+            "Successfully extracted %d unique keywords from input text using min_length=%d and %d stopwords.",
+            len(extracted_keywords), min_length, len(stopwords)
         )
-
-        return keywords
+        
+        # Return a sorted list for consistent and predictable output
+        return sorted(list(extracted_keywords))
