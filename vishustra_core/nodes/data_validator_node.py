@@ -1,223 +1,145 @@
 import logging
-from typing import Any, Dict, Callable, Optional, Union
-
+from typing import Any, Dict, Callable, List, Union
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
+class VishustraValidationError(ValueError):
+    """Custom exception raised for validation errors within Vishustra nodes."""
+    pass
 
 class DataValidatorNode(BaseNode):
     """
-    A Vishustra processing node responsible for validating input data.
+    A Vishustra node for validating structured data (dictionaries) against a defined schema.
 
-    This node offers flexibility by allowing validation either through
-    a custom callable function or a basic schema definition. It ensures
-    that data conforms to expected formats or rules before further processing
-    in the orchestration pipeline.
+    This node enforces data integrity by checking field types, applying custom callable
+    validation rules, and managing the presence of required fields as well as preventing
+    unexpected extra fields.
     """
 
     def __init__(
         self,
-        node_id: str,
-        validation_fn: Optional[Callable[[Any, Dict[str, Any]], bool]] = None,
-        schema: Optional[Dict[str, Any]] = None,
-        error_message: str = "Input data failed validation.",
-        raise_on_invalid: bool = True,
+        schema: Dict[str, Union[type, Callable[[Any], bool], Callable[[Any, Dict[str, Any], Dict[str, Any]], bool]]],
+        required_fields: Union[List[str], None] = None,
+        allow_extra_fields: bool = False
     ):
         """
-        Initializes the DataValidatorNode.
-
-        This node requires either a `validation_fn` or a `schema` to be provided.
-        It's designed to be flexible; for complex schema validations (e.g., full
-        JSON Schema Draft 7+ features), `validation_fn` allows integration with
-        external validation libraries, or the internal basic schema validation
-        can be utilized for simpler checks.
+        Initializes the DataValidatorNode with a validation schema and configuration.
 
         Args:
-            node_id (str): A unique identifier for this instance of the node.
-                           Used to differentiate multiple validator nodes.
-            validation_fn (Optional[Callable[[Any, Dict[str, Any]], bool]]):
-                An optional callable that takes `data` and `context` as arguments.
-                It should return `True` if the data is valid, `False` otherwise.
-                If provided, this function will be used for validation.
-            schema (Optional[Dict[str, Any]]):
-                An optional dictionary representing a validation schema (e.g., a simplified
-                JSON schema structure). If `validation_fn` is not provided,
-                a basic internal validation based on this schema will be performed.
-                Currently supports top-level 'type' and 'required' checks, and
-                'type' checks within 'properties' for dictionary data.
-            error_message (str): A custom message to use when validation fails.
-            raise_on_invalid (bool): If `True`, a `ValueError` is raised upon
-                                     validation failure. If `False`, validation
-                                     failures are logged as warnings, but data
-                                     is passed through (use with caution).
-
-        Raises:
-            ValueError: If both `validation_fn` and `schema` are provided,
-                        or if neither is provided.
+            schema: A dictionary where keys are field names and values are validation rules.
+                    Validation rules can be:
+                    - A Python type (e.g., `str`, `int`) to check `isinstance()`.
+                    - A callable `func(field_value)` that returns `True` for valid, `False` for invalid.
+                    - A callable `func(field_value, full_data_dict, context_dict)` for validations
+                      that require access to other data fields or the processing context.
+            required_fields: An optional list of field names that *must* be present in the input data.
+                             If `None`, all fields explicitly defined in the `schema` are considered required.
+                             If an empty list `[]`, no fields are strictly required for presence,
+                             but fields in the schema are still validated if present.
+            allow_extra_fields: If `False`, any field in the input data that is not defined in the `schema`
+                                will cause a `VishustraValidationError`. If `True`, unknown fields are ignored.
         """
-        if validation_fn is None and schema is None:
-            raise ValueError("Either 'validation_fn' or 'schema' must be provided to DataValidatorNode.")
-        if validation_fn is not None and schema is not None:
-            raise ValueError("Cannot provide both 'validation_fn' and 'schema'. Choose one validation method.")
-
-        self._node_id = node_id
-        self._validation_fn = validation_fn
         self._schema = schema
-        self._error_message = error_message
-        self._raise_on_invalid = raise_on_invalid
-        logger.debug(f"DataValidatorNode '{self.node_name}' initialized with ID: '{node_id}'.")
+        self._required_fields = required_fields if required_fields is not None else list(schema.keys())
+        self._allow_extra_fields = allow_extra_fields
+        logger.debug(
+            f"DataValidatorNode initialized with schema keys: {list(self._schema.keys())}, "
+            f"explicitly required fields: {self._required_fields}, "
+            f"allow_extra_fields: {self._allow_extra_fields}"
+        )
 
     @property
     def node_name(self) -> str:
-        """Returns the unique name of this node instance."""
-        return f"DataValidatorNode:{self._node_id}"
-
-    def _validate_with_schema(self, data: Any, schema: Dict[str, Any]) -> bool:
-        """
-        Performs basic validation based on a provided schema dictionary.
-
-        This method offers a simplified simulation of schema validation and does
-        not implement a full JSON Schema validator. It checks for overall data
-        'type' and, if the data is a dictionary, performs 'required' field checks
-        and 'type' checks for properties.
-
-        Args:
-            data (Any): The input data to validate.
-            schema (Dict[str, Any]): The schema dictionary defining validation rules.
-
-        Returns:
-            bool: `True` if the data conforms to the schema, `False` otherwise.
-        """
-        expected_overall_type = schema.get('type')
-
-        # Validate overall data type if specified
-        if expected_overall_type:
-            type_checks = {
-                'object': dict,
-                'string': str,
-                'integer': int,
-                'number': (int, float),
-                'boolean': bool,
-                'array': list,
-            }
-            if expected_overall_type in type_checks:
-                if not isinstance(data, type_checks[expected_overall_type]):
-                    logger.warning(
-                        f"[{self.node_name}] Schema expects overall type '{expected_overall_type}', "
-                        f"but data is type '{type(data).__name__}'."
-                    )
-                    return False
-            else:
-                logger.warning(
-                    f"[{self.node_name}] Schema specifies unsupported overall type '{expected_overall_type}'. "
-                    "Skipping overall type validation."
-                )
-
-        # If data is a dictionary, perform property-level checks
-        if isinstance(data, dict):
-            # Check 'required' fields
-            required_fields = schema.get('required', [])
-            for field in required_fields:
-                if field not in data:
-                    logger.warning(f"[{self.node_name}] Required field '{field}' is missing from data.")
-                    return False
-
-            # Check 'properties' for types if specified
-            properties = schema.get('properties', {})
-            for field, field_schema in properties.items():
-                if field in data:
-                    expected_field_type = field_schema.get('type')
-                    current_value = data[field]
-                    
-                    if expected_field_type:
-                        if expected_field_type == 'string' and not isinstance(current_value, str):
-                            logger.warning(
-                                f"[{self.node_name}] Field '{field}' expected type 'string', "
-                                f"got '{type(current_value).__name__}'."
-                            )
-                            return False
-                        elif expected_field_type == 'integer' and not isinstance(current_value, int):
-                            logger.warning(
-                                f"[{self.node_name}] Field '{field}' expected type 'integer', "
-                                f"got '{type(current_value).__name__}'."
-                            )
-                            return False
-                        elif expected_field_type == 'number' and not isinstance(current_value, (int, float)):
-                            logger.warning(
-                                f"[{self.node_name}] Field '{field}' expected type 'number', "
-                                f"got '{type(current_value).__name__}'."
-                            )
-                            return False
-                        elif expected_field_type == 'boolean' and not isinstance(current_value, bool):
-                            logger.warning(
-                                f"[{self.node_name}] Field '{field}' expected type 'boolean', "
-                                f"got '{type(current_value).__name__}'."
-                            )
-                            return False
-                        elif expected_field_type == 'array' and not isinstance(current_value, list):
-                            logger.warning(
-                                f"[{self.node_name}] Field '{field}' expected type 'array', "
-                                f"got '{type(current_value).__name__}'."
-                            )
-                            return False
-                        elif expected_field_type == 'object' and not isinstance(current_value, dict):
-                            logger.warning(
-                                f"[{self.node_name}] Field '{field}' expected type 'object', "
-                                f"got '{type(current_value).__name__}'."
-                            )
-                            return False
-        
-        return True
+        """Returns the descriptive name of the node."""
+        return "DataValidator"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data by validating it against the configured rules or schema.
+        Processes the input data by validating it against the configured schema and rules.
 
         Args:
-            data (Any): The input data to be validated.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                       relevant to the current processing pipeline.
+            data: The input data, expected to be a dictionary for schema validation.
+            context: A dictionary containing contextual information relevant to the processing.
 
         Returns:
-            Any: The original, validated data if validation passes.
+            The original input data if all validation checks pass.
 
         Raises:
-            ValueError: If validation fails and the node is configured to raise an error.
-            RuntimeError: If no validation method was configured (should be caught by `__init__`).
+            VishustraValidationError: If the data fails any validation rule, is not a dictionary
+                                    (when schema implies dictionary structure), is missing required fields,
+                                    or contains disallowed extra fields.
         """
-        is_valid = False
-        validation_failure_reason = ""
+        logger.info(f"Node '{self.node_name}' starting data validation.")
 
-        try:
-            if self._validation_fn:
-                logger.debug(f"[{self.node_name}] Executing custom validation function for data.")
-                is_valid = self._validation_fn(data, context)
-                if not is_valid:
-                    validation_failure_reason = "Custom validation function returned False."
-            elif self._schema:
-                logger.debug(f"[{self.node_name}] Applying schema-based validation to data.")
-                is_valid = self._validate_with_schema(data, self._schema)
-                if not is_valid:
-                    validation_failure_reason = "Data failed schema validation."
-            else:
-                # This state should ideally be prevented by __init__ checks.
-                logger.error(f"[{self.node_name}] No validation method configured, this indicates a node misconfiguration.")
-                raise RuntimeError("No validation method configured for DataValidatorNode instance.")
+        if not isinstance(data, dict):
+            error_msg = (
+                f"Input data for '{self.node_name}' must be a dictionary when a schema is provided, "
+                f"but received type: {type(data).__name__}."
+            )
+            logger.error(error_msg)
+            raise VishustraValidationError(error_msg)
 
-        except Exception as e:
-            logger.exception(f"[{self.node_name}] An unexpected error occurred during validation: {e}")
-            validation_failure_reason = f"Validation encountered an exception: {type(e).__name__} - {e}"
-            is_valid = False # Ensure validation status is explicitly false on error
+        # 1. Validate required fields for presence
+        for field in self._required_fields:
+            if field not in data:
+                error_msg = f"Required field '{field}' is missing from the input data."
+                logger.error(error_msg)
+                raise VishustraValidationError(error_msg)
 
-        if not is_valid:
-            full_error_msg = f"[{self.node_name}] {self._error_message} Details: {validation_failure_reason}"
-            if self._raise_on_invalid:
-                logger.error(full_error_msg)
-                raise ValueError(full_error_msg)
-            else:
-                logger.warning(f"{full_error_msg} (Proceeding with invalid data as configured.)")
-        else:
-            logger.info(f"[{self.node_name}] Data successfully passed validation.")
-        
+        # 2. Validate fields against schema rules (type checks and custom callables)
+        for field_name, rule in self._schema.items():
+            if field_name not in data:
+                # Field is in schema but not in data. If it's not explicitly required,
+                # we don't need to validate it, as it's optional.
+                continue
+
+            field_value = data[field_name]
+            try:
+                if isinstance(rule, type):
+                    if not isinstance(field_value, rule):
+                        raise VishustraValidationError(
+                            f"Field '{field_name}' expected type {rule.__name__}, but received {type(field_value).__name__}."
+                        )
+                elif callable(rule):
+                    validation_passed = False
+                    try:
+                        # Attempt to call with the most verbose signature (value, data, context)
+                        validation_passed = rule(field_value, data, context)
+                    except TypeError:
+                        try:
+                            # Fallback to calling with just (value, data)
+                            validation_passed = rule(field_value, data)
+                        except TypeError:
+                            # Fallback to calling with just (value)
+                            validation_passed = rule(field_value)
+                    
+                    if not validation_passed:
+                        raise VishustraValidationError(f"Field '{field_name}' failed custom validation.")
+                else:
+                    raise VishustraValidationError(
+                        f"Invalid schema rule for field '{field_name}'. Expected a type or a callable."
+                    )
+            except VishustraValidationError as e:
+                logger.error(f"Validation failed for field '{field_name}': {e}")
+                raise
+            except Exception as e:
+                logger.exception(
+                    f"An unexpected error occurred during validation of field '{field_name}'. "
+                    f"Rule type: {type(rule).__name__}, Error: {e}"
+                )
+                raise VishustraValidationError(
+                    f"An unexpected internal error occurred during validation of field '{field_name}'."
+                ) from e
+
+        # 3. Check for disallowed extra fields
+        if not self._allow_extra_fields:
+            extra_fields = [field for field in data if field not in self._schema]
+            if extra_fields:
+                error_msg = f"Input data contains unexpected extra fields: {', '.join(extra_fields)}. " \
+                            f"To allow these, set 'allow_extra_fields=True' in node configuration."
+                logger.error(error_msg)
+                raise VishustraValidationError(error_msg)
+
+        logger.info(f"Node '{self.node_name}' successfully validated data.")
         return data
