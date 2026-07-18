@@ -1,138 +1,152 @@
 import logging
-from typing import Any, Dict
-
-# Assuming vishustra_core.nodes.base_node exists in the project structure
+from typing import Any, Dict, List, Union
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class FactCheckerNode(BaseNode):
     """
-    A Vishustra processing node designed to simulate fact-checking of input statements.
-    It attempts to determine the factual accuracy of a given statement based on a
-    simplified internal knowledge base, providing a verification status and confidence score.
+    A processing node that simulates fact-checking on textual content.
 
-    This node is foundational for building more complex verification pipelines
-    or integrating with external knowledge sources.
+    This node expects input data to be a dictionary, typically containing
+    a 'text' key with the content to be fact-checked and optionally
+    'claims_to_verify' for specific claims. It enriches the data
+    with 'fact_check_results'.
+
+    The current implementation uses a simplistic rule-based simulation.
+    In a real-world scenario, this would integrate with external fact-checking
+    APIs or knowledge bases.
     """
-
-    # A simple, static "knowledge base" for demonstration purposes.
-    # In a real-world Vishustra application, this would typically be sourced
-    # from external APIs, databases, or dynamically updated models.
-    _KNOWN_FALSE_PATTERNS = [
-        "sky is green",
-        "pigs can fly",
-        "aliens built pyramids",
-        "earth is flat",
-        "water boils at 50 degrees celsius",
-        "sun revolves around earth",
-        "humans breathe nitrogen"
-    ]
-    _KNOWN_TRUE_PATTERNS = [
-        "sky is blue",
-        "water boils at 100 degrees celsius at sea level",
-        "earth revolves around sun",
-        "humans breathe oxygen",
-        "gravity keeps us on earth"
-    ]
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """Returns the name of the node."""
         return "FactCheckerNode"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, attempting to verify its factual accuracy.
+        Processes the input data to simulate fact-checking.
 
-        The `data` is expected to be a string representing the statement to check.
-        The `context` dictionary can be used for passing operational parameters
-        or environment details, though for this simulation it's primarily for
-        standardized logging and future extensibility.
+        Expects `data` to be a dictionary, potentially containing:
+        - 'text' (str): The main content string to be fact-checked.
+        - 'claims_to_verify' (List[str], optional): Specific claims within
+          the text to verify. If not present, a general check is simulated.
 
         Args:
-            data (Any): The input data, which must be a string statement.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                       for the processing flow, e.g., session IDs,
-                                       user preferences, or system settings.
+            data (Any): The input data. Expected to be a dictionary.
+            context (Dict[str, Any]): The operational context dictionary.
 
         Returns:
-            Dict[str, Any]: A dictionary containing the original statement,
-                            its verification status (`is_verified`), a confidence
-                            score (`confidence`), and detailed explanation (`details`).
-                            Example:
-                            {
-                                "statement": "The sky is blue.",
-                                "is_verified": True,
-                                "confidence": 0.9,
-                                "details": "Matches known true pattern."
-                            }
+            Any: The input data dictionary augmented with 'fact_check_results'.
+                 Returns the original data if processing fails or input format
+                 is unexpected, after logging an error.
 
         Raises:
-            ValueError: If the input `data` is not a string, indicating an invalid
-                        input type for fact-checking.
-            RuntimeError: If an unexpected error occurs during the fact-checking
-                          simulation process.
+            TypeError: If the input `data` is not a dictionary.
         """
-        logger.debug(f"[{self.node_name}] Starting processing for data type: {type(data)}.")
-
-        if not isinstance(data, str):
+        if not isinstance(data, dict):
             logger.error(
-                f"[{self.node_name}] Invalid data type received. Expected 'str', got '{type(data).__name__}'."
-                f" Data: {data!r}"
+                f"[{self.node_name}] Invalid input data type. Expected dict, got {type(data)}."
             )
-            raise ValueError(
-                f"FactCheckerNode expects 'data' to be a string statement for verification, "
-                f"but received type '{type(data).__name__}'."
+            raise TypeError(
+                f"[{self.node_name}] Input data must be a dictionary."
             )
 
-        statement = data.strip().lower()
-        is_verified = False
-        confidence = 0.5  # Default: unknown/neutral confidence
-        details = "Statement could not be definitively verified or refuted with current knowledge."
+        text_to_check: str = data.get("text", "")
+        claims_to_verify: List[str] = data.get("claims_to_verify", [])
+        fact_check_results: Dict[str, Dict[str, str]] = {}
+
+        if not text_to_check:
+            logger.warning(
+                f"[{self.node_name}] 'text' key not found or empty in input data. "
+                "Skipping detailed fact-checking."
+            )
+            # Add a placeholder result indicating no text was found
+            fact_check_results["_general_status"] = {
+                "status": "UNVERIFIED",
+                "reason": "No text content provided for fact-checking."
+            }
+            data["fact_check_results"] = fact_check_results
+            return data
+
+        logger.info(
+            f"[{self.node_name}] Initiating fact-check for text (length: {len(text_to_check)}) "
+            f"with {len(claims_to_verify)} specific claims."
+        )
 
         try:
-            # Attempt to verify the statement against known true patterns
-            for pattern in self._KNOWN_TRUE_PATTERNS:
-                if pattern in statement:
-                    is_verified = True
-                    confidence = 0.9  # High confidence for a known true fact
-                    details = f"Statement matches known true pattern: '{pattern}'."
-                    logger.info(f"[{self.node_name}] Statement '{data}' verified as TRUE. Details: {details}")
-                    break
+            # --- SIMULATED FACT-CHECKING LOGIC ---
+            # In a real system, this would involve calling an external API,
+            # querying a knowledge graph, or using a sophisticated NLP model.
+            # For this simulation, we use a simple keyword-based approach.
 
-            # If not verified as true, check against known false patterns
-            if not is_verified:
-                for pattern in self._KNOWN_FALSE_PATTERNS:
-                    if pattern in statement:
-                        is_verified = False  # Explicitly mark as false
-                        confidence = 0.1  # Low confidence for a known false fact
-                        details = f"Statement matches known false pattern: '{pattern}'."
-                        logger.warning(f"[{self.node_name}] Statement '{data}' identified as FALSE. Details: {details}")
-                        break
-
-            # If still inconclusive after checking known patterns, it remains unverified.
-            if details == "Statement could not be definitively verified or refuted with current knowledge.":
-                is_verified = False # Default to 'false' if verification is not established
-                logger.debug(f"[{self.node_name}] Statement '{data}' remains unverified after pattern matching.")
-
-            result = {
-                "statement": data,
-                "is_verified": is_verified,
-                "confidence": confidence,
-                "details": details
+            simulated_knowledge_base = {
+                "the sky is blue": {"status": "TRUE", "evidence": "Scientific observation of Rayleigh scattering."},
+                "birds can fly": {"status": "TRUE", "evidence": "Common biological characteristic of most bird species."},
+                "fish can climb trees": {"status": "FALSE", "evidence": "Fish are aquatic animals adapted to water environments."},
+                "humans have three eyes": {"status": "FALSE", "evidence": "Human anatomy typically includes two eyes."},
             }
-            logger.debug(
-                f"[{self.node_name}] Finished processing. Result: Verified={result['is_verified']}, "
-                f"Confidence={result['confidence']:.2f}."
+
+            if not claims_to_verify:
+                # If no specific claims, try to find general statements in the text
+                potential_claims = self._extract_potential_claims(text_to_check)
+                if not potential_claims:
+                    potential_claims = [text_to_check[:100].lower() + "..."] # Take a snippet if nothing specific
+                claims_to_verify = potential_claims
+                logger.info(f"[{self.node_name}] No specific claims provided. Auto-extracted {len(claims_to_verify)} potential claims.")
+
+            for claim in claims_to_verify:
+                normalized_claim = claim.strip().lower()
+                if normalized_claim in simulated_knowledge_base:
+                    fact_check_results[claim] = simulated_knowledge_base[normalized_claim]
+                elif any(phrase in normalized_claim for phrase in ["sky is green", "sun is cold"]):
+                    fact_check_results[claim] = {
+                        "status": "FALSE",
+                        "evidence": "Contradicts fundamental scientific facts."
+                    }
+                elif any(phrase in normalized_claim for phrase in ["water is wet", "fire is hot"]):
+                    fact_check_results[claim] = {
+                        "status": "TRUE",
+                        "evidence": "Generally accepted physical properties."
+                    }
+                else:
+                    fact_check_results[claim] = {
+                        "status": "UNVERIFIED",
+                        "evidence": "Could not verify using available knowledge base. Requires further investigation."
+                    }
+            # --- END SIMULATED FACT-CHECKING LOGIC ---
+
+            data["fact_check_results"] = fact_check_results
+            logger.info(
+                f"[{self.node_name}] Fact-checking completed for {len(claims_to_verify)} claims. "
+                f"Results: {fact_check_results}"
             )
-            return result
+            return data
 
         except Exception as e:
             logger.exception(
-                f"[{self.node_name}] An unexpected error occurred during fact-checking for statement: '{data}'."
+                f"[{self.node_name}] An unexpected error occurred during fact-checking: {e}"
             )
-            # Depending on framework conventions, either re-raise, return an error object, or a structured failure.
-            raise RuntimeError(
-                f"FactCheckerNode failed to process statement '{data}' due to an internal error: {e}"
-            ) from e
+            # On error, return data with an error message in results
+            data["fact_check_results"] = {
+                "_error": {
+                    "status": "ERROR",
+                    "reason": f"Failed to perform fact-check due to an internal error: {e}",
+                    "details": str(e)
+                }
+            }
+            return data
+
+    def _extract_potential_claims(self, text: str) -> List[str]:
+        """
+        A very basic simulated method to extract potential claims from text.
+        In a real scenario, this would use NLP techniques (e.g., dependency parsing,
+        open information extraction) to identify factual statements.
+        """
+        # For simulation, just split by common punctuation or assume simple sentences
+        sentences = [s.strip() for s in text.split('.') if s.strip()]
+        claims = []
+        for sentence in sentences:
+            if len(sentence) > 10: # Avoid very short fragments
+                claims.append(sentence)
+        return claims[:3] # Limit to top 3 potential claims for brevity
