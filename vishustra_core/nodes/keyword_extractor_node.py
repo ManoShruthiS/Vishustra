@@ -1,102 +1,106 @@
-
 import logging
 import re
+from collections import Counter
 from typing import Any, Dict, List, Set
 
+# Assume BaseNode is available from this path as per instructions
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class KeywordExtractorNode(BaseNode):
     """
-    A Vishustra processing node designed to extract relevant keywords from input text.
+    A Vishustra node that extracts keywords from a given text string.
 
-    This node provides a configurable approach to identify keywords by:
-    1. Normalizing the input text (converting to lowercase, removing punctuation).
-    2. Tokenizing the text into individual words.
-    3. Filtering out common stop words, configurable via the context.
-    4. Filtering out words shorter than a specified minimum length, also configurable.
-    5. Returning a list of unique, cleaned keywords.
+    This node tokenizes the input text, filters out common stop words and
+    short words, and then identifies the most frequent remaining words
+    as keywords. Configuration such as the number of keywords to extract
+    and custom stop words can be provided via the context.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of this node."""
+        """Returns the descriptive name of the node."""
         return "KeywordExtractor"
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Processes the input data to extract keywords based on configured parameters.
+        Processes the input data to extract keywords.
 
         Args:
-            data: The input data, expected to be a string of text from which
-                  keywords will be extracted.
-            context: A dictionary containing runtime context and configuration.
-                     Recognized keys:
-                     - 'stop_words' (Set[str] or List[str]): A collection of words
-                       to be excluded from the keyword list. If not provided,
-                       a sensible default set is used.
-                     - 'min_word_length' (int): The minimum character length a
-                       word must have to be considered a keyword. Defaults to 3.
+            data (Any): The input data, expected to be a string containing the text.
+            context (Dict[str, Any]): A dictionary containing runtime configuration.
+                                       Expected keys:
+                                       - 'top_n' (int, optional): The maximum number of keywords to return. Defaults to 5.
+                                       - 'min_word_length' (int, optional): Minimum length for a word to be considered. Defaults to 3.
+                                       - 'stop_words' (List[str], optional): A custom list of stop words to exclude.
+                                                                           Defaults to a common English stop word list.
 
         Returns:
-            A list of unique strings, sorted alphabetically, representing the
-            extracted keywords.
+            List[str]: A list of extracted keywords, sorted by frequency in descending order.
 
         Raises:
-            TypeError: If the input 'data' is not a string, as this node
-                       specifically operates on textual content.
+            TypeError: If the input 'data' is not a string.
         """
-        logger.debug(f"[{self.node_name}] Initiating keyword extraction for input of type: {type(data).__name__}")
+        logger.info(f"Node '{self.node_name}' initiated processing.")
 
         if not isinstance(data, str):
-            error_msg = (
-                f"[{self.node_name}] Invalid input data type. Expected 'str', "
-                f"but received '{type(data).__name__}'. Unable to extract keywords."
+            logger.error(
+                f"Invalid input data type for '{self.node_name}'. Expected 'str', "
+                f"but received '{type(data).__name__}'."
             )
-            logger.error(error_msg)
-            raise TypeError(error_msg)
+            raise TypeError(
+                f"Input data for '{self.node_name}' must be a string. "
+                f"Got '{type(data).__name__}'."
+            )
 
-        text = data.lower()
+        text_content = data.lower()
 
-        # Retrieve stop words from context, or use a default set
-        default_stop_words: Set[str] = set(context.get('stop_words', [
-            'a', 'an', 'the', 'is', 'are', 'was', 'were', 'and', 'or', 'but',
-            'for', 'nor', 'on', 'at', 'to', 'from', 'in', 'of', 'with', 'by',
-            'this', 'that', 'it', 'its', 'he', 'she', 'we', 'they', 'you', 'your',
-            'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'ourselves', 'you', 'your', 'yours',
-            'yourself', 'yourselves', 'he', 'him', 'his', 'himself', 'she', 'her', 'hers',
-            'herself', 'it', 'its', 'itself', 'they', 'them', 'their', 'theirs', 'themselves',
-            'what', 'which', 'who', 'whom', 'this', 'that', 'these', 'those', 'am', 'is', 'are',
-            'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'having', 'do', 'does',
-            'did', 'doing', 'a', 'an', 'the', 'and', 'but', 'if', 'or', 'because', 'as', 'until',
-            'while', 'of', 'at', 'by', 'for', 'with', 'about', 'against', 'between', 'into',
-            'through', 'during', 'before', 'after', 'above', 'below', 'to', 'from', 'up', 'down',
-            'in', 'out', 'on', 'off', 'over', 'under', 'again', 'further', 'then', 'once', 'here',
-            'there', 'when', 'where', 'why', 'how', 'all', 'any', 'both', 'each', 'few', 'more',
-            'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so',
-            'than', 'too', 'very', 's', 't', 'can', 'will', 'just', 'don', 'should', 'now'
-        ]))
+        # Configuration from context, with sensible defaults
+        top_n: int = context.get('top_n', 5)
+        min_word_length: int = context.get('min_word_length', 3)
 
-        # Retrieve minimum word length from context, with validation and fallback
-        min_word_length = context.get('min_word_length', 3)
-        if not isinstance(min_word_length, int) or min_word_length < 1:
+        # Default stop words. Can be overridden by context.
+        default_stop_words: Set[str] = {
+            "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+            "to", "of", "and", "or", "but", "if", "then", "else", "for", "with",
+            "on", "at", "by", "from", "into", "during", "in", "out", "up", "down",
+            "he", "she", "it", "we", "you", "they", "i", "me", "him", "her", "us", "them",
+            "my", "your", "his", "our", "their", "this", "that", "these", "those",
+            "have", "has", "had", "do", "does", "did", "not", "no", "yes", "can", "will",
+            "would", "should", "could", "get", "go", "say", "see", "make", "know", "take",
+            "about", "above", "after", "again", "all", "any", "before", "below", "between",
+            "both", "each", "few", "more", "most", "other", "some", "such", "only", "own",
+            "same", "so", "than", "too", "very", "s", "t", "can", "will", "just", "don", "should", "now",
+            "etc", "etc."
+        }
+        stop_words: Set[str] = set(context.get('stop_words', default_stop_words))
+
+        # Tokenize and clean words: remove punctuation, filter by length and stop words.
+        # Using regex to split by non-alphanumeric characters, ensuring words are clean.
+        words = re.findall(r'\b\w+\b', text_content)
+        
+        filtered_words = [
+            word for word in words
+            if len(word) >= min_word_length and word not in stop_words
+        ]
+
+        if not filtered_words:
             logger.warning(
-                f"[{self.node_name}] Invalid 'min_word_length' value in context ({min_word_length}). "
-                "Falling back to default minimum length of 3."
+                f"Node '{self.node_name}' found no significant keywords "
+                "after filtering, returning an empty list."
             )
-            min_word_length = 3
+            return []
 
-        # Remove punctuation and split into words. Using regex to handle various punctuation.
-        # This replaces any sequence of non-alphanumeric characters with a single space.
-        cleaned_text = re.sub(r'[\W_]+', ' ', text)
-        words = cleaned_text.split()
+        # Count word frequencies
+        word_counts: Counter[str] = Counter(filtered_words)
 
-        extracted_keywords: Set[str] = set()
-        for word in words:
-            if word and word not in default_stop_words and len(word) >= min_word_length:
-                extracted_keywords.add(word)
+        # Get the top N most common words
+        extracted_keywords: List[str] = [
+            word for word, count in word_counts.most_common(top_n)
+        ]
 
-        result = sorted(list(extracted_keywords))
-        logger.debug(f"[{self.node_name}] Successfully extracted {len(result)} unique keywords.")
-        return result
+        logger.info(
+            f"Node '{self.node_name}' successfully extracted {len(extracted_keywords)} keywords."
+        )
+        return extracted_keywords
