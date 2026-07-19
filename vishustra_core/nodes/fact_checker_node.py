@@ -1,152 +1,148 @@
 import logging
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, Union
+
+# Import the base node class from the framework's core
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class FactCheckerNode(BaseNode):
     """
-    A processing node that simulates fact-checking on textual content.
+    A processing node designed to simulate fact-checking of a given statement.
 
-    This node expects input data to be a dictionary, typically containing
-    a 'text' key with the content to be fact-checked and optionally
-    'claims_to_verify' for specific claims. It enriches the data
-    with 'fact_check_results'.
-
-    The current implementation uses a simplistic rule-based simulation.
-    In a real-world scenario, this would integrate with external fact-checking
-    APIs or knowledge bases.
+    This node takes an input statement (either as a string or embedded in a dictionary)
+    and evaluates its veracity. For this implementation, the fact-checking mechanism
+    is simulated using internal, hardcoded rules. In a production scenario, this node
+    would integrate with external fact-checking APIs, knowledge graphs, or NLP models
+    to perform real-time verification.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """
+        Returns the unique name of this node.
+        """
         return "FactCheckerNode"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
+    def process(self, data: Union[str, Dict[str, Any]], context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input data to simulate fact-checking.
+        Processes the input data to perform a simulated fact-check on a statement.
 
-        Expects `data` to be a dictionary, potentially containing:
-        - 'text' (str): The main content string to be fact-checked.
-        - 'claims_to_verify' (List[str], optional): Specific claims within
-          the text to verify. If not present, a general check is simulated.
+        The `data` input can be either:
+        - A `str`: The direct statement to be fact-checked.
+        - A `Dict[str, Any]`: Must contain a 'statement' key whose value is the string
+          to be fact-checked. Additional keys in the dictionary will be ignored
+          by the core fact-checking logic but might be preserved in the output.
+
+        The `context` dictionary provides runtime context, which can include parameters
+        like 'fact_check_sources' (a list of preferred sources) or 'confidence_threshold'.
+        This simulation primarily uses context for illustrative logging and result enrichment.
 
         Args:
-            data (Any): The input data. Expected to be a dictionary.
-            context (Dict[str, Any]): The operational context dictionary.
+            data: The statement to be fact-checked or a dictionary containing it.
+            context: A dictionary providing contextual information for processing.
 
         Returns:
-            Any: The input data dictionary augmented with 'fact_check_results'.
-                 Returns the original data if processing fails or input format
-                 is unexpected, after logging an error.
+            A `Dict[str, Any]` containing:
+            - 'original_statement': The statement that was checked.
+            - 'is_fact': `True` if verified as true, `False` if verified as false,
+                         `None` if the veracity could not be determined.
+            - 'reasoning': A string explaining the outcome of the fact-check.
+            - 'checked_by': The name of this node.
+            - 'context_info_used': An example of how context data might be reflected.
 
         Raises:
-            TypeError: If the input `data` is not a dictionary.
+            TypeError: If the `data` provided is neither a string nor a dictionary.
+            ValueError: If `data` is a dictionary but lacks a valid 'statement' key,
+                        or if the statement itself is empty or consists only of whitespace.
         """
-        if not isinstance(data, dict):
+        statement: str
+        original_input_data = data # Keep a reference to the original input for error messages/logging
+
+        # Extract the statement from the input data
+        if isinstance(data, str):
+            statement = data
+        elif isinstance(data, dict):
+            if 'statement' not in data or not isinstance(data.get('statement'), str):
+                logger.error(
+                    f"FactCheckerNode received a dictionary without a valid 'statement' key "
+                    f"or its value is not a string. Data: {original_input_data}"
+                )
+                raise ValueError(
+                    "Input dictionary must contain a 'statement' key with a non-empty string value."
+                )
+            statement = data['statement']
+        else:
             logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected dict, got {type(data)}."
+                f"Unsupported data type received by FactCheckerNode. Expected `str` or `Dict[str, Any]`, "
+                f"but got `{type(data).__name__}`. Data: {original_input_data}"
             )
             raise TypeError(
-                f"[{self.node_name}] Input data must be a dictionary."
+                f"FactCheckerNode expects 'data' to be a string or a dictionary "
+                f"with a 'statement' key, not {type(data).__name__}."
             )
 
-        text_to_check: str = data.get("text", "")
-        claims_to_verify: List[str] = data.get("claims_to_verify", [])
-        fact_check_results: Dict[str, Dict[str, str]] = {}
+        if not statement.strip():
+            logger.error(f"Received an empty or whitespace-only statement for fact-checking. Data: {original_input_data}")
+            raise ValueError("Statement for fact-checking cannot be empty.")
 
-        if not text_to_check:
-            logger.warning(
-                f"[{self.node_name}] 'text' key not found or empty in input data. "
-                "Skipping detailed fact-checking."
-            )
-            # Add a placeholder result indicating no text was found
-            fact_check_results["_general_status"] = {
-                "status": "UNVERIFIED",
-                "reason": "No text content provided for fact-checking."
-            }
-            data["fact_check_results"] = fact_check_results
-            return data
+        logger.info(f"Initiating fact-check for statement: '{statement[:100]}{'...' if len(statement) > 100 else ''}'")
+
+        # --- Simulated Fact-Checking Logic ---
+        # This section simulates the core logic. In a real-world application,
+        # this would involve calls to external services, complex NLP, or database lookups.
+        is_fact: Union[bool, None] = None
+        reasoning: str = "Simulated: Initial lookup yielded no definitive result."
+
+        # Normalize the statement for easier comparison in this simulation
+        normalized_statement = statement.lower().strip().replace('.', '').replace('!', '').replace('?', '')
+
+        # A small internal knowledge base for demonstration
+        known_facts_db = {
+            "water boils at 100 degrees celsius at sea level": True,
+            "the earth is flat": False,
+            "paris is the capital of france": True,
+            "the moon is made of cheese": False,
+            "birds are reptiles": False,
+            "the sun is a star": True,
+            "human beings can fly without assistance": False
+        }
+
+        if normalized_statement in known_facts_db:
+            is_fact = known_facts_db[normalized_statement]
+            reasoning = "Simulated: Matched against a small internal knowledge base."
+            logger.debug(f"Statement '{statement[:50]}...' matched in known facts. Result: {is_fact}")
+        else:
+            # Further simple heuristic for simulation
+            if "flat earth" in normalized_statement:
+                is_fact = False
+                reasoning = "Simulated: Identified as a widely disproven claim."
+                logger.debug(f"Statement '{statement[:50]}...' identified as a common misconception.")
+            elif "capital" in normalized_statement and "france" in normalized_statement and "paris" in normalized_statement:
+                is_fact = True
+                reasoning = "Simulated: Recognized as common geographical knowledge."
+                logger.debug(f"Statement '{statement[:50]}...' recognized as common knowledge via keywords.")
+            elif "sun" in normalized_statement and "star" in normalized_statement:
+                is_fact = True
+                reasoning = "Simulated: Recognized as basic astronomical knowledge."
+                logger.debug(f"Statement '{statement[:50]}...' recognized as basic knowledge via keywords.")
+            else:
+                is_fact = None # Undetermined
+                reasoning = "Simulated: Internal knowledge base and heuristics could not definitively verify or refute."
+                logger.info(f"Statement '{statement[:50]}...' could not be definitively verified by simulation.")
+
+        # Construct the result dictionary
+        result = {
+            "original_statement": statement,
+            "is_fact": is_fact,
+            "reasoning": reasoning,
+            "checked_by": self.node_name,
+            # Example of passing context information through the result
+            "context_info_used": context.get("fact_check_sources", ["N/A - Simulation"])
+        }
 
         logger.info(
-            f"[{self.node_name}] Initiating fact-check for text (length: {len(text_to_check)}) "
-            f"with {len(claims_to_verify)} specific claims."
+            f"Fact-check completed for statement '{statement[:100]}{'...' if len(statement) > 100 else ''}'. "
+            f"Result: is_fact={is_fact}"
         )
-
-        try:
-            # --- SIMULATED FACT-CHECKING LOGIC ---
-            # In a real system, this would involve calling an external API,
-            # querying a knowledge graph, or using a sophisticated NLP model.
-            # For this simulation, we use a simple keyword-based approach.
-
-            simulated_knowledge_base = {
-                "the sky is blue": {"status": "TRUE", "evidence": "Scientific observation of Rayleigh scattering."},
-                "birds can fly": {"status": "TRUE", "evidence": "Common biological characteristic of most bird species."},
-                "fish can climb trees": {"status": "FALSE", "evidence": "Fish are aquatic animals adapted to water environments."},
-                "humans have three eyes": {"status": "FALSE", "evidence": "Human anatomy typically includes two eyes."},
-            }
-
-            if not claims_to_verify:
-                # If no specific claims, try to find general statements in the text
-                potential_claims = self._extract_potential_claims(text_to_check)
-                if not potential_claims:
-                    potential_claims = [text_to_check[:100].lower() + "..."] # Take a snippet if nothing specific
-                claims_to_verify = potential_claims
-                logger.info(f"[{self.node_name}] No specific claims provided. Auto-extracted {len(claims_to_verify)} potential claims.")
-
-            for claim in claims_to_verify:
-                normalized_claim = claim.strip().lower()
-                if normalized_claim in simulated_knowledge_base:
-                    fact_check_results[claim] = simulated_knowledge_base[normalized_claim]
-                elif any(phrase in normalized_claim for phrase in ["sky is green", "sun is cold"]):
-                    fact_check_results[claim] = {
-                        "status": "FALSE",
-                        "evidence": "Contradicts fundamental scientific facts."
-                    }
-                elif any(phrase in normalized_claim for phrase in ["water is wet", "fire is hot"]):
-                    fact_check_results[claim] = {
-                        "status": "TRUE",
-                        "evidence": "Generally accepted physical properties."
-                    }
-                else:
-                    fact_check_results[claim] = {
-                        "status": "UNVERIFIED",
-                        "evidence": "Could not verify using available knowledge base. Requires further investigation."
-                    }
-            # --- END SIMULATED FACT-CHECKING LOGIC ---
-
-            data["fact_check_results"] = fact_check_results
-            logger.info(
-                f"[{self.node_name}] Fact-checking completed for {len(claims_to_verify)} claims. "
-                f"Results: {fact_check_results}"
-            )
-            return data
-
-        except Exception as e:
-            logger.exception(
-                f"[{self.node_name}] An unexpected error occurred during fact-checking: {e}"
-            )
-            # On error, return data with an error message in results
-            data["fact_check_results"] = {
-                "_error": {
-                    "status": "ERROR",
-                    "reason": f"Failed to perform fact-check due to an internal error: {e}",
-                    "details": str(e)
-                }
-            }
-            return data
-
-    def _extract_potential_claims(self, text: str) -> List[str]:
-        """
-        A very basic simulated method to extract potential claims from text.
-        In a real scenario, this would use NLP techniques (e.g., dependency parsing,
-        open information extraction) to identify factual statements.
-        """
-        # For simulation, just split by common punctuation or assume simple sentences
-        sentences = [s.strip() for s in text.split('.') if s.strip()]
-        claims = []
-        for sentence in sentences:
-            if len(sentence) > 10: # Avoid very short fragments
-                claims.append(sentence)
-        return claims[:3] # Limit to top 3 potential claims for brevity
+        return result
