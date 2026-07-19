@@ -1,64 +1,78 @@
-import logging
 import re
-from typing import Any, Dict, List
+import logging
+from typing import Any, Dict, List, Union, Set
 
+# BaseNode is expected to be available at this path in the Vishustra framework
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class URLExtractorNode(BaseNode):
     """
-    A processing node that extracts URLs from input text data.
+    A Vishustra processing node designed to extract URLs from textual data.
 
-    It identifies URLs starting with 'http://', 'https://', or 'www.'
-    and returns them as a list of strings.
+    This node efficiently processes either a single string or a list of strings,
+    identifying common URL patterns (e.g., those starting with http(s):// or www.)
+    and returning a unique collection of the URLs found. It incorporates robust
+    error handling for invalid input types, logging warnings and errors as appropriate.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """Returns the descriptive name of this processing node."""
         return "URL Extractor"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
+    def process(self, data: Union[str, List[str]], context: Dict[str, Any]) -> List[str]:
         """
-        Processes the input data to extract URLs.
+        Processes the input data to extract all unique URLs.
 
         Args:
-            data (Any): The input data, expected to be a string containing text.
-            context (Dict[str, Any]): A dictionary containing context information
-                                       for the current processing flow.
+            data: The input, which can be a single string or a list of strings.
+                  The node will iterate through strings to find URLs.
+            context: A dictionary for contextual information; not utilized by this node
+                     but included for `BaseNode` compatibility and future extensibility.
 
         Returns:
-            List[str]: A list of extracted URLs. Returns an empty list if no URLs
-                       are found or if the input data is not a string.
+            A sorted list of unique URLs found in the input data. Returns an empty list
+            if the input is invalid or if no URLs are detected.
         """
-        if not isinstance(data, str):
-            logger.warning(
-                "[%s] Invalid input data type. Expected 'str', but received '%s'. "
-                "Returning an empty list.",
-                self.node_name, type(data).__name__
+        all_extracted_urls: Set[str] = set()
+
+        if data is None:
+            logger.warning("URLExtractorNode received 'None' as input data. Returning an empty list of URLs.")
+            return []
+
+        # Ensure we have an iterable of strings to process
+        texts_to_process: List[str]
+        if isinstance(data, str):
+            texts_to_process = [data]
+        elif isinstance(data, list):
+            texts_to_process = data
+        else:
+            logger.error(
+                f"URLExtractorNode received an unsupported data type: {type(data).__name__}. "
+                "Expected 'str' or 'List[str]'. Returning an empty list."
             )
             return []
 
-        # Regular expression to match URLs starting with http(s):// or www.
-        # This pattern aims to be robust but avoids being overly greedy
-        # by not matching trailing punctuation unless it's part of the URL.
-        # It captures common URL structures and prevents matching parts of words.
-        url_pattern = re.compile(
-            r'\b(?:https?://|www\.)'  # Start with http://, https://, or www.
-            r'(?:[a-zA-Z0-9-._~:/?#[\]@!$&\'()*+,;=]|%[0-9a-fA-F]{2})+'  # URL characters
-            r'(?<![.,;])' # Negative lookbehind to not include trailing punctuation (like at end of sentence)
-        )
-        
-        extracted_urls = url_pattern.findall(data)
+        # Regex to capture common URL patterns.
+        # This pattern matches URLs starting with 'http://', 'https://', or 'www.'
+        # and continues to capture any non-whitespace, non-angle bracket, non-double quote characters.
+        # This approach provides a good balance between generality and accuracy for typical text.
+        url_pattern = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+')
 
-        if extracted_urls:
-            logger.debug(
-                "[%s] Successfully extracted %d URL(s). First URL: %s",
-                self.node_name, len(extracted_urls), extracted_urls[0]
-            )
-        else:
-            logger.debug("[%s] No URLs found in the input data.", self.node_name)
+        for i, text in enumerate(texts_to_process):
+            if not isinstance(text, str):
+                logger.warning(
+                    f"Skipping non-string item at index {i} in input list (type: {type(text).__name__}). "
+                    "URLExtractorNode expects a list of strings."
+                )
+                continue
             
-        return extracted_urls
-
+            # Find all matches in the current text block
+            found_urls_in_text = url_pattern.findall(text)
+            for url in found_urls_in_text:
+                all_extracted_urls.add(url)
+        
+        # Convert the set to a sorted list for consistent and deterministic output.
+        return sorted(list(all_extracted_urls))
