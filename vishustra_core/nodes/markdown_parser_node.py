@@ -1,6 +1,9 @@
+
 import logging
-import re
 from typing import Any, Dict
+
+# Assuming 'markdown' is an installed dependency in the Vishustra environment
+import markdown
 
 from vishustra_core.nodes.base_node import BaseNode
 
@@ -8,93 +11,65 @@ logger = logging.getLogger(__name__)
 
 class MarkdownParserNode(BaseNode):
     """
-    A Vishustra processing node that converts Markdown formatted text into
-    a simplified HTML representation.
+    A Vishustra node that parses Markdown formatted text into HTML.
 
-    This node expects the input `data` to be a string containing Markdown.
-    It performs a basic transformation, handling common elements like headers,
-    bold, and italic text, and paragraphs.
+    This node expects a string containing Markdown as input and outputs the
+    corresponding HTML string. It leverages the `markdown` library for parsing.
     """
+
+    def __init__(self):
+        """
+        Initializes the MarkdownParserNode.
+        """
+        super().__init__()
+        # Specific logger for this node to allow granular logging configuration
+        self._node_logger = logging.getLogger(f"{__name__}.{self.node_name}")
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """
+        Returns the descriptive name of the node.
+        """
         return "MarkdownParserNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, converting Markdown text to simplified HTML.
+        Processes the input data, converting Markdown text to HTML.
 
         Args:
-            data (Any): The input data, expected to be a string containing Markdown.
-            context (Dict[str, Any]): A dictionary for shared context, not directly
-                                      used by this node for parsing logic but
-                                      available for future extensions.
+            data: The input data, expected to be a string containing Markdown.
+            context: A dictionary containing contextual information for the process.
+                     Currently not directly used by this node but available for
+                     future extensions.
 
         Returns:
-            Any: A string containing the HTML representation of the input Markdown.
+            A string containing the HTML representation of the input Markdown.
 
         Raises:
-            TypeError: If the input `data` is not a string.
+            TypeError: If the input 'data' is not a string.
+            RuntimeError: If an error occurs during the Markdown parsing process.
         """
-        logger.debug(f"[{self.node_name}] Starting process for data type: {type(data)}")
+        self._node_logger.debug(f"[{self.node_name}] Starting markdown parsing process.")
 
         if not isinstance(data, str):
-            error_msg = f"[{self.node_name}] Invalid input data type. Expected str, got {type(data).__name__}."
-            logger.error(error_msg)
-            raise TypeError(error_msg)
+            self._node_logger.error(
+                f"[{self.node_name}] Invalid input data type. Expected 'str', "
+                f"but received '{type(data).__name__}'. Aborting process."
+            )
+            raise TypeError(
+                f"Input for '{self.node_name}' must be a string (Markdown text), "
+                f"but received type '{type(data).__name__}'."
+            )
 
-        html_lines = []
-        lines = data.split('\n')
-        
-        in_paragraph = False
+        try:
+            # Perform the Markdown to HTML conversion
+            parsed_html = markdown.markdown(data)
+            self._node_logger.info(f"[{self.node_name}] Successfully parsed markdown to HTML.")
+            return parsed_html
+        except Exception as e:
+            self._node_logger.exception(
+                f"[{self.node_name}] An unexpected error occurred during markdown parsing."
+            )
+            # Re-raise as a RuntimeError to signify a processing failure
+            raise RuntimeError(f"Failed to parse markdown in '{self.node_name}': {e}") from e
 
-        for line in lines:
-            stripped_line = line.strip()
-
-            if not stripped_line:
-                if in_paragraph:
-                    html_lines.append("</p>")
-                    in_paragraph = False
-                continue
-
-            # Headers
-            if stripped_line.startswith('# '):
-                if in_paragraph:
-                    html_lines.append("</p>")
-                    in_paragraph = False
-                html_lines.append(f"<h1>{stripped_line[2:].strip()}</h1>")
-                continue
-            elif stripped_line.startswith('## '):
-                if in_paragraph:
-                    html_lines.append("</p>")
-                    in_paragraph = False
-                html_lines.append(f"<h2>{stripped_line[3:].strip()}</h2>")
-                continue
-            elif stripped_line.startswith('### '):
-                if in_paragraph:
-                    html_lines.append("</p>")
-                    in_paragraph = False
-                html_lines.append(f"<h3>{stripped_line[4:].strip()}</h3>")
-                continue
-            # ... can extend for H4-H6
-
-            # Paragraphs and inline formatting
-            if not in_paragraph:
-                html_lines.append("<p>")
-                in_paragraph = True
-
-            processed_line = stripped_line
-            # Basic bold: **text** -> <strong>text</strong>
-            processed_line = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', processed_line)
-            # Basic italic: *text* -> <em>text</em> (only if not already bold markers)
-            processed_line = re.sub(r'(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)', r'<em>\1</em>', processed_line)
-            
-            html_lines.append(processed_line)
-
-        if in_paragraph:
-            html_lines.append("</p>")
-
-        result_html = "\n".join(html_lines)
-        logger.debug(f"[{self.node_name}] Successfully processed data to HTML.")
-        return result_html
