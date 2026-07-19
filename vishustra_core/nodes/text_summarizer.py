@@ -8,110 +8,117 @@ logger = logging.getLogger(__name__)
 
 class TextSummarizerNode(BaseNode):
     """
-    A Vishustra processing node responsible for generating a summary of
-    input text. It simulates summarization by extracting a subset of
-    sentences based on configuration provided in the context or default heuristics.
+    A processing node designed to simulate text summarization.
+
+    This node takes a string of text and generates a shorter version
+    based on specified parameters in the context, such as a target
+    sentence count or a summary ratio. It is intended for orchestrating
+    LLM workflows by providing a modular component for text reduction.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """Returns the descriptive name of the node."""
         return "TextSummarizer"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, expecting a string, and returns a summarized version.
+        Processes the input text to generate a summary.
 
-        The summarization logic can be controlled via the 'context' dictionary:
-        - 'summary_length_ratio' (float): Desired length of the summary as a
-                                          ratio (0.0 to 1.0) of the original text's
-                                          sentence count. Takes precedence over
-                                          'max_sentences'.
-        - 'max_sentences' (int): Maximum number of sentences to include in the summary.
-                                 Defaults to 3 if no ratio is provided.
+        The summarization is simulated by extracting a subset of sentences
+        from the input text.
 
-        Args:
-            data: The input text as a string to be summarized.
-            context: A dictionary containing operational parameters for summarization.
+        Expected 'data':
+            A string containing the text to be summarized.
+
+        Expected 'context' parameters (optional):
+            - 'target_sentence_count' (int): The desired maximum number of
+              sentences in the summary. If 0, an empty string is returned.
+              Overrides 'summary_ratio' if both are provided.
+            - 'summary_ratio' (float): The ratio of original sentences to
+              retain in the summary (e.g., 0.3 for 30%). If this results in
+              zero sentences but the original text has content, at least
+              one sentence will be returned (unless explicitly 0.0 ratio).
+              Must be between 0.0 and 1.0.
 
         Returns:
-            A string representing the summarized text.
+            str: The summarized text. An empty string is returned if the
+                 input data is empty, no sentences are detected, or if
+                 'target_sentence_count' is explicitly 0.
 
         Raises:
             TypeError: If the input 'data' is not a string.
-            ValueError: If 'summary_length_ratio' or 'max_sentences' in context are invalid.
+            ValueError: If 'target_sentence_count' or 'summary_ratio' in the
+                        context are of invalid types or out of acceptable ranges.
         """
         if not isinstance(data, str):
             logger.error(
-                "TextSummarizerNode received non-string data. Expected type 'str', got '%s'.",
-                type(data).__name__
+                f"TextSummarizerNode received invalid data type. Expected str, got {type(data).__name__}."
             )
-            raise TypeError("Input data for TextSummarizerNode must be a string.")
+            raise TypeError(
+                f"Input 'data' must be a string, got {type(data).__name__}."
+            )
 
-        text = data.strip()
-        if not text:
-            logger.warning("TextSummarizerNode received empty or whitespace-only text. Returning empty string.")
+        if not data.strip():
+            logger.warning(
+                "TextSummarizerNode received empty or whitespace-only text. Returning empty string."
+            )
             return ""
 
-        # A basic sentence splitting for demonstration.
-        # In a production system, a more robust NLP library (e.g., NLTK, spaCy)
-        # would typically be used for precise sentence tokenization.
-        sentences = re.split(r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?|\!)\s+', text)
-        sentences = [s.strip() for s in sentences if s.strip()]
+        # Simple sentence tokenizer for simulation purposes.
+        # This regex splits by common sentence terminators (., !, ?) followed by a space,
+        # keeping the terminator as part of the preceding sentence.
+        sentences = re.split(r'(?<=[.!?])\s+', data.strip())
+        sentences = [s.strip() for s in sentences if s.strip()] # Filter out any empty strings resulting from split
 
         if not sentences:
-            logger.warning(
-                "TextSummarizerNode could not split text into discernible sentences. Returning original text."
-            )
-            return text
+            logger.warning("TextSummarizerNode could not detect any sentences in the input. Returning empty string.")
+            return ""
 
-        num_sentences_to_summarize: int = 0
-        total_sentences = len(sentences)
+        target_sentence_count = context.get('target_sentence_count')
+        summary_ratio = context.get('summary_ratio')
 
-        # Prioritize summary length ratio if provided and valid
-        summary_length_ratio = context.get('summary_length_ratio')
-        if isinstance(summary_length_ratio, (int, float)):
-            if not (0.0 < summary_length_ratio <= 1.0):
+        num_sentences_to_keep = 0 # Initialize, will be updated based on context or defaults
+
+        if target_sentence_count is not None:
+            if not isinstance(target_sentence_count, int) or target_sentence_count < 0:
                 logger.error(
-                    "Invalid 'summary_length_ratio' in context: %s. Must be between 0.0 and 1.0 (exclusive of 0).",
-                    summary_length_ratio
+                    f"Invalid 'target_sentence_count' in context: {target_sentence_count}. "
+                    "Must be a non-negative integer."
                 )
-                raise ValueError("Invalid 'summary_length_ratio'. Must be between 0.0 and 1.0.")
-            num_sentences_to_summarize = max(1, int(total_sentences * summary_length_ratio))
-            logger.debug(
-                "Summarizing with ratio %.2f, targeting %d of %d sentences.",
-                summary_length_ratio, num_sentences_to_summarize, total_sentences
-            )
+                raise ValueError(
+                    f"'target_sentence_count' must be a non-negative integer, "
+                    f"got {type(target_sentence_count).__name__}."
+                )
+            num_sentences_to_keep = min(target_sentence_count, len(sentences))
+        elif summary_ratio is not None:
+            if not isinstance(summary_ratio, (int, float)) or not (0.0 <= summary_ratio <= 1.0):
+                logger.error(
+                    f"Invalid 'summary_ratio' in context: {summary_ratio}. "
+                    "Must be a float between 0.0 and 1.0."
+                )
+                raise ValueError(
+                    f"'summary_ratio' must be a float between 0.0 and 1.0, "
+                    f"got {type(summary_ratio).__name__}."
+                )
+            # Calculate based on ratio. Ensure at least 1 sentence if original has sentences and ratio > 0,
+            # unless the ratio itself is 0.0.
+            if len(sentences) > 0 and summary_ratio > 0.0:
+                num_sentences_to_keep = max(1, int(len(sentences) * summary_ratio))
+            num_sentences_to_keep = min(num_sentences_to_keep, len(sentences))
         else:
-            # Fallback to max_sentences parameter
-            max_sentences = context.get('max_sentences', 3)  # Default to 3 sentences
-            if not isinstance(max_sentences, int) or max_sentences <= 0:
-                logger.error(
-                    "Invalid 'max_sentences' in context: %s. Must be a positive integer.",
-                    max_sentences
-                )
-                raise ValueError("Invalid 'max_sentences'. Must be a positive integer.")
-            num_sentences_to_summarize = min(total_sentences, max_sentences)
-            logger.debug(
-                "Summarizing with max sentences %d, targeting %d of %d sentences.",
-                max_sentences, num_sentences_to_summarize, total_sentences
-            )
+            # Default behavior if no parameters are provided
+            default_summary_ratio = 0.3
+            if len(sentences) > 0: # Ensure we don't try to get a sentence from an empty list
+                num_sentences_to_keep = max(1, int(len(sentences) * default_summary_ratio))
+            num_sentences_to_keep = min(num_sentences_to_keep, len(sentences))
+            logger.debug(f"No summarization parameters provided. Using default summary_ratio of {default_summary_ratio}.")
 
-        # Ensure we always attempt to return at least one sentence if available
-        if num_sentences_to_summarize == 0 and total_sentences > 0:
-            logger.warning(
-                "Calculated 0 sentences for summary, but text contains sentences. Defaulting to 1 sentence."
-            )
-            num_sentences_to_summarize = 1
-        elif num_sentences_to_summarize == 0: # Case where total_sentences is also 0
-             return ""
-
-
-        summary_sentences = sentences[:num_sentences_to_summarize]
-        summary = " ".join(summary_sentences)
+        summarized_text = " ".join(sentences[:num_sentences_to_keep])
 
         logger.info(
-            "Successfully summarized text (original length: %d chars, summary length: %d chars).",
-            len(text), len(summary)
+            f"TextSummarizerNode processed text (original length: {len(data)} chars, "
+            f"summary length: {len(summarized_text)} chars, "
+            f"sentences kept: {num_sentences_to_keep})."
         )
-        return summary
+        return summarized_text
