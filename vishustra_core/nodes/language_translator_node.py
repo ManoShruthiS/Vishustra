@@ -1,99 +1,118 @@
 import logging
 from typing import Any, Dict
 
-# Assuming BaseNode is part of the core Vishustra framework as specified
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class LanguageTranslatorNode(BaseNode):
     """
-    A Vishustra processing node designed to simulate language translation of text.
+    A Vishustra node responsible for simulating language translation of text data.
 
-    This node expects the input `data` to be a string containing the text
-    to be translated. The `context` dictionary must provide the
-    'target_language' for the translation. An optional 'source_language'
-    can also be provided.
-
-    In a production environment, this node would integrate with a robust
-    third-party translation service (e.g., DeepL, Google Cloud Translate).
-    For this implementation, translation is simulated for demonstration purposes.
+    This node expects a string as input data and a 'target_language' key in the
+    context dictionary to specify the language to translate to.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of this node."""
+        """Returns the name of the node."""
         return "LanguageTranslatorNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Translates the input text `data` into the language specified by
-        'target_language' in the `context`.
+        Simulates the translation of input text data to a specified target language.
 
         Args:
-            data: The text string to be translated.
-            context: A dictionary containing parameters for the translation.
-                     Must include:
-                     - 'target_language' (str): The ISO 639-1 code of the
-                                                language to translate into (e.g., 'es', 'fr').
-                     Can optionally include:
-                     - 'source_language' (str): The ISO 639-1 code of the
-                                                original text's language (e.g., 'en').
-                                                If not provided, it's considered 'auto-detected'.
+            data (Any): The input data to be translated. Expected to be a string.
+            context (Dict[str, Any]): A dictionary containing contextual information,
+                                       expected to include 'target_language'.
 
         Returns:
-            str: A string representing the simulated translated text.
+            Any: The simulated translated text (a string).
 
         Raises:
             TypeError: If the input `data` is not a string.
-            ValueError: If 'target_language' is missing or not a string in the `context`.
-            RuntimeError: If an unexpected issue occurs during the simulated translation process.
+            ValueError: If 'target_language' is missing or not a string in the context.
         """
-        logger.debug(f"[{self.node_name}] Initiating process with data type: {type(data)}")
-
         if not isinstance(data, str):
             logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected 'str', "
-                f"but received '{type(data).__name__}'."
+                f"[{self.node_name}] Invalid input data type. Expected 'str', got '{type(data).__name__}'."
             )
-            raise TypeError(f"Input data must be a string for '{self.node_name}'.")
+            raise TypeError(
+                f"[{self.node_name}] Input data must be a string for translation. "
+                f"Received type: {type(data).__name__}"
+            )
 
-        target_language = context.get('target_language')
+        target_language = context.get("target_language")
         if not isinstance(target_language, str) or not target_language:
             logger.error(
-                f"[{self.node_name}] 'target_language' is missing or not a valid string in context. "
-                f"Received: '{target_language}'."
+                f"[{self.node_name}] 'target_language' is missing or invalid in context. "
+                "It must be a non-empty string."
             )
             raise ValueError(
-                f"Context must contain a valid 'target_language' string for '{self.node_name}'."
+                f"[{self.node_name}] 'target_language' must be provided as a non-empty string in the context. "
+                f"Received: {target_language}"
             )
 
-        source_language = context.get('source_language', 'auto-detected')
-        if not isinstance(source_language, str):
-            logger.warning(
-                f"[{self.node_name}] 'source_language' in context is not a string "
-                f"('{type(source_language).__name__}'). Defaulting to 'auto-detected'."
-            )
-            source_language = 'auto-detected'
+        logger.info(
+            f"[{self.node_name}] Attempting to simulate translation of data to '{target_language}'."
+        )
 
-        try:
-            # Simulate the translation process.
-            # In a real implementation, this block would invoke an external translation API.
-            translated_content = (
-                f"[Simulated Translation from {source_language.upper()} to {target_language.upper()}] "
-                f"Original Text: '{data}'."
-            )
+        # Simulate translation by appending a tag. In a real scenario, this would
+        # involve an external translation API call.
+        translated_data = f"{data} [Translated to {target_language}]"
 
-            logger.info(
-                f"[{self.node_name}] Successfully simulated translation from "
-                f"'{source_language}' to '{target_language}' for text (first 50 chars): "
-                f"'{data[:50]}{'...' if len(data) > 50 else ''}'."
-            )
-            return translated_content
-        except Exception as e:
-            # Catching a broad exception for simulation.
-            # A real translator would handle specific API exceptions.
-            logger.exception(
-                f"[{self.node_name}] An unexpected error occurred during simulated translation."
-            )
-            raise RuntimeError(f"Translation failed in '{self.node_name}': {e}") from e
+        logger.debug(
+            f"[{self.node_name}] Successfully simulated translation to '{target_language}'. "
+            f"Original length: {len(data)}, Translated length: {len(translated_data)}"
+        )
+        return translated_data
+
+# Example usage (for internal testing, not part of the module's core functionality)
+if __name__ == '__main__':
+    # Configure basic logging for standalone execution
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+    translator_node = LanguageTranslatorNode()
+
+    # Test Case 1: Successful translation
+    text_to_translate = "Hello, world!"
+    translation_context = {"target_language": "Spanish"}
+    try:
+        translated_result = translator_node.process(text_to_translate, translation_context)
+        print(f"Original: '{text_to_translate}'")
+        print(f"Translated: '{translated_result}'")
+        assert translated_result == "Hello, world! [Translated to Spanish]"
+    except Exception as e:
+        print(f"Error during successful translation test: {e}")
+
+    print("\n--- Testing error cases ---")
+
+    # Test Case 2: Missing target_language
+    text_to_translate_error = "This should fail."
+    missing_lang_context = {"source_language": "English"}
+    try:
+        translator_node.process(text_to_translate_error, missing_lang_context)
+    except ValueError as e:
+        print(f"Caught expected error (missing target_language): {e}")
+    except Exception as e:
+        print(f"Caught unexpected error type: {type(e).__name__} - {e}")
+
+    # Test Case 3: Invalid data type
+    invalid_data = 12345
+    valid_lang_context = {"target_language": "French"}
+    try:
+        translator_node.process(invalid_data, valid_lang_context)
+    except TypeError as e:
+        print(f"Caught expected error (invalid data type): {e}")
+    except Exception as e:
+        print(f"Caught unexpected error type: {type(e).__name__} - {e}")
+
+    # Test Case 4: Empty target_language
+    empty_lang_context = {"target_language": ""}
+    try:
+        translator_node.process(text_to_translate, empty_lang_context)
+    except ValueError as e:
+        print(f"Caught expected error (empty target_language): {e}")
+    except Exception as e:
+        print(f"Caught unexpected error type: {type(e).__name__} - {e}")
