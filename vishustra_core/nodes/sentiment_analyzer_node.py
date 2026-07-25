@@ -1,118 +1,94 @@
 import logging
-import random
 from typing import Any, Dict
 
+# Assuming BaseNode is available at this path as per project context
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class SentimentAnalyzerNode(BaseNode):
     """
-    A processing node that analyzes the sentiment of a given text.
-    It simulates sentiment analysis without relying on external NLP libraries.
+    A Vishustra node that performs simulated sentiment analysis on input text.
+
+    This node processes a given string, attempting to classify its sentiment
+    as positive, negative, mixed, or neutral based on a simple keyword matching
+    mechanism. It's designed to illustrate data transformation within the framework.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
-        return "SentimentAnalyzerNode"
+        """
+        Returns the descriptive name of the node.
+        """
+        return "SentimentAnalyzer"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input data to determine its sentiment.
+        Processes the input data (expected to be a string) to determine its sentiment.
 
-        Expected `data` input: A string containing the text to be analyzed.
-        Expected `context` input: A dictionary (not directly used by this node's logic,
-                                  but available for potential future extensions).
+        The sentiment analysis is simulated using a basic keyword-matching algorithm.
+        This method ensures robust handling of input types and provides a structured
+        output including the detected sentiment and a simulated confidence score.
 
         Args:
-            data (Any): The input data, expected to be a string of text.
+            data (Any): The input data, expected to be a string containing the text
+                        to be analyzed for sentiment.
             context (Dict[str, Any]): A dictionary containing contextual information
-                                       for the processing.
+                                     relevant to the current processing flow.
+                                     This node does not directly use context but
+                                     receives it as per BaseNode contract.
 
         Returns:
-            Dict[str, Any]: A dictionary containing:
-                            - 'text': The original input text.
-                            - 'sentiment': A string indicating the sentiment ("positive",
-                                           "negative", or "neutral").
-                            - 'score': A float representing the sentiment strength,
-                                       ranging from -1.0 (strongly negative) to 1.0
-                                       (strongly positive).
+            Dict[str, Any]: A dictionary containing the analysis result, with keys
+                            "sentiment" (e.g., "positive", "negative", "neutral", "mixed"),
+                            "confidence" (float between 0.0 and 1.0), and "analyzed_text".
 
         Raises:
-            TypeError: If the input `data` is not a string.
+            TypeError: If the input 'data' is not a string.
         """
         if not isinstance(data, str):
             logger.error(
-                "[%s] Invalid input data type. Expected 'str', got '%s'. Data: %s",
-                self.node_name,
-                type(data).__name__,
-                data
+                f"SentimentAnalyzerNode received invalid data type: {type(data)}. "
+                "Expected a string for sentiment analysis."
             )
-            raise TypeError(f"SentimentAnalyzerNode expects string input, got {type(data).__name__}")
+            raise TypeError(
+                f"SentimentAnalyzerNode requires string data for processing, "
+                f"but received {type(data)}."
+            )
 
-        text = data.lower()
+        text = data.strip()
+        if not text:
+            logger.warning("SentimentAnalyzerNode received an empty or whitespace-only string. "
+                           "Returning neutral sentiment.")
+            return {"sentiment": "neutral", "confidence": 0.5, "analyzed_text": data}
+
         sentiment = "neutral"
-        score = random.uniform(-0.2, 0.2)  # Default neutral score
+        confidence = 0.5 # Default confidence for neutral
 
-        positive_keywords = {"good", "great", "excellent", "wonderful", "love", "happy", "positive", "amazing", "fantastic", "brilliant"}
-        negative_keywords = {"bad", "terrible", "horrible", "awful", "hate", "negative", "poor", "unhappy", "frustrating", "disappointing"}
+        # Simple keyword-based sentiment simulation
+        positive_keywords = {"good", "great", "excellent", "happy", "love", "awesome", "fantastic", "positive", "joy"}
+        negative_keywords = {"bad", "terrible", "awful", "unhappy", "hate", "poor", "negative", "horrible", "sad"}
 
-        pos_count = sum(1 for word in text.split() if word in positive_keywords)
-        neg_count = sum(1 for word in text.split() if word in negative_keywords)
+        normalized_text = text.lower()
+        words = set(normalized_text.split()) # Use set for faster lookups
 
-        if pos_count > neg_count:
+        is_positive = any(word in words for word in positive_keywords)
+        is_negative = any(word in words for word in negative_keywords)
+
+        if is_positive and not is_negative:
             sentiment = "positive"
-            score = random.uniform(0.6, 1.0)  # Strong positive
-        elif neg_count > pos_count:
+            confidence = 0.9
+        elif is_negative and not is_positive:
             sentiment = "negative"
-            score = random.uniform(-1.0, -0.6)  # Strong negative
-        elif pos_count == 0 and neg_count == 0:
+            confidence = 0.9
+        elif is_positive and is_negative:
+            # If both positive and negative keywords are present
+            sentiment = "mixed"
+            confidence = 0.7
+        else:
             sentiment = "neutral"
-            score = random.uniform(-0.2, 0.2) # Genuinely neutral if no keywords
-        else: # Equal counts of positive and negative keywords, or non-zero and equal
-            sentiment = "neutral"
-            score = random.uniform(-0.4, 0.4) # Slightly less sure neutral
+            confidence = 0.6 # Slightly higher than default if processed successfully without strong signals
 
-        result = {
-            "text": data,
-            "sentiment": sentiment,
-            "score": round(score, 4)
-        }
-
-        logger.info(
-            "[%s] Processed text sentiment: '%s' (score: %.4f) for input text (truncated): '%s'",
-            self.node_name,
-            result["sentiment"],
-            result["score"],
-            data[:50] + "..." if len(data) > 50 else data
-        )
+        result = {"sentiment": sentiment, "confidence": confidence, "analyzed_text": data}
+        logger.debug(f"Sentiment analysis for text '{data[:50]}...': {result}")
         return result
-
-# Example of how to use this node (for testing/demonstration purposes, not part of the class itself)
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
-    sentiment_node = SentimentAnalyzerNode()
-
-    test_texts = [
-        "This is an absolutely wonderful product! I love it.",
-        "The service was terrible and I am very unhappy with the experience.",
-        "It's an average day, nothing special happened.",
-        "The documentation is good but the performance is bad.",
-        "",
-        "Fantastic brilliant excellent, very good!",
-        "Horrible, awful, terrible, bad.",
-        123  # This should trigger an error
-    ]
-
-    for i, text_input in enumerate(test_texts):
-        print(f"\n--- Test Case {i+1} ---")
-        try:
-            result = sentiment_node.process(text_input, {})
-            print(f"Input: '{result['text']}'")
-            print(f"Sentiment: {result['sentiment']} (Score: {result['score']})")
-        except TypeError as e:
-            print(f"Error processing input '{text_input}': {e}")
-        except Exception as e:
-            print(f"An unexpected error occurred: {e}")
