@@ -1,130 +1,185 @@
 import logging
-from typing import Any, Dict, Hashable, Optional
+import time
+from typing import Any, Dict, Optional, Tuple
 
-from vishustra_core.nodes.base_node import BaseNode
+# Importing BaseNode from the specified project path
+try:
+    from vishustra_core.nodes.base_node import BaseNode
+except ImportError:
+    # Fallback for local development environments where the full package
+    # structure might not be available yet.
+    from abc import ABC, abstractmethod
+
+    class BaseNode(ABC):
+        @abstractmethod
+        def process(self, data: Any, context: Dict[str, Any]) -> Any:
+            """Processes the input data and returns the result."""
+            pass
+            
+        @property
+        @abstractmethod
+        def node_name(self) -> str:
+            """Returns the name of the node."""
+            pass
 
 logger = logging.getLogger(__name__)
 
-
 class CacheManagerNode(BaseNode):
     """
-    Manages an in-memory cache for Vishustra processing nodes.
+    A processing node designed to manage an in-memory cache.
+    It supports 'get', 'set', and 'invalidate' operations on cache entries,
+    including an optional Time-To-Live (TTL) for 'set' operations.
 
-    This node supports 'get', 'set', 'clear_key', and 'clear_all' operations
-    based on instructions provided in the `context` dictionary. It provides
-    efficient retrieval of previously processed data.
+    The node's behavior is dictated by the 'cache_action' key within the context dictionary:
+    - 'get': Attempts to retrieve data from the cache using 'cache_key'.
+             Returns the cached data if found and not expired, otherwise None.
+    - 'set': Stores the input 'data' under 'cache_key' in the cache.
+             An optional 'ttl_seconds' can be provided in context for expiration.
+             Returns the data that was successfully stored.
+    - 'invalidate': Removes an entry identified by 'cache_key' from the cache.
+                    Returns True if the entry was removed, False if it didn't exist.
     """
 
+    # Internal in-memory cache storage: {cache_key: (value, expiry_timestamp_float_or_None)}
+    _cache: Dict[str, Tuple[Any, Optional[float]]]
+
     def __init__(self):
+        """Initializes the CacheManagerNode and its internal cache."""
         super().__init__()
-        self._cache: Dict[Hashable, Any] = {}
-        logger.info("CacheManagerNode initialized with an empty in-memory cache.")
+        self._cache = {}
+        logger.info("CacheManagerNode initialized with an in-memory cache.")
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """Returns the descriptive name of this node."""
         return "CacheManager"
+
+    def _is_expired(self, expiry_timestamp: Optional[float]) -> bool:
+        """
+        Checks if a cache entry has expired based on its timestamp.
+
+        Args:
+            expiry_timestamp: The absolute timestamp when the entry expires, or None for no expiration.
+
+        Returns:
+            True if the entry has expired, False otherwise.
+        """
+        if expiry_timestamp is None:
+            return False
+        return time.time() > expiry_timestamp
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Performs cache operations (get, set, clear_key, clear_all) based on
-        the 'cache_operation' and 'cache_key' specified in the context.
+        Executes a cache management operation based on the provided context.
 
-        The `context` dictionary will be updated with `cache_status`, `cache_hit`,
-        and `cache_result` to provide comprehensive feedback on the operation.
-
-        Parameters:
-            data (Any):
-                - For 'set' operation: The value to be stored in the cache.
-                - For 'get', 'clear_key', 'clear_all' operations: This parameter
-                  is generally ignored by the CacheManagerNode itself, but it
-                  is passed along as per the BaseNode interface.
-            context (Dict[str, Any]): A dictionary containing operation details.
-                - 'cache_operation' (str, required): Specifies the action to perform.
-                  Must be one of "get", "set", "clear_key", or "clear_all".
-                - 'cache_key' (Hashable, required for 'get', 'set', 'clear_key'):
-                  The key associated with the cache entry.
+        Args:
+            data: The input data. For 'set' actions, this is the value to cache.
+                  For 'get' and 'invalidate', this parameter is typically ignored.
+            context: A dictionary containing operational parameters:
+                     - 'cache_key' (str): The unique key for the cache operation. (Required)
+                     - 'cache_action' (str): The specific action to perform ('get', 'set', 'invalidate'). (Required)
+                     - 'ttl_seconds' (float, optional): Time-To-Live in seconds for 'set' actions.
 
         Returns:
-            Any:
-                - 'get' operation: The cached value if found, otherwise `None`.
-                - 'set' operation: The value that was just stored in the cache.
-                - 'clear_key' operation: `True` if the key was found and cleared,
-                  `False` otherwise.
-                - 'clear_all' operation: `True` upon successful clearing of the
-                  entire cache.
+            Any: The result of the cache operation, which varies by action:
+                 - 'get': The cached data if available and valid, otherwise None.
+                 - 'set': The 'data' that was successfully stored in the cache.
+                 - 'invalidate': True if the entry was successfully removed, False otherwise.
 
         Raises:
-            ValueError: If 'cache_operation' is missing or invalid, or if 'cache_key'
-                        is missing for operations that require it.
-            TypeError: If 'cache_key' is provided and is not hashable.
+            ValueError: If 'cache_key' or 'cache_action' are missing, invalid, or unsupported.
+            TypeError: If 'ttl_seconds' is provided but is not a valid numeric type.
         """
-        operation = context.get("cache_operation")
         cache_key = context.get("cache_key")
+        cache_action = context.get("cache_action")
 
-        # --- Input Validation ---
-        if not operation:
-            logger.error("CacheManagerNode received a request without 'cache_operation' in context.")
-            raise ValueError("Missing 'cache_operation' in context. Expected 'get', 'set', 'clear_key', or 'clear_all'.")
+        if not isinstance(cache_key, str) or not cache_key.strip():
+            logger.error("Context error: 'cache_key' must be a non-empty string for CacheManagerNode.")
+            raise ValueError("CacheManagerNode requires a valid 'cache_key' (non-empty string) in context.")
 
-        if operation in ["get", "set", "clear_key"] and cache_key is None:
-            logger.error(f"CacheManagerNode operation '{operation}' requires 'cache_key' in context, but it was missing.")
-            raise ValueError(f"Operation '{operation}' requires 'cache_key' in context.")
+        if not isinstance(cache_action, str) or not cache_action.strip():
+            logger.error(f"Context error for key '{cache_key}': 'cache_action' must be a non-empty string.")
+            raise ValueError("CacheManagerNode requires a valid 'cache_action' (non-empty string) in context.")
 
-        if cache_key is not None:
-            try:
-                hash(cache_key)
-            except TypeError as e:
-                logger.error(f"CacheManagerNode received a non-hashable cache key: {cache_key} (Type: {type(cache_key).__name__})")
-                raise TypeError(f"Cache key must be hashable. Encountered type: {type(cache_key).__name__}") from e
+        action = cache_action.lower()
 
-        # --- Initialize Context Feedback ---
-        context["cache_status"] = "unknown"
-        context["cache_hit"] = False
-        context["cache_result"] = None
-
-        # --- Perform Cache Operation ---
-        if operation == "get":
-            if cache_key in self._cache:
-                value = self._cache[cache_key]
-                context["cache_status"] = "hit"
-                context["cache_hit"] = True
-                context["cache_result"] = value
-                logger.debug(f"Cache hit for key: '{cache_key}'")
-                return value
-            else:
-                context["cache_status"] = "miss"
-                context["cache_hit"] = False
-                logger.debug(f"Cache miss for key: '{cache_key}'")
-                return None
-
-        elif operation == "set":
-            self._cache[cache_key] = data
-            context["cache_status"] = "set"
-            context["cache_result"] = data
-            logger.debug(f"Cache set for key: '{cache_key}' with value of type: {type(data).__name__}")
-            return data
-
-        elif operation == "clear_key":
-            if cache_key in self._cache:
-                del self._cache[cache_key]
-                context["cache_status"] = "cleared_key"
-                context["cache_result"] = True
-                logger.debug(f"Cache entry cleared for key: '{cache_key}'")
-                return True
-            else:
-                context["cache_status"] = "key_not_found"
-                context["cache_result"] = False
-                logger.warning(f"Attempted to clear non-existent cache key: '{cache_key}'")
-                return False
-
-        elif operation == "clear_all":
-            self._cache.clear()
-            context["cache_status"] = "cleared_all"
-            context["cache_result"] = True
-            logger.info("Entire cache has been cleared.")
-            return True
-
+        if action == "get":
+            return self._handle_get(cache_key)
+        elif action == "set":
+            ttl_seconds = context.get("ttl_seconds")
+            return self._handle_set(cache_key, data, ttl_seconds)
+        elif action == "invalidate":
+            return self._handle_invalidate(cache_key)
         else:
-            logger.error(f"CacheManagerNode received an unknown 'cache_operation': '{operation}'")
-            raise ValueError(f"Unknown 'cache_operation': '{operation}'. Must be 'get', 'set', 'clear_key', or 'clear_all'.")
+            logger.error(f"Unsupported cache action '{cache_action}' for key '{cache_key}'.")
+            raise ValueError(f"Unsupported cache action: '{cache_action}'. Must be 'get', 'set', or 'invalidate'.")
+
+    def _handle_get(self, cache_key: str) -> Any:
+        """
+        Handles the 'get' cache action, retrieving data and checking for expiration.
+
+        Args:
+            cache_key: The key of the entry to retrieve.
+
+        Returns:
+            The cached value if found and not expired, otherwise None.
+        """
+        entry = self._cache.get(cache_key)
+        if entry is None:
+            logger.debug(f"Cache miss for key: '{cache_key}'.")
+            return None
+
+        value, expiry_timestamp = entry
+        if self._is_expired(expiry_timestamp):
+            del self._cache[cache_key]  # Clean up expired entry
+            logger.debug(f"Cache entry for key '{cache_key}' expired and was removed (miss).")
+            return None
+        
+        logger.debug(f"Cache hit for key: '{cache_key}'.")
+        return value
+
+    def _handle_set(self, cache_key: str, value: Any, ttl_seconds: Optional[float]) -> Any:
+        """
+        Handles the 'set' cache action, storing data with an optional TTL.
+
+        Args:
+            cache_key: The key under which to store the value.
+            value: The data to be cached.
+            ttl_seconds: Optional Time-To-Live in seconds for the entry.
+
+        Returns:
+            The value that was stored.
+
+        Raises:
+            TypeError: If 'ttl_seconds' is provided but is not a non-negative number.
+        """
+        expiry_timestamp: Optional[float] = None
+        if ttl_seconds is not None:
+            if not isinstance(ttl_seconds, (int, float)) or ttl_seconds < 0:
+                logger.error(
+                    f"Invalid 'ttl_seconds' value '{ttl_seconds}' for key '{cache_key}'. "
+                    "Must be a non-negative number."
+                )
+                raise TypeError("Invalid 'ttl_seconds'. Must be a non-negative number.")
+            expiry_timestamp = time.time() + ttl_seconds
+        
+        self._cache[cache_key] = (value, expiry_timestamp)
+        logger.debug(f"Cache entry set for key: '{cache_key}' with TTL: {ttl_seconds} seconds.")
+        return value
+
+    def _handle_invalidate(self, cache_key: str) -> bool:
+        """
+        Handles the 'invalidate' cache action, removing an entry.
+
+        Args:
+            cache_key: The key of the entry to invalidate.
+
+        Returns:
+            True if the entry was removed, False if it did not exist.
+        """
+        if cache_key in self._cache:
+            del self._cache[cache_key]
+            logger.debug(f"Cache entry invalidated for key: '{cache_key}'.")
+            return True
+        logger.debug(f"Attempted to invalidate non-existent cache key: '{cache_key}'.")
+        return False
