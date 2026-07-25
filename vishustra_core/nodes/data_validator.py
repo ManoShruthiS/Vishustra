@@ -1,222 +1,133 @@
 import logging
-from typing import Any, Dict, List, Callable, Union
+from typing import Any, Dict, List, Callable
 
-# Assuming BaseNode is located here as per project context instruction
 from vishustra_core.nodes.base_node import BaseNode
 
-# Configure logging for this module
 logger = logging.getLogger(__name__)
 
-class DataValidationError(ValueError):
-    """Custom exception raised when data fails validation checks within DataValidatorNode."""
+class DataValidationError(Exception):
+    """
+    Exception raised when data fails validation within the DataValidator node.
+    This helps in distinguishing validation failures from other processing errors.
+    """
     pass
 
-class DataValidatorNode(BaseNode):
+class DataValidator(BaseNode):
     """
-    A Vishustra processing node that validates input data against a defined schema.
+    A Vishustra processing node responsible for validating input data against
+    a set of predefined rules.
 
-    The node ensures that incoming data adheres to specified structure, types,
-    and constraints, raising a `DataValidationError` if any rule is violated.
-
-    Schema structure example:
-    ```python
-    schema = {
-        "user_id": {
-            "type": int,               # Expected Python type (e.g., str, int, float, list, dict, bool)
-            "required": True,          # Boolean: True if the field must be present
-            "min_value": 1             # Optional: Minimum value for numbers
-        },
-        "username": {
-            "type": str,
-            "required": True,
-            "min_length": 3,           # Optional: Minimum length for strings/lists/dicts
-            "max_length": 50,          # Optional: Maximum length for strings/lists/dicts
-            "validator": lambda x: x.isalnum() # Optional: Custom callable validator (returns bool)
-        },
-        "email_addresses": {
-            "type": list,              # For sequences, specify `list` or `tuple`
-            "required": False,
-            "min_items": 1,            # Optional: Minimum number of items for lists/tuples
-            "item_type": str,          # Optional: Expected type of items within the list/tuple
-            "max_items": 5
-        },
-        "is_active": {
-            "type": bool,
-            "required": True
-        }
-    }
-    ```
+    This node ensures data conforms to expected formats, types, or business
+    logic before it proceeds to subsequent stages in the orchestration.
+    If any validation rule fails, a DataValidationError is raised, stopping
+    further processing along that path.
     """
 
-    def __init__(self, schema: Dict[str, Any]):
+    def __init__(self, validation_rules: List[Callable[[Any, Dict[str, Any]], bool]], name: str = "DataValidatorNode"):
         """
-        Initializes the DataValidatorNode with a validation schema.
+        Initializes the DataValidator node with a list of validation rules.
+
+        Each rule is a callable that receives the `data` and `context` and
+        is expected to return `True` if the data passes that rule, `False`
+        if it fails, or raise an exception upon critical validation failure.
 
         Args:
-            schema (Dict[str, Any]): A dictionary defining the validation rules.
-                                     Refer to the class docstring for the detailed
-                                     schema structure and supported rules.
+            validation_rules: A list of callable functions. Each function must
+                              accept `data` (Any) and `context` (Dict[str, Any])
+                              as arguments. It should return `True` for valid data,
+                              `False` for invalid data, or raise an exception
+                              if a validation condition cannot be met.
+            name: An optional, descriptive name for this specific validator
+                  instance. Defaults to "DataValidatorNode". This name is used
+                  for logging and identification within a workflow.
+
+        Raises:
+            TypeError: If `validation_rules` is not a list or contains non-callable
+                       elements.
         """
-        self._schema = schema
-        self._logger = logging.getLogger(self.node_name)
-        self._logger.debug(f"DataValidatorNode initialized with schema for fields: {list(schema.keys())}")
+        if not isinstance(validation_rules, list):
+            raise TypeError(
+                f"Validation rules for '{name}' must be a list, received {type(validation_rules).__name__}."
+            )
+        for i, rule in enumerate(validation_rules):
+            if not callable(rule):
+                raise TypeError(
+                    f"Validation rule at index {i} for '{name}' is not callable, received {type(rule).__name__}."
+                )
+
+        self._validation_rules = validation_rules
+        self._instance_name = name
+        logger.debug(
+            f"DataValidator node '{self.node_name}' initialized with "
+            f"{len(validation_rules)} validation rules."
+        )
 
     @property
     def node_name(self) -> str:
-        """Returns the programmatic name of the node."""
-        return "DataValidator"
-
-    def _validate_field(self, field_name: str, value: Any, rules: Dict[str, Any]) -> None:
         """
-        Applies a set of validation rules to a single field's value.
-
-        Args:
-            field_name (str): The name of the field being validated.
-            value (Any): The value of the field.
-            rules (Dict[str, Any]): The validation rules dictionary for this specific field.
-
-        Raises:
-            DataValidationError: If any specified validation rule fails for the field.
-            Exception: If a custom validator callable raises an unexpected error.
+        Returns the unique name of this DataValidator node instance.
         """
-        # Type check
-        if "type" in rules:
-            expected_type = rules["type"]
-            # isinstance works for concrete types (str, int, list, dict, etc.)
-            if not isinstance(value, expected_type):
-                raise DataValidationError(
-                    f"Field '{field_name}' type mismatch. Expected `{expected_type.__name__}`, "
-                    f"but received `{type(value).__name__}`."
-                )
-
-        # Length checks for sequences (str, list, tuple, dict)
-        if isinstance(value, (str, list, tuple, dict)):
-            if "min_length" in rules and len(value) < rules["min_length"]:
-                raise DataValidationError(
-                    f"Field '{field_name}' length is {len(value)}, which is less than "
-                    f"the required minimum of {rules['min_length']}."
-                )
-            if "max_length" in rules and len(value) > rules["max_length"]:
-                raise DataValidationError(
-                    f"Field '{field_name}' length is {len(value)}, which exceeds "
-                    f"the allowed maximum of {rules['max_length']}."
-                )
-
-        # Value range checks for numbers (int, float)
-        if isinstance(value, (int, float)):
-            if "min_value" in rules and value < rules["min_value"]:
-                raise DataValidationError(
-                    f"Field '{field_name}' value is {value}, which is less than "
-                    f"the required minimum of {rules['min_value']}."
-                )
-            if "max_value" in rules and value > rules["max_value"]:
-                raise DataValidationError(
-                    f"Field '{field_name}' value is {value}, which exceeds "
-                    f"the allowed maximum of {rules['max_value']}."
-                )
-
-        # Item type and count checks for sequences (lists, tuples)
-        if isinstance(value, (list, tuple)):
-            if "item_type" in rules:
-                expected_item_type = rules["item_type"]
-                for i, item in enumerate(value):
-                    if not isinstance(item, expected_item_type):
-                        raise DataValidationError(
-                            f"Field '{field_name}' item at index {i} type mismatch. "
-                            f"Expected `{expected_item_type.__name__}`, but received `{type(item).__name__}`."
-                        )
-            if "min_items" in rules and len(value) < rules["min_items"]:
-                raise DataValidationError(
-                    f"Field '{field_name}' has {len(value)} items, which is less than "
-                    f"the required minimum of {rules['min_items']}."
-                )
-            if "max_items" in rules and len(value) > rules["max_items"]:
-                raise DataValidationError(
-                    f"Field '{field_name}' has {len(value)} items, which exceeds "
-                    f"the allowed maximum of {rules['max_items']}."
-                )
-
-        # Custom callable validator
-        if "validator" in rules and callable(rules["validator"]):
-            try:
-                if not rules["validator"](value):
-                    raise DataValidationError(f"Field '{field_name}' failed custom validation check.")
-            except Exception as e:
-                self._logger.error(
-                    f"Custom validator for field '{field_name}' raised an unexpected exception: {e}",
-                    exc_info=True
-                )
-                raise DataValidationError(
-                    f"Custom validator for field '{field_name}' encountered an internal error. "
-                    f"Details: {e}"
-                ) from e
+        return self._instance_name
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data by validating it against the configured schema.
+        Processes the input data by applying all configured validation rules.
 
-        The `DataValidatorNode` expects the input `data` to be a dictionary,
-        which it then validates against the schema provided during initialization.
+        This method iterates through each rule. If a rule returns `False` or
+        raises an exception, the data is considered invalid. All identified
+        validation failures are collected, and if any exist, a single
+        `DataValidationError` is raised detailing all issues.
 
         Args:
-            data (Any): The input data to be validated. Expected to be a dictionary.
-            context (Dict[str, Any]): A dictionary providing runtime context,
-                                      not directly used for validation rules in this node.
+            data: The input data to be validated.
+            context: A dictionary containing contextual information relevant
+                     to the processing flow, which may include parameters
+                     for validation rules.
 
         Returns:
-            Any: The original input `data` if all validation checks pass successfully.
+            The original `data` unmodified if all validation rules pass successfully.
 
         Raises:
-            DataValidationError: If the input data is not a dictionary, or if any
-                                 validation rule fails for any field in the data.
-            Exception: For any other unexpected errors during the validation process.
+            DataValidationError: If any of the validation rules fail or raise
+                                 an exception during their execution.
         """
-        self._logger.debug(f"DataValidatorNode: Starting validation process for incoming data.")
+        logger.info(f"Node '{self.node_name}' starting data validation process.")
+        validation_failures: List[str] = []
 
-        if not isinstance(data, dict):
-            error_msg = (
-                f"Input data to {self.node_name} must be a dictionary for schema-based validation. "
-                f"Received type: `{type(data).__name__}`."
-            )
-            self._logger.error(error_msg)
-            raise DataValidationError(error_msg)
+        for i, rule_callable in enumerate(self._validation_rules):
+            # Attempt to get a meaningful name for the rule for logging
+            rule_id = getattr(rule_callable, '__name__', f"rule_at_index_{i}")
+            logger.debug(f"Node '{self.node_name}' applying rule: '{rule_id}'.")
 
-        validation_errors: List[str] = []
-
-        # Iterate through the schema to apply rules and check for required fields
-        for field_name, rules in self._schema.items():
-            is_required = rules.get("required", False)
-            field_present = field_name in data
-
-            if is_required and not field_present:
-                validation_errors.append(f"Missing required field: '{field_name}'.")
-                continue  # Cannot validate further rules if the field itself is missing
-
-            if field_present:
-                try:
-                    self._validate_field(field_name, data[field_name], rules)
-                except DataValidationError as dve:
-                    # Collect specific validation errors
-                    validation_errors.append(str(dve))
-                except Exception as e:
-                    # Catch unexpected errors during field validation
-                    self._logger.exception(
-                        f"An unexpected error occurred during validation of field '{field_name}'."
+            try:
+                is_valid = rule_callable(data, context)
+                if not is_valid:
+                    failure_msg = f"Rule '{rule_id}' explicitly returned False, indicating invalid data."
+                    validation_failures.append(failure_msg)
+                    logger.warning(
+                        f"Validation failure in '{self.node_name}': {failure_msg}"
                     )
-                    validation_errors.append(
-                        f"An unexpected internal error occurred validating field '{field_name}': {type(e).__name__} - {e}."
-                    )
-            # If the field is not required and not present, it's considered valid
-            # (i.e., no validation rules need to be applied).
+            except Exception as e:
+                # Catch any unexpected exceptions from the rule callable itself
+                failure_msg = (
+                    f"Rule '{rule_id}' raised an unexpected exception: {e!r}. "
+                    "This indicates a critical validation failure."
+                )
+                validation_failures.append(failure_msg)
+                logger.error(
+                    f"Validation failure in '{self.node_name}': {failure_msg}",
+                    exc_info=True # Log stack trace for unexpected exceptions
+                )
 
-        if validation_errors:
-            # Aggregate all validation errors into a single, comprehensive message
-            error_summary = (
-                f"Data validation failed for input data with {len(validation_errors)} error(s):\n" +
-                "\n".join(f"- {err}" for err in validation_errors)
+        if validation_failures:
+            # Aggregate all error messages into a single, comprehensive exception
+            combined_error_message = (
+                f"Data failed validation in node '{self.node_name}'. "
+                f"Detected {len(validation_failures)} failure(s): "
+                f"{'; '.join(validation_failures)}"
             )
-            self._logger.warning(error_summary)
-            raise DataValidationError(error_summary)
-
-        self._logger.info("Data successfully passed all validation checks and is considered valid.")
-        return data
+            logger.error(f"Final validation failed for '{self.node_name}': {combined_error_message}")
+            raise DataValidationError(combined_error_message)
+        else:
+            logger.info(f"Node '{self.node_name}' successfully validated data. Data is valid.")
+            return data
