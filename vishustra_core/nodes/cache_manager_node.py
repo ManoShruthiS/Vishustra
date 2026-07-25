@@ -1,95 +1,117 @@
 import logging
 from typing import Any, Dict, Optional
 
+# Assuming vishustra_core.nodes.base_node is available in the Python path
+# For local development/testing, you might need to adjust sys.path or use a relative import
+# but for the framework context, this absolute import is standard.
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class CacheManagerNode(BaseNode):
     """
-    A Vishustra node that manages an in-memory cache.
-    It supports 'set', 'get', and 'invalidate' operations to interact
-    with a simple key-value store.
+    A Vishustra processing node that provides a shared, in-memory cache
+    within the orchestration context.
 
-    Context Parameters:
-    - 'action' (str): Required. Specifies the cache operation ('get', 'set', 'invalidate').
-    - 'key' (str): Required. The unique identifier for the cache entry.
+    This node enables other nodes in a Vishustra pipeline to efficiently
+    store, retrieve, and invalidate data. The cache state is maintained
+    within the `context` dictionary, making it accessible across node executions
+    within the same orchestration run.
 
-    Process Method Behavior:
-    - For 'set' action: Caches the `data` provided under the specified 'key' and
-      returns the cached `data` itself, allowing it to flow downstream.
-    - For 'get' action: Retrieves the value associated with the 'key'.
-      Returns the cached value if found, otherwise returns None (cache miss).
-    - For 'invalidate' action: Removes the entry associated with the 'key' from the cache.
-      Returns None, as this operation primarily affects the cache state, not the data flow.
+    Supported operations via the `process` method's `data` input:
+    - 'retrieve': Fetches a value associated with a given key.
+    - 'store': Stores a key-value pair in the cache.
+    - 'invalidate': Removes a key and its associated value from the cache.
     """
 
-    def __init__(self):
-        super().__init__()
-        self._cache: Dict[str, Any] = {}
-        logger.info("%s initialized with an empty in-memory cache.", self.node_name)
+    # Key used to store the cache dictionary within the context
+    _CONTEXT_CACHE_KEY = "_vishustra_cache_manager_global_cache"
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """Returns the descriptive name of this node."""
         return "CacheManager"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Executes a cache operation ('get', 'set', 'invalidate') based on the context.
+        Processes the input data to perform cache operations (retrieve, store, invalidate).
 
         Args:
-            data (Any): The primary data input. For 'set' action, this is the value
-                        to be stored in the cache. For 'get' or 'invalidate', it's typically
-                        ignored, but passed through for 'set'.
-            context (Dict[str, Any]): A dictionary providing control parameters:
-                - 'action' (str): Must be 'get', 'set', or 'invalidate'.
-                - 'key' (str): The unique identifier for the cache entry.
+            data (Any): A dictionary specifying the cache operation and arguments.
+                        Expected format examples:
+                        - {'action': 'retrieve', 'key': 'my_query_hash'}
+                        - {'action': 'store', 'key': 'my_query_hash', 'value': {'llm_response': '...'}}
+                        - {'action': 'invalidate', 'key': 'my_query_hash'}
+            context (Dict[str, Any]): The shared context dictionary where the
+                                      cache state is stored and managed.
 
         Returns:
             Any:
-                - For 'set': The input `data` that was just cached.
-                - For 'get': The value retrieved from the cache, or `None` if not found.
-                - For 'invalidate': `None`.
+                - For 'retrieve': The cached value if found, otherwise None.
+                - For 'store': The value that was successfully stored.
+                - For 'invalidate': The key that was invalidated if it existed, otherwise None.
 
         Raises:
-            ValueError: If 'action' or 'key' is missing from the context, or if an
-                        unsupported action is specified.
+            ValueError: If the input `data` is malformed, missing required keys,
+                        or specifies an unsupported cache action.
         """
-        action = context.get('action')
-        key = context.get('key')
+        if not isinstance(data, dict):
+            logger.error("CacheManagerNode received non-dictionary input for 'data': %s", type(data))
+            raise ValueError(
+                f"CacheManagerNode expects 'data' to be a dictionary, got {type(data).__name__}."
+            )
 
-        if not action:
-            logger.error("%s: 'action' is missing from the context.", self.node_name)
-            raise ValueError("Missing 'action' in context for CacheManagerNode operation.")
-        if not key:
-            logger.error("%s: 'key' is missing from the context for action '%s'.", self.node_name, action)
-            raise ValueError("Missing 'key' in context for CacheManagerNode operation.")
+        action = data.get('action')
+        key = data.get('key')
 
-        try:
-            if action == 'set':
-                self._cache[key] = data
-                logger.debug("%s: Key '%s' successfully set with data.", self.node_name, key)
-                return data
-            elif action == 'get':
-                if key in self._cache:
-                    cached_value = self._cache[key]
-                    logger.debug("%s: Cache hit for key '%s'.", self.node_name, key)
-                    return cached_value
-                else:
-                    logger.debug("%s: Cache miss for key '%s'.", self.node_name, key)
-                    return None
-            elif action == 'invalidate':
-                if key in self._cache:
-                    del self._cache[key]
-                    logger.debug("%s: Key '%s' successfully invalidated.", self.node_name, key)
-                else:
-                    logger.debug("%s: Attempted to invalidate non-existent key '%s'.", self.node_name, key)
-                return None
-            else:
-                logger.error("%s: Unknown action '%s' received for key '%s'.", self.node_name, action, key)
-                raise ValueError(f"Unknown cache action: '{action}'")
-        except Exception as e:
-            logger.exception("%s: An unexpected error occurred during '%s' operation for key '%s'.",
-                             self.node_name, action, key)
-            raise # Re-raise the original exception after logging
+        if not action or not key:
+            logger.error("CacheManagerNode: Missing 'action' or 'key' in input data: %s", data)
+            raise ValueError("Input data must contain 'action' and 'key' for cache operations.")
+
+        # Initialize the global cache in the context if it doesn't exist
+        if self._CONTEXT_CACHE_KEY not in context:
+            context[self._CONTEXT_CACHE_KEY] = {}
+            logger.debug("Initialized global cache in context for CacheManagerNode.")
+
+        cache: Dict[Any, Any] = context[self._CONTEXT_CACHE_KEY]
+
+        if action == 'retrieve':
+            return self._handle_retrieve(cache, key)
+        elif action == 'store':
+            if 'value' not in data:
+                logger.error("CacheManagerNode: 'store' action requires a 'value' key in data: %s", data)
+                raise ValueError("'store' action requires a 'value' key in the input data.")
+            value = data['value']
+            return self._handle_store(cache, key, value)
+        elif action == 'invalidate':
+            return self._handle_invalidate(cache, key)
+        else:
+            logger.error("CacheManagerNode: Unknown action '%s' in input data: %s", action, data)
+            raise ValueError(
+                f"Unknown cache action: '{action}'. Supported actions are 'retrieve', 'store', 'invalidate'."
+            )
+
+    def _handle_retrieve(self, cache: Dict[Any, Any], key: Any) -> Optional[Any]:
+        """Handles the 'retrieve' action, returning the cached value or None on miss."""
+        if key in cache:
+            logger.debug("Cache HIT for key: '%s'", key)
+            return cache[key]
+        else:
+            logger.debug("Cache MISS for key: '%s'", key)
+            return None
+
+    def _handle_store(self, cache: Dict[Any, Any], key: Any, value: Any) -> Any:
+        """Handles the 'store' action, storing the value and returning it."""
+        cache[key] = value
+        logger.info("Stored item in cache for key: '%s'", key)
+        return value
+
+    def _handle_invalidate(self, cache: Dict[Any, Any], key: Any) -> Optional[Any]:
+        """Handles the 'invalidate' action, removing the key and returning it if found."""
+        if key in cache:
+            del cache[key]
+            logger.info("Invalidated item from cache for key: '%s'", key)
+            return key
+        else:
+            logger.debug("Attempted to invalidate non-existent key: '%s'", key)
+            return None
