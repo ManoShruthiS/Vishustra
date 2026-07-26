@@ -1,151 +1,120 @@
-import re
 import logging
-from typing import Any, Dict, Union, List, Pattern, Tuple, Literal, Optional
+import re
+from typing import Any, Dict, List, Optional, Union
 
-# Assuming BaseNode is available at this path as per Vishustra framework structure
+# Assuming BaseNode is defined in this module path within the Vishustra framework
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class RegexMatcherNode(BaseNode):
     """
-    A Vishustra processing node that performs regular expression matching
-    on input data.
+    A Vishustra processing node that performs regex matching on input data.
 
-    This node can be configured to return different types of results:
-    - The first full string match (`'first_str'`).
-    - All full string matches (`'all_strs'`).
-    - The first tuple of captured groups (`'first_groups'`).
-    - A list of tuples of captured groups for all matches (`'all_groups'`).
-    - The first `re.Match` object (`'first_obj'`).
-    - A list of all `re.Match` objects (`'all_objs'`).
-
-    Configuration Parameters in `__init__`:
-    - `pattern` (Union[str, Pattern]): The regular expression pattern to use.
-                                       Can be a string or a pre-compiled regex object.
-    - `flags` (int): Optional regex flags, e.g., `re.IGNORECASE`, `re.MULTILINE`.
-                     Defaults to 0.
-    - `output_type` (Literal): Defines the format of the output.
-                               Options: `'first_str'`, `'all_strs'`, `'first_groups'`,
-                               `'all_groups'`, `'first_obj'`, `'all_objs'`.
-                               Defaults to `'first_str'`.
+    This node extracts substrings from the input data (expected to be a string)
+    based on a provided regular expression pattern from the context.
+    It can be configured to return either all non-overlapping matches or just
+    the first match found.
     """
-
-    def __init__(
-        self,
-        pattern: Union[str, Pattern],
-        flags: int = 0,
-        output_type: Literal[
-            'first_str', 'all_strs', 'first_groups',
-            'all_groups', 'first_obj', 'all_objs'
-        ] = 'first_str'
-    ):
-        """
-        Initializes the RegexMatcherNode with a regex pattern and output configuration.
-
-        Args:
-            pattern: The regular expression pattern as a string or a compiled `re.Pattern` object.
-            flags: Optional regex flags (e.g., `re.IGNORECASE`, `re.MULTILINE`). Defaults to 0.
-            output_type: Specifies the desired output format for the `process` method.
-        
-        Raises:
-            ValueError: If the provided regex pattern is invalid or `output_type` is not recognized.
-            TypeError: If the `pattern` argument is not a string or `re.Pattern` object.
-        """
-        if isinstance(pattern, str):
-            try:
-                self._compiled_pattern: Pattern = re.compile(pattern, flags)
-                logger.debug(f"[{self.__class__.__name__}] Compiled regex pattern: '{pattern}' with flags: {flags}")
-            except re.error as e:
-                logger.exception(f"[{self.__class__.__name__}] Failed to compile regex pattern '{pattern}': {e}")
-                raise ValueError(f"Invalid regex pattern provided: {e}") from e
-        elif isinstance(pattern, Pattern):
-            self._compiled_pattern = pattern
-            logger.debug(f"[{self.__class__.__name__}] Using pre-compiled regex pattern: '{pattern.pattern}'")
-        else:
-            raise TypeError(f"Pattern must be a string or a compiled re.Pattern, got {type(pattern)}")
-
-        valid_output_types = {
-            'first_str', 'all_strs', 'first_groups',
-            'all_groups', 'first_obj', 'all_objs'
-        }
-        if output_type not in valid_output_types:
-            raise ValueError(f"Invalid output_type: '{output_type}'. "
-                             f"Must be one of {sorted(list(valid_output_types))}.")
-        self._output_type = output_type
-        logger.debug(f"[{self.__class__.__name__}] Initialized with output_type: '{self._output_type}'")
 
     @property
     def node_name(self) -> str:
         """Returns the name of the node."""
         return "RegexMatcher"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
+    def process(self, data: Any, context: Dict[str, Any]) -> Union[List[str], Optional[str]]:
         """
-        Processes the input data by applying the configured regex pattern.
+        Processes the input data by applying a regular expression pattern.
+
+        The `context` dictionary must contain:
+        - 'regex_pattern' (str): The regular expression pattern to use.
+
+        Optional keys in `context`:
+        - 'flags' (int, default: 0): Regex flags, e.g., re.IGNORECASE, re.MULTILINE.
+          These can be combined using the bitwise OR operator (e.g., `re.IGNORECASE | re.DOTALL`).
+        - 'return_first_match_only' (bool, default: False): If True, returns
+          only the content of the specified group from the first match (or None if no match).
+          If False, returns a list of the content of the specified group from all
+          non-overlapping matches.
+        - 'group_index' (int, default: 0): Specifies which group to return from a match.
+          0 corresponds to the entire matched string, 1 to the first capturing group, and so on.
 
         Args:
-            data: The input data to be matched against the regex. Expected to be
-                  string-like or convertible to a string.
-            context: A dictionary containing contextual information for the node.
-                     (This node does not directly use `context` for processing logic,
-                     but it is available for general framework needs or future extensions).
+            data: The input data, expected to be a string for regex matching.
+            context: A dictionary containing processing parameters.
 
         Returns:
-            Any: The result of the regex matching based on the `output_type`
-                 configured during initialization. Possible return types:
-                 - `Optional[str]`: for `'first_str'`
-                 - `List[str]`: for `'all_strs'`
-                 - `Optional[Tuple[str, ...]]`: for `'first_groups'`
-                 - `List[Tuple[str, ...]]`: for `'all_groups'`
-                 - `Optional[re.Match]`: for `'first_obj'`
-                 - `List[re.Match]`: for `'all_objs'`
-                 Returns `None` or an empty list/tuple if no matches are found,
-                 depending on the `output_type`.
+            Union[List[str], Optional[str]]:
+            - A list of strings if 'return_first_match_only' is False. Each element
+              is the content of the specified 'group_index' from each match.
+              Returns an empty list if no matches are found.
+            - A string (the content of the specified group from the first match)
+              if 'return_first_match_only' is True. Returns None if no match is found.
 
         Raises:
-            TypeError: If the input `data` cannot be converted to a string.
+            TypeError: If `data` is not a string.
+            KeyError: If 'regex_pattern' is missing from the context.
+            re.error: If the provided 'regex_pattern' is an invalid regular expression.
         """
-        logger.debug(f"[{self.node_name}] Attempting to process data (type: {type(data)}) with output_type: {self._output_type}")
+        if not isinstance(data, str):
+            logger.error(f"Input data for {self.node_name} must be a string, but received {type(data).__name__}.")
+            raise TypeError(f"Input data must be a string for {self.node_name} processing.")
+
+        regex_pattern = context.get('regex_pattern')
+        if not regex_pattern:
+            logger.error(f"Missing 'regex_pattern' in context for {self.node_name}.")
+            raise KeyError(f"'regex_pattern' is required in context for {self.node_name}.")
+
+        flags = context.get('flags', 0)
+        return_first_match_only = context.get('return_first_match_only', False)
+        group_index = context.get('group_index', 0)
+
+        logger.debug(
+            f"[{self.node_name}] Processing data with pattern: '{regex_pattern}', "
+            f"flags: {flags}, return_first_only: {return_first_match_only}, "
+            f"group_index: {group_index}"
+        )
 
         try:
-            text = str(data)
+            if return_first_match_only:
+                match = re.search(regex_pattern, data, flags)
+                if match:
+                    try:
+                        result = match.group(group_index)
+                        logger.info(f"[{self.node_name}] Found first match (group {group_index}): '{result}'")
+                        return result
+                    except IndexError:
+                        logger.warning(
+                            f"[{self.node_name}] Group index {group_index} out of range "
+                            f"for pattern '{regex_pattern}' on data excerpt: '{data[:50]}...'. "
+                            "Returning full match (group 0) instead for the first match."
+                        )
+                        return match.group(0) # Fallback to full match if group_index is invalid
+                else:
+                    logger.debug(f"[{self.node_name}] No match found for pattern '{regex_pattern}'.")
+                    return None
+            else: # Return all matches
+                matches: List[str] = []
+                for match in re.finditer(regex_pattern, data, flags):
+                    try:
+                        matches.append(match.group(group_index))
+                    except IndexError:
+                        logger.warning(
+                            f"[{self.node_name}] Group index {group_index} out of range "
+                            f"for pattern '{regex_pattern}' on match: '{match.group(0)}'. "
+                            "Defaulting to full match (group 0) for this instance."
+                        )
+                        # Fallback to full match (group 0) if specified group_index is invalid
+                        matches.append(match.group(0))
+                logger.info(f"[{self.node_name}] Found {len(matches)} matches.")
+                logger.debug(f"[{self.node_name}] All matches (group {group_index}): {matches}")
+                return matches
+        except re.error as e:
+            logger.error(f"[{self.node_name}] Invalid regex pattern '{regex_pattern}': {e}")
+            raise re.error(f"Invalid regex pattern provided for {self.node_name}: {e}")
         except Exception as e:
-            logger.error(f"[{self.node_name}] Input data could not be converted to string. Type: {type(data)}, Error: {e}")
-            raise TypeError(f"Input data must be convertible to string, but got type {type(data)}") from e
-
-        results: Any = None
-
-        if self._output_type.startswith('first_'):
-            match: Optional[re.Match] = self._compiled_pattern.search(text)
-            if match:
-                if self._output_type == 'first_str':
-                    results = match.group(0)
-                elif self._output_type == 'first_groups':
-                    results = match.groups()
-                elif self._output_type == 'first_obj':
-                    results = match
-            else:
-                logger.debug(f"[{self.node_name}] No first match found for pattern '{self._compiled_pattern.pattern}'.")
-        else:  # Output type specifies all matches
-            if self._output_type == 'all_objs':
-                matches: List[re.Match] = list(self._compiled_pattern.finditer(text))
-                results = matches
-                logger.debug(f"[{self.node_name}] Found {len(matches)} match objects.")
-            elif self._output_type == 'all_strs':
-                matches_str: List[str] = [m.group(0) for m in self._compiled_pattern.finditer(text)]
-                results = matches_str
-                logger.debug(f"[{self.node_name}] Found {len(matches_str)} full string matches.")
-            elif self._output_type == 'all_groups':
-                # re.findall is suitable here; if pattern has capturing groups, it returns a list of tuples.
-                # If no capturing groups, it effectively returns a list of full matches (strings).
-                # This behavior is generally robust for 'all_groups'.
-                matches_groups: List[Tuple[str, ...]] = list(self._compiled_pattern.findall(text))
-                results = matches_groups
-                logger.debug(f"[{self.node_name}] Found {len(matches_groups)} group match tuples.")
-            
-            if not results:
-                logger.debug(f"[{self.node_name}] No matches found for pattern '{self._compiled_pattern.pattern}'. Returning empty list.")
-
-        logger.info(f"[{self.node_name}] Successfully processed data with output type: {self._output_type}. Result: {results!r}")
-        return results
+            logger.critical(
+                f"[{self.node_name}] An unexpected error occurred during processing: {e}",
+                exc_info=True
+            )
+            raise # Re-raise unexpected exceptions to propagate upstream
