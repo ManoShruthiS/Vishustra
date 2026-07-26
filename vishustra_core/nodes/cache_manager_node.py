@@ -1,130 +1,133 @@
 import logging
-from typing import Any, Dict, Optional
+from collections import OrderedDict
+from typing import Any, Dict, Optional, Tuple
 
-# Assuming vishustra_core is installed and base_node is accessible
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class CacheManagerNode(BaseNode):
     """
-    A Vishustra node that provides in-memory caching capabilities.
-    It supports 'set', 'get', 'delete', and 'clear' operations on cached data.
-    
-    This node maintains its own internal dictionary as an in-memory cache.
-    
-    Context parameters for process method:
-    - 'operation' (str): Required. Specifies the cache operation ('set', 'get', 'delete', 'clear').
-    - 'key' (str): Required for 'set', 'get', 'delete' operations. The key to store/retrieve/delete data.
-    - 'default_value' (Any): Optional, only for 'get' operation. The value to return if the key is not found
-                             in the cache, and no explicit `data` is provided to the node's process method.
-    
-    Data parameter for process method:
-    - For 'set' operation: The value to be cached.
-    - For 'get' operation: Can serve as a fallback value if the key is not found in the cache and
-                           'default_value' is not provided in the context.
-    - For 'delete', 'clear' operations: This parameter is typically ignored.
+    A processing node designed to manage an in-memory cache for Vishustra.
+    It supports operations to 'get', 'set', and 'clear' data based on a key.
+    The cache implements a basic Least Recently Used (LRU) eviction policy
+    if a maximum size is configured.
+
+    Configuration parameters for initialization (passed during node instantiation):
+    - `max_size` (Optional[int]): The maximum number of items the cache can hold.
+                                  If None or 0, the cache size is unbounded.
+                                  Defaults to 100.
     """
 
-    def __init__(self):
-        """Initializes the CacheManagerNode with an empty in-memory cache."""
-        self._cache: Dict[str, Any] = {}
-        logger.debug(f"{self.node_name} initialized with an empty cache.")
+    def __init__(self, max_size: Optional[int] = 100):
+        """
+        Initializes the CacheManagerNode with an optional maximum cache size.
+
+        Args:
+            max_size (Optional[int]): The maximum number of items the cache can hold.
+                                      If None or 0, the cache size is unbounded.
+        """
+        # OrderedDict is used to maintain insertion order, allowing for basic LRU eviction.
+        self._cache: OrderedDict[Any, Any] = OrderedDict()
+        self._max_size = max_size if max_size is not None and max_size > 0 else None
+        logger.debug(f"CacheManagerNode initialized with max_size: {self._max_size if self._max_size else 'unbounded'}")
 
     @property
     def node_name(self) -> str:
         """Returns the descriptive name of the node."""
-        return "CacheManagerNode"
+        return "CacheManager"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
+    def process(self, key: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes cache operations based on the provided context.
+        Manages cache operations ('get', 'set', 'clear') for a given key.
+
+        The `key` parameter to this method is treated as the cache key.
+        The `context` dictionary must contain a 'cache_action' key
+        specifying the desired operation.
 
         Args:
-            data (Any): The primary input data for the node. Its interpretation depends on the operation:
-                        - For 'set' operation: This `data` is the value to be stored in the cache.
-                        - For 'get' operation: This `data` can act as a fallback return value if the
-                          requested `key` is not found in the cache and `context['default_value']` is also absent.
-                        - For 'delete' or 'clear' operations: This `data` parameter is ignored.
-            context (Dict[str, Any]): A dictionary containing operation details.
-                                       - 'operation' (str): Required. Must be one of 'set', 'get', 'delete', 'clear'.
-                                       - 'key' (str): Required for 'set', 'get', 'delete'. The identifier for the cache entry.
-                                       - 'default_value' (Any): Optional. For 'get' operation, this value is returned
-                                         if the key is not found and takes precedence over the `data` parameter.
+            key (Any): The primary key for the cache operation.
+            context (Dict[str, Any]): A dictionary containing cache operation details.
+                                       Expected 'cache_action' (str) can be 'get', 'set', or 'clear'.
+                                       For 'set' action, the 'value' (Any) to be cached must
+                                       also be present in the context.
 
         Returns:
-            Any: The result of the cache operation:
-                 - 'set': The value that was successfully stored in the cache.
-                 - 'get': The cached value; if not found, returns `context['default_value']`,
-                          then the `data` parameter, and finally `None` if all fallbacks are absent.
-                 - 'delete': The value that was removed from the cache; `None` if the key was not found.
-                 - 'clear': True if the cache was successfully cleared.
-        
+            Any:
+                - For 'get' action: A tuple `(bool_hit, value_or_none)`.
+                                   `bool_hit` is True if the key was found, False otherwise.
+                                   `value_or_none` is the cached value if found, else None.
+                - For 'set' action: The value that was successfully stored in the cache.
+                - For 'clear' action: True if the operation was successful.
+                                      If clearing a specific key that wasn't found, it still
+                                      returns True as the desired state (key not in cache) is achieved.
+                                      If `key` is None, the entire cache is cleared.
+
         Raises:
-            ValueError: If 'operation' is missing or invalid, or if 'key' is missing or invalid for
-                        operations that require it ('set', 'get', 'delete').
-            RuntimeError: For any unexpected errors encountered during the cache operation.
+            ValueError: If 'cache_action' is invalid, or 'value' is missing for a 'set' action.
         """
-        operation: Optional[str] = context.get('operation')
-        key: Optional[str] = context.get('key')
-        
-        if not operation:
-            logger.error(f"{self.node_name}: Missing 'operation' in context for processing.")
-            raise ValueError("Context must contain an 'operation' key ('set', 'get', 'delete', 'clear').")
+        cache_action = context.get("cache_action")
 
-        if operation not in ['set', 'get', 'delete', 'clear']:
-            logger.error(f"{self.node_name}: Invalid operation '{operation}' specified in context.")
-            raise ValueError(f"Invalid operation '{operation}'. Must be one of 'set', 'get', 'delete', 'clear'.")
+        if not isinstance(cache_action, str):
+            logger.error(f"Invalid or missing 'cache_action' in context for key '{key}': {context}. "
+                         "Expected 'get', 'set', or 'clear'.")
+            raise ValueError("Cache operation requires a valid 'cache_action' (string) in context.")
 
-        # Validate 'key' for operations that explicitly require it
-        if operation in ['set', 'get', 'delete']:
-            if not isinstance(key, str) or not key:
-                logger.error(f"{self.node_name}: Missing or invalid 'key' for operation '{operation}'. Key must be a non-empty string.")
-                raise ValueError(f"Context must contain a non-empty string 'key' for '{operation}' operation.")
-        
-        try:
-            if operation == 'set':
-                self._cache[key] = data
-                logger.info(f"{self.node_name}: Successfully set key '{key}'.")
-                return data
-            
-            elif operation == 'get':
-                cached_value = self._cache.get(key)
-                if cached_value is not None:
-                    logger.debug(f"{self.node_name}: Retrieved key '{key}' from cache.")
-                    return cached_value
-                
-                # Fallback hierarchy: context['default_value'] -> data parameter -> None
-                default_value_from_context = context.get('default_value')
-                if default_value_from_context is not None:
-                    logger.debug(f"{self.node_name}: Key '{key}' not found, returning 'default_value' from context.")
-                    return default_value_from_context
-                
-                if data is not None:
-                    logger.debug(f"{self.node_name}: Key '{key}' not found, returning `data` parameter as fallback.")
-                    return data
+        if cache_action == "get":
+            return self._handle_get(key)
+        elif cache_action == "set":
+            # Check for explicit presence of 'value', as it could legitimately be None.
+            if "value" not in context:
+                logger.error(f"'value' missing in context for 'set' action with key: '{key}'")
+                raise ValueError("Context must contain 'value' for 'set' action.")
+            value = context["value"]
+            return self._handle_set(key, value)
+        elif cache_action == "clear":
+            return self._handle_clear(key)
+        else:
+            logger.error(f"Unknown 'cache_action': '{cache_action}' for key: '{key}'")
+            raise ValueError(f"Unknown cache_action: '{cache_action}'. Must be 'get', 'set', or 'clear'.")
 
-                logger.info(f"{self.node_name}: Key '{key}' not found, returning None as no fallback was provided.")
-                return None
-                
-            elif operation == 'delete':
-                if key in self._cache:
-                    deleted_value = self._cache.pop(key)
-                    logger.info(f"{self.node_name}: Successfully deleted key '{key}'.")
-                    return deleted_value
-                else:
-                    logger.warning(f"{self.node_name}: Attempted to delete non-existent key '{key}'. No action taken.")
-                    return None
-                    
-            elif operation == 'clear':
-                self._cache.clear()
-                logger.info(f"{self.node_name}: Cache successfully cleared.")
-                return True
+    def _handle_get(self, key: Any) -> Tuple[bool, Optional[Any]]:
+        """Internal helper to handle the 'get' cache action."""
+        if key in self._cache:
+            # Move the accessed item to the end to signify recent use (MRU for LRU policy)
+            value = self._cache.pop(key)
+            self._cache[key] = value
+            logger.debug(f"Cache HIT for key: '{key}'")
+            return (True, value)
+        else:
+            logger.debug(f"Cache MISS for key: '{key}'")
+            return (False, None)
 
-        except Exception as e:
-            # Catch broader exceptions for robustness, log details, and re-raise as RuntimeError
-            logger.exception(
-                f"{self.node_name}: An unexpected error occurred during '{operation}' operation with key "
-                f"'{key if key else 'N/A'}'. Error: {e}"
-            )
-            raise RuntimeError(f"Cache operation '{operation}' failed: {e}") from e
+    def _handle_set(self, key: Any, value: Any) -> Any:
+        """Internal helper to handle the 'set' cache action."""
+        if key in self._cache:
+            # Update existing key and move to end (MRU)
+            self._cache.pop(key)
+            self._cache[key] = value
+            logger.debug(f"Cache UPDATED for key: '{key}'")
+        else:
+            # Add new key, managing size if bounded
+            if self._max_size is not None and len(self._cache) >= self._max_size:
+                # Remove the least recently used item (first item in OrderedDict)
+                oldest_key = next(iter(self._cache))
+                del self._cache[oldest_key]
+                logger.warning(f"Cache overflow: Removed oldest item with key: '{oldest_key}'")
+            self._cache[key] = value
+            logger.debug(f"Cache SET for key: '{key}'")
+        return value
+
+    def _handle_clear(self, key: Any) -> bool:
+        """Internal helper to handle the 'clear' cache action."""
+        if key is None: # Special case: clear entire cache
+            self._cache.clear()
+            logger.info("Cache CLEARED entirely.")
+            return True
+        elif key in self._cache:
+            del self._cache[key]
+            logger.debug(f"Cache CLEARED for key: '{key}'")
+            return True
+        else:
+            logger.debug(f"Cache CLEAR requested for non-existent key: '{key}'. No action taken.")
+            return True # Still return True as the desired state (key not in cache) is achieved.
