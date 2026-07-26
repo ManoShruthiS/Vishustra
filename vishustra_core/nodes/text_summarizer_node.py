@@ -1,103 +1,101 @@
 import logging
 from typing import Any, Dict
 
-# Assuming vishustra_core is a properly installed package in the environment
+# Assuming BaseNode is located in the specified core path
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class TextSummarizerNode(BaseNode):
     """
-    A Vishustra processing node that summarizes input text.
+    A Vishustra processing node responsible for generating a summary of input text.
 
-    This node provides a simulated summarization, condensing text based on
-    either a specified word count ratio or a hard limit on the number of words.
-    It's designed for quick content condensation within workflows.
+    This node simulates the functionality of an abstractive text summarizer,
+    taking a longer piece of text and producing a condensed version.
+    The actual summarization logic is a placeholder for demonstration.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "TextSummarizerNode"
+        """
+        Returns the descriptive name of this processing node.
+        """
+        return "TextSummarizer"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data by summarizing it.
+        Processes the input data to generate a simulated text summary.
 
-        The summarization logic is a basic simulation: it extracts a portion
-        of the input text from the beginning, based on configured parameters
-        in the `context`.
+        The summarization behavior can be influenced by parameters provided
+        in the `context` dictionary.
 
         Args:
-            data: The input content to be summarized (expected to be a string).
-            context: A dictionary containing parameters for summarization.
-                     Supported keys:
-                     - 'max_words' (int): The maximum number of words to retain
-                       in the summary. If provided and valid (non-negative),
-                       this parameter takes precedence.
-                     - 'summary_ratio' (float): The ratio of the original text's
-                       word count to include in the summary (e.g., 0.3 for 30%).
-                       Used if 'max_words' is not specified or invalid.
-                       Must be between 0.0 and 1.0. Defaults to 0.3.
+            data: The input data, expected to be a string containing the text
+                  to be summarized.
+            context: A dictionary containing operational context for the node.
+                     - `summary_length_ratio` (float, optional): A value
+                       between 0 and 1 indicating the desired summary length
+                       as a ratio of the original text's length. Defaults to 0.3.
 
         Returns:
-            str: The condensed text, potentially with an ellipsis appended
-                 if truncation occurred. Returns an empty string for empty input.
+            A string representing the simulated summary of the input text.
 
         Raises:
-            ValueError: If the input 'data' is not of type string.
-            Exception: Propagates unexpected errors during processing.
+            TypeError: If the input `data` is not a string.
+            ValueError: If `summary_length_ratio` in context is invalid.
         """
+        logger.debug("TextSummarizerNode received data type: %s", type(data))
+        logger.debug("TextSummarizerNode received context: %s", context)
+
         if not isinstance(data, str):
-            logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected 'str', but received '{type(data).__name__}'."
-            )
-            raise ValueError(
-                f"Input 'data' for '{self.node_name}' must be a string, but received '{type(data).__name__}'."
+            logger.error("TextSummarizerNode received non-string data: %s", type(data).__name__)
+            raise TypeError(
+                f"TextSummarizerNode expects 'data' to be a string, "
+                f"but received {type(data).__name__}."
             )
 
         if not data.strip():
-            logger.warning(f"[{self.node_name}] Received empty or whitespace-only input string. Returning empty string.")
+            logger.info("TextSummarizerNode received empty or whitespace-only data. Returning empty string.")
             return ""
 
-        words = data.split()
-        original_word_count = len(words)
-        summary_word_count: int
+        original_text = data.strip()
+        original_length = len(original_text)
+        logger.debug("Original text length: %d characters.", original_length)
 
-        # Attempt to use 'max_words' from context first
-        max_words_config = context.get("max_words")
-        if isinstance(max_words_config, int) and max_words_config >= 0:
-            summary_word_count = min(original_word_count, max_words_config)
-            logger.debug(
-                f"[{self.node_name}] Summarizing to a maximum of {max_words_config} words. Original: {original_word_count} words."
+        # Validate and retrieve summary_length_ratio from context
+        summary_length_ratio = context.get('summary_length_ratio', 0.3)
+        if not (isinstance(summary_length_ratio, (int, float)) and 0 < summary_length_ratio <= 1):
+            logger.warning(
+                "Invalid 'summary_length_ratio' (%s) found in context. "
+                "It must be a float or int between 0 and 1. Using default of 0.3.",
+                summary_length_ratio
             )
+            summary_length_ratio = 0.3
+
+        # Calculate the target character count for the summary.
+        # Ensure a minimum useful length for very short texts, and cap at original length.
+        target_summary_char_count = max(
+            int(original_length * summary_length_ratio),
+            min(50, original_length) # Aim for at least 50 chars, but not more than the original text
+        )
+
+        simulated_summary: str
+        if original_length <= 100:
+            # For very short texts, return the text itself as a "summary".
+            simulated_summary = original_text
         else:
-            # Fallback to 'summary_ratio'
-            summary_ratio_config = context.get("summary_ratio", 0.3)
-            if not isinstance(summary_ratio_config, (int, float)) or not (0.0 <= summary_ratio_config <= 1.0):
-                logger.warning(
-                    f"[{self.node_name}] Invalid or out-of-range 'summary_ratio' ({summary_ratio_config}) in context. Using default ratio of 0.3."
-                )
-                summary_ratio_config = 0.3
-
-            summary_word_count = int(original_word_count * summary_ratio_config)
-            logger.debug(
-                f"[{self.node_name}] Summarizing using ratio {summary_ratio_config}. Original: {original_word_count} words, Target: {summary_word_count} words."
-            )
-
-        # Ensure at least one word is returned for non-empty input, unless target is explicitly 0
-        if summary_word_count == 0 and original_word_count > 0:
-            summary_word_count = 1
-            logger.debug(f"[{self.node_name}] Adjusted summary word count to 1 to prevent empty summary for non-empty input.")
-
-        summarized_words = words[:summary_word_count]
-        summarized_text = " ".join(summarized_words)
-
-        if original_word_count > len(summarized_words):
-            # Append ellipsis if the text was actually truncated
-            summarized_text += "..."
+            # Simulate summarization by truncating the text and appending a marker.
+            # This is a basic simulation and not a functional summarization model.
+            end_index = min(target_summary_char_count, original_length)
+            # Ensure we don't cut off mid-word if possible, though for simulation, simple cut is fine.
+            simulated_summary = original_text[:end_index].strip()
+            if len(simulated_summary) < original_length:
+                simulated_summary += "... [SIMULATED SUMMARY]"
 
         logger.info(
-            f"[{self.node_name}] Successfully summarized text from {original_word_count} words to {len(summarized_words)} words."
+            "Text summarization simulated. Original length: %d, "
+            "Simulated summary length: %d", original_length, len(simulated_summary)
         )
-        return summarized_text
+        logger.debug("Simulated summary: %s", simulated_summary)
+
+        return simulated_summary
