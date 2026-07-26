@@ -1,8 +1,5 @@
-
 import logging
-import time
-from collections import OrderedDict
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from vishustra_core.nodes.base_node import BaseNode
 
@@ -10,185 +7,112 @@ logger = logging.getLogger(__name__)
 
 class CacheManager(BaseNode):
     """
-    A processing node for managing an in-memory cache within the Vishustra pipeline.
-    This node can perform cache lookups and store data, based on control parameters
-    provided in the `context` dictionary.
+    A Vishustra node designed to manage a shared cache store.
 
-    The cache maintains entries with a time-to-live (TTL) and employs a basic
-    Least Recently Used (LRU) eviction strategy when the maximum capacity is reached.
+    This node provides fundamental caching operations:
+    - 'get': Retrieves a value associated with a given key.
+    - 'set': Stores a value under a specified key.
+    - 'delete': Removes a key-value pair from the cache.
+    - 'clear': Empties the entire cache store.
+    - 'has': Checks for the existence of a key in the cache.
 
-    Context Parameters Understood:
-    ------------------------------
-    - 'cache_key': (Required for most operations) A unique, hashable key for the cache entry.
-    - 'cache_action': (Optional, default 'lookup') Specifies the desired operation:
-        - 'lookup': Attempt to retrieve data from the cache.
-        - 'store': Store data into the cache.
-    - 'cache_force_refresh': (Optional, bool, default False for 'lookup' action)
-        If True, the lookup operation will bypass the cache and always result in a miss,
-        forcing downstream processing.
-    - 'cache_ttl_seconds': (Optional, int, default 300 for 'store' action)
-        The time-to-live in seconds for the stored cache entry.
-    - 'cache_value_to_store': (Optional, Any, for 'store' action)
-        The explicit value to store in the cache. If not provided, the `data`
-        argument passed to the `process` method will be used as the value.
-
-    Output Context Modifications:
-    -----------------------------
-    - 'cache_hit': (bool) Set to True if a 'lookup' action found a valid, non-expired entry.
-    - 'cache_value': (Any) If 'cache_hit' is True, this contains the retrieved cached value.
-    - 'cache_stored': (bool) Set to True if a 'store' action successfully saved data.
+    The actual cache storage (expected to be a dictionary-like object)
+    must be provided in the `context` dictionary under the key "cache_store".
+    This allows the orchestration layer to control and share cache instances.
     """
-
-    # Using OrderedDict to simulate a basic LRU for in-memory cache
-    _cache: OrderedDict[Any, Dict[str, Any]]
-    _max_cache_entries: int
-
-    def __init__(self, max_cache_entries: int = 1000):
-        """
-        Initializes the CacheManager node.
-
-        Args:
-            max_cache_entries: The maximum number of entries the in-memory cache can hold.
-                               If set to 0 or a negative number, caching effectively becomes
-                               disabled (no new entries will be stored if already full).
-        """
-        if not isinstance(max_cache_entries, int) or max_cache_entries < 0:
-            logger.warning(
-                f"Invalid 'max_cache_entries' value: {max_cache_entries}. "
-                "Defaulting to 1000 and ensuring it's not negative."
-            )
-            self._max_cache_entries = 1000
-        else:
-            self._max_cache_entries = max_cache_entries
-
-        self._cache = OrderedDict()
-        logger.info(f"CacheManager initialized with max_cache_entries={self._max_cache_entries}.")
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """Returns the name of the node."""
         return "CacheManager"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
+    def process(self, data: Dict[str, Any], context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, performing either a cache lookup or a storage operation
-        based on the 'cache_action' in the context.
+        Processes cache operations based on the input data and context.
 
-        Args:
-            data: The primary input for the current step. Its role depends on 'cache_action'.
-                  - If 'lookup': `data` is typically the key to look up (or derived from).
-                  - If 'store': `data` is typically the value that has just been processed
-                                by a previous node and is now ready to be cached.
-            context: A dictionary containing execution context and cache control parameters.
+        The `data` input must be a dictionary specifying the `action` and
+        any required parameters (e.g., `key`, `value`).
 
-        Returns:
-            - If 'lookup' and a valid cache hit: The retrieved cached value.
-            - If 'lookup' and a cache miss/expired/forced refresh: The original `data`
-              (often the key/request) to allow downstream processing to generate the value.
-            - If 'store': The original `data` (the value being stored or the result
-              that was passed through). The node primarily performs a side effect (storage).
+        Supported `data` formats:
+        - `{"action": "get", "key": "my_key"}`: Returns the value for "my_key" or `None`.
+        - `{"action": "set", "key": "my_key", "value": "my_value"}`: Stores "my_value". Returns `None`.
+        - `{"action": "delete", "key": "my_key"}`: Removes "my_key". Returns `None`.
+        - `{"action": "clear"}`: Clears the entire cache. Returns `None`.
+        - `{"action": "has", "key": "my_key"}`: Returns `True` if "my_key" exists, `False` otherwise.
+
+        The `context` dictionary *must* contain a key named "cache_store"
+        whose value is the dictionary-like object serving as the cache.
+
+        Raises:
+            ValueError: If `data` is not a dictionary, `action` is invalid,
+                        or required parameters like `key`/`value` are missing.
+            RuntimeError: If "cache_store" is not found or is not a dictionary in `context`.
         """
-        cache_key = context.get('cache_key')
-        cache_action = context.get('cache_action', 'lookup').lower()
+        if not isinstance(data, dict):
+            logger.error("CacheManager received non-dictionary data: %s", data)
+            raise ValueError("Data input for CacheManager must be a dictionary.")
 
-        # Reset cache-related context flags for this operation
-        context['cache_hit'] = False
-        context.pop('cache_value', None)
-        context['cache_stored'] = False
+        action = data.get("action")
+        key = data.get("key")
+        value = data.get("value")
 
-        if cache_key is None:
-            logger.warning(
-                "CacheManager received data without a 'cache_key' in context. "
-                "Skipping cache operation and passing data through."
-            )
-            return data
-        
-        # Ensure cache_key is hashable
+        if "cache_store" not in context or not isinstance(context["cache_store"], dict):
+            logger.error("CacheManager failed: 'cache_store' (dict) missing or invalid in context.")
+            raise RuntimeError("Cache store not properly initialized in context. Expected 'cache_store' key with a dictionary value.")
+
+        cache: Dict[str, Any] = context["cache_store"]
+
+        logger.debug("CacheManager node executing action: '%s' for key: '%s'", action, key)
+
         try:
-            hash(cache_key)
-        except TypeError:
-            logger.error(
-                f"CacheManager received unhashable 'cache_key': {cache_key}. "
-                "Skipping cache operation and passing data through."
-            )
-            return data
+            if action == "get":
+                if key is None:
+                    logger.warning("CacheManager 'get' action requires a 'key'.")
+                    raise ValueError("Missing 'key' parameter for 'get' action.")
+                result = cache.get(key)
+                logger.debug("Cache 'get' operation for key '%s' returned: %s", key, result)
+                return result
 
-        if cache_action == 'lookup':
-            return self._handle_lookup(cache_key, data, context)
-        elif cache_action == 'store':
-            return self._handle_store(cache_key, data, context)
-        else:
-            logger.error(
-                f"CacheManager received unknown 'cache_action': '{cache_action}' for key '{cache_key}'. "
-                "Skipping cache operation and passing data through."
-            )
-            return data
+            elif action == "set":
+                if key is None or value is None:
+                    logger.warning("CacheManager 'set' action requires 'key' and 'value'.")
+                    raise ValueError("Missing 'key' or 'value' parameter for 'set' action.")
+                cache[key] = value
+                logger.info("Cache 'set' operation: Key '%s' updated.", key)
+                return None
 
-    def _handle_lookup(self, cache_key: Any, data: Any, context: Dict[str, Any]) -> Any:
-        """Handles the cache lookup logic."""
-        force_refresh = context.get('cache_force_refresh', False)
+            elif action == "delete":
+                if key is None:
+                    logger.warning("CacheManager 'delete' action requires a 'key'.")
+                    raise ValueError("Missing 'key' parameter for 'delete' action.")
+                if key in cache:
+                    del cache[key]
+                    logger.info("Cache 'delete' operation: Key '%s' removed.", key)
+                else:
+                    logger.debug("Cache 'delete' operation: Key '%s' not found.", key)
+                return None
 
-        if force_refresh:
-            logger.debug(f"CacheManager: Forced refresh for key '{cache_key}'. Bypassing cache.")
-            context['cache_hit'] = False
-            return data
+            elif action == "clear":
+                cache.clear()
+                logger.info("Cache 'clear' operation: All entries removed.")
+                return None
 
-        entry = self._cache.get(cache_key)
-        
-        if entry:
-            current_time = time.time()
-            if current_time - entry['timestamp'] < entry['ttl']:
-                # Cache hit and valid, move to end to mark as recently used
-                self._cache.move_to_end(cache_key)
-                logger.debug(f"CacheManager: Hit for key '{cache_key}'. Valid entry.")
-                context['cache_hit'] = True
-                context['cache_value'] = entry['value']
-                return entry['value'] # Return the cached value
+            elif action == "has":
+                if key is None:
+                    logger.warning("CacheManager 'has' action requires a 'key'.")
+                    raise ValueError("Missing 'key' parameter for 'has' action.")
+                result = key in cache
+                logger.debug("Cache 'has' operation for key '%s' returned: %s", key, result)
+                return result
+
             else:
-                logger.debug(f"CacheManager: Miss for key '{cache_key}'. Entry expired.")
-                del self._cache[cache_key] # Evict expired entry
-        else:
-            logger.debug(f"CacheManager: Miss for key '{cache_key}'. No entry found.")
+                logger.error("CacheManager received an unknown action: '%s'", action)
+                raise ValueError(f"Unknown cache action: '{action}'. Supported actions are 'get', 'set', 'delete', 'clear', 'has'.")
 
-        context['cache_hit'] = False
-        return data # Return original data (the key/request) for downstream processing
-
-    def _handle_store(self, cache_key: Any, data: Any, context: Dict[str, Any]) -> Any:
-        """Handles the cache storage logic."""
-        # Prioritize 'cache_value_to_store' from context, otherwise use 'data'
-        value_to_store = context.get('cache_value_to_store', data)
-        ttl_seconds = context.get('cache_ttl_seconds', 300) # Default TTL to 5 minutes
-
-        if not isinstance(ttl_seconds, (int, float)) or ttl_seconds <= 0:
-            logger.warning(
-                f"Invalid or non-positive 'cache_ttl_seconds' value '{ttl_seconds}' for key '{cache_key}'. "
-                "Using default 300 seconds."
-            )
-            ttl_seconds = 300
-        
-        # Perform LRU eviction if cache is full and this key is not already present
-        if self._max_cache_entries > 0 and len(self._cache) >= self._max_cache_entries and cache_key not in self._cache:
-            # Evict the least recently used item (first in OrderedDict)
-            oldest_key, _ = self._cache.popitem(last=False)
-            logger.info(
-                f"CacheManager: Cache full (max {self._max_cache_entries} entries). "
-                f"Evicting '{oldest_key}' to make space for '{cache_key}'."
-            )
-        elif self._max_cache_entries == 0 and cache_key not in self._cache:
-            logger.debug(
-                f"CacheManager: Max cache entries set to 0. Not storing new key '{cache_key}'."
-            )
-            context['cache_stored'] = False
-            return data
-
-        self._cache[cache_key] = {
-            'value': value_to_store,
-            'timestamp': time.time(),
-            'ttl': ttl_seconds
-        }
-        # Move to end to mark as recently used/updated
-        self._cache.move_to_end(cache_key) 
-        
-        logger.info(f"CacheManager: Stored data for key '{cache_key}' with TTL {ttl_seconds}s.")
-        context['cache_stored'] = True
-        return data # Return original data (the value that was just stored) for downstream flow
+        except ValueError as e:
+            # Re-raise explicit ValueErrors for malformed input
+            raise
+        except Exception as e:
+            # Catch any other unexpected errors during cache operations
+            logger.exception("An unexpected error occurred during CacheManager operation for action '%s' on key '%s'.", action, key)
+            raise RuntimeError(f"CacheManager operation failed unexpectedly: {e}") from e
