@@ -2,122 +2,93 @@ import logging
 import re
 from typing import Any, Dict, List, Union
 
-# Assuming this import path is correct within the Vishustra project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class ProfanityFilterNode(BaseNode):
     """
-    A Vishustra processing node that filters out common profanity from text data.
-    It supports processing single strings or lists of strings, replacing identified
-    profane words with a configurable replacement string.
+    A processing node that filters out common profanities from text data.
+    It supports filtering individual strings or lists of strings.
+    The filtering is case-insensitive and attempts to respect word boundaries.
     """
 
-    # A class-level set of common profane words for quick lookup and efficient memory usage.
-    # Words are kept lowercase for case-insensitive matching.
-    _PROFANE_WORDS = {
-        "fuck", "shit", "bitch", "asshole", "cunt", "damn", "hell",
-        "piss", "bastard", "motherfucker", "cock", "dick", "prick",
-        "wanker", "bollocks", "tits", "fag", "nigger", "slut", "whore"
-    }
-
-    def __init__(self, replacement_string: str = "***"):
-        """
-        Initializes the ProfanityFilterNode.
-
-        Args:
-            replacement_string (str, optional): The string to use for replacing
-                                                profane words. Defaults to "***".
-        """
-        self._replacement_string = replacement_string
-
-        # Pre-compile regex patterns for each profane word.
-        # This improves performance, especially if the node processes a lot of data.
-        # '\b' ensures whole word matching, and re.IGNORECASE handles case-insensitivity.
-        self._profanity_patterns = {
-            word: re.compile(r'\b' + re.escape(word) + r'\b', re.IGNORECASE)
-            for word in self._PROFANE_WORDS
-        }
-        logger.info(f"ProfanityFilterNode initialized with replacement string: '{self._replacement_string}'")
+    # In a production system, this list would be dynamically loaded from a
+    # configuration service, database, or a dedicated NLP library.
+    # Using raw strings with word boundaries for basic regex matching.
+    _PROFANITY_LIST_PATTERNS = [
+        r"\bbadword1\b",
+        r"\bswearword\b",
+        r"\bcurse\b",
+        r"\bprofane\b",
+        r"\bfoul language\b", # Example phrase
+    ]
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "ProfanityFilterNode"
+        """Returns the name of the node."""
+        return "ProfanityFilter"
 
     def _filter_single_string(self, text: str) -> str:
         """
-        Filters profanity from a single string.
-
-        Args:
-            text (str): The input string to be filtered.
-
-        Returns:
-            str: The filtered string with profane words replaced.
+        Helper method to filter profanity from a single string.
+        Uses regex for case-insensitive matching and word boundary awareness.
         """
         filtered_text = text
-        for word, pattern in self._profanity_patterns.items():
-            # Apply the pre-compiled regex pattern to replace each profane word.
-            filtered_text = pattern.sub(self._replacement_string, filtered_text)
+        for pattern in self._PROFANITY_LIST_PATTERNS:
+            # Replace all occurrences of the pattern with '***' using case-insensitive matching.
+            # re.sub is used for its robust regex capabilities.
+            filtered_text = re.sub(pattern, "***", filtered_text, flags=re.IGNORECASE)
         return filtered_text
 
     def process(self, data: Union[str, List[str]], context: Dict[str, Any]) -> Union[str, List[str]]:
         """
-        Processes the input data, filtering out profanity from text content.
+        Processes the input data to remove profanity.
 
-        This method supports processing either a single string or a list of strings.
-        If a list contains non-string items, they are passed through unchanged
-        while string items are filtered. Unsupported data types are returned as-is
-        with a warning logged.
+        If `data` is a string, it filters the string.
+        If `data` is a list of strings, it filters each string in the list.
+        Non-string elements found within a list will be passed through
+        unmodified, with a warning logged.
 
         Args:
-            data (Union[str, List[str]]): The input data to be processed.
-                                          Expected to be a string or a list of strings.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                      for the processing task (e.g., global settings,
-                                      user preferences, etc.).
+            data: The input data, expected to be a string or a list of strings.
+            context: A dictionary containing contextual information for the processing.
+                     (Currently not used by this node but available for future extensions).
 
         Returns:
-            Union[str, List[str]]: The data with profanity filtered, or the original
-                                   data if it's not a string or list of strings.
-        """
-        logger.debug(f"ProfanityFilterNode received data for processing. Context keys: {list(context.keys())}")
+            The data with profanities filtered. The return type matches the
+            input type (string or list of strings).
 
-        try:
-            if isinstance(data, str):
-                processed_data = self._filter_single_string(data)
-                logger.debug(f"Processed single string (truncated): '{data[:50]}...' -> '{processed_data[:50]}...'")
-                return processed_data
-            elif isinstance(data, list):
-                # Check if all items are strings for more specific logging,
-                # but process only string items robustly.
-                if not all(isinstance(item, str) for item in data):
-                    logger.warning(
-                        "ProfanityFilterNode received a list containing non-string items. "
-                        "Only string items will be processed; others will be returned unchanged."
-                    )
-                processed_data = [
-                    self._filter_single_string(item) if isinstance(item, str) else item
-                    for item in data
-                ]
-                # Log a snippet of the first item if the list is not empty.
-                if data:
-                    logger.debug(f"Processed list of strings (first item truncated): '{data[0][:50]}...' -> '{processed_data[0][:50]}...'")
+        Raises:
+            TypeError: If the input `data` is not a string or a list of strings.
+        """
+        logger.debug(f"ProfanityFilterNode received data of type: {type(data).__name__}")
+
+        if isinstance(data, str):
+            result = self._filter_single_string(data)
+            logger.info("Successfully filtered profanity from a single string.")
+            return result
+        elif isinstance(data, list):
+            filtered_list = []
+            for i, item in enumerate(data):
+                if isinstance(item, str):
+                    filtered_list.append(self._filter_single_string(item))
                 else:
-                    logger.debug("Processed an empty list of strings.")
-                return processed_data
-            else:
-                logger.warning(
-                    f"ProfanityFilterNode received unsupported data type: {type(data).__name__}. "
-                    "Expected 'str' or 'List[str]'. Returning data unchanged."
-                )
-                return data
-        except Exception as e:
-            # Log the full traceback for unexpected errors during processing
-            logger.exception(f"An unexpected error occurred during profanity filtering: {e}")
-            # In case of an error, it's often best practice for a processing node
-            # to return the original data or an indicator of failure, depending
-            # on the orchestration framework's error handling strategy.
-            # Here, we opt for returning the original data to ensure pipeline resilience.
-            return data
+                    # Log a warning for non-string items in the list, but pass them through
+                    # to avoid halting processing of other valid items.
+                    logger.warning(
+                        f"ProfanityFilterNode found non-string item at index {i} "
+                        f"(type: {type(item).__name__}) in input list. "
+                        "Item passed through unmodified."
+                    )
+                    filtered_list.append(item)
+            logger.info(f"Successfully filtered profanity from {len(filtered_list)} items in a list.")
+            return filtered_list
+        else:
+            # Raise an error for unsupported data types.
+            error_msg = (
+                f"{self.node_name} expects input 'data' to be a 'str' or 'List[str]', "
+                f"but received type: '{type(data).__name__}'. Data: {data!r}"
+            )
+            logger.error(error_msg)
+            raise TypeError(error_msg)
