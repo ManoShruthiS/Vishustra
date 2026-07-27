@@ -1,19 +1,32 @@
-import re
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict
 
-# Assuming vishustra_core.nodes.base_node is available in the environment
+# Assuming this import path is correctly set up within the Vishustra project structure
 from vishustra_core.nodes.base_node import BaseNode
+
+# Initialize a flag to track the availability of the 'markdown' library
+_markdown_available = False
+try:
+    import markdown
+    _markdown_available = True
+except ImportError:
+    # Log a warning if the 'markdown' library is not found.
+    # This allows the module to be imported, but the node will raise an error if used.
+    logging.getLogger(__name__).warning(
+        "The 'markdown' library is not installed. MarkdownParserNode will not be functional. "
+        "Please install it using 'pip install markdown' if you intend to use this node."
+    )
 
 logger = logging.getLogger(__name__)
 
 class MarkdownParserNode(BaseNode):
     """
-    A Vishustra node designed to parse Markdown text into a structured list of blocks.
+    A Vishustra processing node that converts Markdown formatted text into HTML.
 
-    This node simulates the parsing of markdown by identifying common elements like
-    headings and paragraphs, representing them as a list of dictionaries for
-    subsequent processing by other nodes in the orchestration framework.
+    This node leverages the standard 'markdown' Python library for reliable and flexible
+    Markdown-to-HTML transformation, supporting various Markdown extensions for enhanced
+    formatting capabilities. It's designed to take a Markdown string as input and
+    produce a corresponding HTML string, suitable for display or further processing.
     """
 
     @property
@@ -23,76 +36,69 @@ class MarkdownParserNode(BaseNode):
         """
         return "MarkdownParser"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, expecting a Markdown string, and parses it
-        into a structured list of blocks (headings, paragraphs).
+        Processes the input data, converting Markdown text to HTML.
 
-        The `context` dictionary is available for passing operational data across
-        nodes but is not directly utilized in this node's basic parsing logic.
+        The `data` input is strictly expected to be a string containing Markdown.
+        The `context` dictionary can optionally include 'markdown_extensions'
+        (a list of strings) to customize the parsing behavior, allowing support
+        for features like tables, Fenced Code Blocks, etc.
 
         Args:
-            data: The input data, expected to be a string containing Markdown content.
-            context: A dictionary containing contextual information for processing.
+            data (Any): The input data, expected to be a Markdown string.
+            context (Dict[str, Any]): A dictionary containing context-specific
+                                       information. It can optionally contain:
+                                       - 'markdown_extensions' (list[str]): A list of
+                                         extension names to enable during parsing.
 
         Returns:
-            A list of dictionaries. Each dictionary represents a parsed block and
-            contains at least a 'type' (e.g., 'heading', 'paragraph') and 'content'.
-            Heading blocks will additionally include a 'level' attribute (integer).
+            Any: The processed data as an HTML string.
 
         Raises:
-            ValueError: If the input data is not a string, indicating an invalid
-                        payload for this parser node.
+            TypeError: If the input `data` is not a string.
+            RuntimeError: If the 'markdown' library is not installed or
+                          an unexpected error occurs during the parsing process.
         """
+        if not _markdown_available:
+            logger.error("MarkdownParserNode cannot process data: The required 'markdown' library is not installed.")
+            raise RuntimeError("Required 'markdown' library is not installed. Please install it to use MarkdownParserNode.")
+
         if not isinstance(data, str):
-            error_msg = (
-                f"Invalid input data type for {self.node_name}. "
-                f"Expected str, but received {type(data).__name__}."
-            )
             logger.error(
-                error_msg,
-                extra={"node_name": self.node_name, "input_type": type(data).__name__, "context": context},
+                f"MarkdownParserNode received unsupported data type: {type(data).__name__}. Expected a string."
             )
-            raise ValueError(error_msg)
+            raise TypeError(
+                f"MarkdownParserNode expects input data to be a string, "
+                f"but received {type(data).__name__}."
+            )
 
-        parsed_blocks: List[Dict[str, Any]] = []
-        lines = data.strip().split('\n')
-        current_paragraph_lines: List[str] = []
+        logger.debug(f"MarkdownParserNode: Starting markdown parsing for input of length {len(data)} characters.")
 
-        def flush_paragraph() -> None:
-            """
-            Helper function to consolidate accumulated paragraph lines into a
-            single paragraph block and add it to `parsed_blocks`.
-            """
-            if current_paragraph_lines:
-                paragraph_content = '\n'.join(current_paragraph_lines).strip()
-                if paragraph_content:  # Only add if content is not empty after stripping
-                    parsed_blocks.append({"type": "paragraph", "content": paragraph_content})
-                current_paragraph_lines.clear()
+        try:
+            # Extract markdown extensions from context if provided
+            extensions = context.get('markdown_extensions', [])
 
-        for line in lines:
-            line = line.strip()
-            if not line:
-                # An empty line often demarcates paragraphs or blocks
-                flush_paragraph()
-                continue
+            # Validate the type of markdown_extensions from context
+            if not isinstance(extensions, list):
+                logger.warning(
+                    f"Context 'markdown_extensions' is not a list ({type(extensions).__name__}). "
+                    "Ignoring invalid extensions and using default parsing."
+                )
+                extensions = []
+            elif not all(isinstance(ext, str) for ext in extensions):
+                 logger.warning(
+                    f"Context 'markdown_extensions' contains non-string elements. "
+                    "Filtering out invalid extensions and using only valid string-based ones."
+                )
+                 extensions = [ext for ext in extensions if isinstance(ext, str)]
 
-            # Attempt to match markdown headings (e.g., '# Heading', '## Subheading')
-            heading_match = re.match(r"^(#+)\s*(.*)", line)
-            if heading_match:
-                flush_paragraph()  # Any preceding paragraph must be finalized before a new heading
-                level = len(heading_match.group(1))
-                content = heading_match.group(2).strip()
-                parsed_blocks.append({"type": "heading", "level": level, "content": content})
-            else:
-                # If it's not a heading and not an empty line, it's part of a paragraph
-                current_paragraph_lines.append(line)
+            # Perform the Markdown to HTML conversion
+            html_output = markdown.markdown(data, extensions=extensions)
+            logger.info("MarkdownParserNode: Successfully converted markdown to HTML.")
+            return html_output
+        except Exception as e:
+            # Catching a broad exception to ensure robustness against unexpected issues
+            logger.exception(f"MarkdownParserNode: An unexpected error occurred during markdown parsing: {e}")
+            raise RuntimeError(f"Failed to parse markdown content: {e}") from e
 
-        # Ensure any remaining accumulated paragraph content is flushed after the loop
-        flush_paragraph()
-
-        logger.debug(
-            f"Successfully parsed markdown data into {len(parsed_blocks)} blocks.",
-            extra={"node_name": self.node_name, "num_blocks": len(parsed_blocks)},
-        )
-        return parsed_blocks
