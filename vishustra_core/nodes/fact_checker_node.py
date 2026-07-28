@@ -1,149 +1,130 @@
-
 import logging
-from typing import Any, Dict, Union
+from typing import Any, Dict
 
+# Assuming BaseNode is available at this path as per project context
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class FactCheckerNode(BaseNode):
     """
-    A processing node designed to simulate fact-checking a given claim.
+    A Vishustra node that simulates fact-checking of input statements.
 
-    This node takes a statement (claim) as input and attempts to verify its
-    truthfulness against a simulated internal knowledge base. In a real-world
-    scenario, this would involve integrating with external fact-checking APIs,
-    semantic search over trusted sources, or advanced LLM reasoning.
+    This node takes a statement (expected within a dictionary under the 'statement' key)
+    and attempts to verify its veracity based on predefined rules or a simulated
+    external check. It returns a result indicating whether the statement is
+    considered a fact, a confidence score, and a reason for the determination.
     """
-
-    # Simulated knowledge base for demonstration purposes.
-    # This dictionary holds simple true/false statements.
-    # In a production system, this would be replaced by a robust
-    # data source or service interaction.
-    _KNOWN_FACTS = {
-        "water boils at 100 degrees celsius": True,
-        "the earth is flat": False,
-        "humans can fly naturally": False,
-        "the sky is blue": True,
-        "the sun orbits the earth": False,
-        "vishustra is an llm orchestration framework": True,
-        "elephants can jump": False,
-        "birds are mammals": False,
-        "penguins can fly": False,
-        "chocolate is poisonous to dogs": True,
-        "the great wall of china is visible from space": False,
-        "napoleon was short": False, # Historically, he was average height for his era
-    }
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """Returns the name of the node."""
         return "FactCheckerNode"
 
-    def process(self, data: Union[str, Dict[str, Any]], context: Dict[str, Any]) -> Dict[str, Any]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, attempting to fact-check a claim.
+        Processes the input data to determine the veracity of a statement.
 
-        The `data` input is expected to be either a string representing the claim
-        directly, or a dictionary that contains a 'claim' key. The node attempts
-        to verify this claim against its simulated internal knowledge base.
+        Expected `data` format:
+        `{"statement": "The sky is green."}`
 
-        The `context` dictionary is provided for broader orchestration, allowing
-        for passing of additional metadata or session-specific information,
-        though it is not extensively utilized in this specific simulation.
+        Expected `context` parameters (optional):
+        - `fact_check_depth`: str ('shallow', 'deep') - Influences simulation complexity.
+        - `known_facts`: Dict[str, bool] - A mapping of statements to their known truth value.
 
         Args:
-            data: The claim to be fact-checked. Can be a string (the claim itself)
-                  or a dictionary (e.g., `{"claim": "..."}`).
-            context: A dictionary containing contextual information relevant to the
-                     processing, such as user session data or external parameters.
+            data (Any): The input data containing the statement to be checked.
+            context (Dict[str, Any]): A dictionary of context variables for processing.
 
         Returns:
-            A dictionary containing the original claim, the fact-checking result,
-            a confidence score, an explanation, and a list of sources checked.
-            The `is_fact` field will be `True`, `False`, or `None` if unverified.
-
-            Example output:
-            {
-                "original_claim": "The sky is blue.",
-                "is_fact": True,
-                "confidence": 0.95,
-                "explanation": "Based on simulated knowledge base: 'The sky is blue' is recorded as true.",
-                "sources_checked": ["Simulated_KB"]
-            }
+            Any: A dictionary containing the original statement, its verification status,
+                 a confidence score, and a reason for the status.
+                 Example:
+                 `{"original_statement": "The sky is blue.", "is_fact": True,
+                   "confidence": 0.95, "reason": "Common knowledge."}`
 
         Raises:
-            ValueError: If the input `data` is not in an expected format (str or dict with 'claim').
-            Exception: Propagates any unexpected errors encountered during the fact-checking simulation.
+            TypeError: If the input `data` is not a dictionary.
+            ValueError: If the required 'statement' key is missing from `data`.
         """
-        logger.info(f"[{self.node_name}] Starting fact-checking process for data input type: {type(data).__name__}")
+        logger.info(f"[{self.node_name}] Starting fact-checking process.")
+        logger.debug(f"[{self.node_name}] Input data: {data}, Context: {context}")
 
-        claim_text: str
-        original_data_input = data # Retain original input for the output structure
+        if not isinstance(data, dict):
+            logger.error(f"[{self.node_name}] Invalid input data type. Expected dict, got {type(data)}.")
+            raise TypeError(
+                f"FactCheckerNode expects 'data' to be a dictionary, but received {type(data).__name__}."
+            )
+
+        statement = data.get("statement")
+        if not isinstance(statement, str) or not statement.strip():
+            logger.error(f"[{self.node_name}] Missing or invalid 'statement' in input data.")
+            raise ValueError(
+                f"FactCheckerNode requires a non-empty string 'statement' key in the input data."
+            )
+
+        statement_lower = statement.strip().lower()
+        result = {
+            "original_statement": statement,
+            "is_fact": False,
+            "confidence": 0.0,
+            "reason": "Could not verify statement."
+        }
+
+        # Simulate different fact-checking mechanisms based on context
+        fact_check_depth = context.get("fact_check_depth", "shallow").lower()
+        known_facts = context.get("known_facts", {})
 
         try:
-            if isinstance(data, str):
-                claim_text = data.strip()
-            elif isinstance(data, dict):
-                if 'claim' not in data:
-                    logger.error(f"[{self.node_name}] Input dictionary missing required 'claim' key. Data: {data}")
-                    raise ValueError("Input dictionary must contain a 'claim' key for fact-checking.")
-                claim_text = str(data['claim']).strip()
+            # 1. Check against explicitly provided known facts (high confidence)
+            if statement_lower in known_facts:
+                result["is_fact"] = known_facts[statement_lower]
+                result["confidence"] = 0.99
+                result["reason"] = "Matched against known facts from context."
+                logger.debug(f"[{self.node_name}] Statement matched known facts.")
+                return result
+
+            # 2. Basic keyword matching for simulation (shallow check)
+            if fact_check_depth == "shallow":
+                if "water is wet" in statement_lower or "sky is blue" in statement_lower:
+                    result["is_fact"] = True
+                    result["confidence"] = 0.90
+                    result["reason"] = "Matched against common knowledge keywords (shallow check)."
+                elif "sun is cold" in statement_lower or "humans have wings" in statement_lower:
+                    result["is_fact"] = False
+                    result["confidence"] = 0.85
+                    result["reason"] = "Contradicts common knowledge keywords (shallow check)."
+                logger.debug(f"[{self.node_name}] Performed shallow fact check.")
+
+            # 3. More sophisticated simulation (deep check)
+            elif fact_check_depth == "deep":
+                # Simulate a more complex check, perhaps involving multiple criteria
+                if "earth orbits sun" in statement_lower:
+                    result["is_fact"] = True
+                    result["confidence"] = 0.98
+                    result["reason"] = "Verified through simulated deep astronomical data analysis."
+                elif "pi is exactly 3" in statement_lower:
+                    result["is_fact"] = False
+                    result["confidence"] = 0.97
+                    result["reason"] = "Refuted by simulated deep mathematical analysis."
+                else:
+                    # Fallback to general unknown if deep check doesn't find specific match
+                    result["is_fact"] = False
+                    result["confidence"] = 0.40 # Lower confidence for deep check unknowns
+                    result["reason"] = "Statement could not be definitively verified or refuted by deep analysis."
+                logger.debug(f"[{self.node_name}] Performed deep fact check.")
+
             else:
-                logger.error(f"[{self.node_name}] Invalid data type. Expected str or dict, received {type(data).__name__}.")
-                raise ValueError(f"Invalid input data type. Expected str or dict with 'claim' key, got {type(data).__name__}. Cannot fact-check.")
+                logger.warning(
+                    f"[{self.node_name}] Unknown 'fact_check_depth' '{fact_check_depth}'. Defaulting to unverified."
+                )
 
-            if not claim_text:
-                logger.warning(f"[{self.node_name}] Received an empty claim for processing.")
-                return {
-                    "original_claim": original_data_input,
-                    "is_fact": None,
-                    "confidence": 0.0,
-                    "explanation": "No valid claim text was provided to fact-check.",
-                    "sources_checked": []
-                }
-
-            normalized_claim = claim_text.lower()
-            result: Dict[str, Any] = {
-                "original_claim": original_data_input,
-                "is_fact": None,  # Represents unverified or needs more info
-                "confidence": 0.0,
-                "explanation": "Could not verify claim against available knowledge.",
-                "sources_checked": []
-            }
-
-            if normalized_claim in self._KNOWN_FACTS:
-                is_fact = self._KNOWN_FACTS[normalized_claim]
-                result["is_fact"] = is_fact
-                # Assign higher confidence if a direct match is found
-                result["confidence"] = 0.95 if is_fact else 0.85
-                result["explanation"] = f"Based on simulated knowledge base: '{claim_text}' is recorded as {'true' if is_fact else 'false'}."
-                result["sources_checked"].append("Simulated_KB")
-                logger.info(f"[{self.node_name}] Claim '{claim_text}' found in simulated KB. Is Fact: {is_fact}")
-            else:
-                # If not found in our simple KB, it's considered unverified for this simulation.
-                # In a real system, this might trigger a call to a more advanced service.
-                result["is_fact"] = None
-                result["confidence"] = 0.1
-                result["explanation"] = f"Claim '{claim_text}' not found in the simulated knowledge base. Further verification needed."
-                logger.warning(f"[{self.node_name}] Claim '{claim_text}' not found in simulated KB. Marked as unverified.")
-
-            logger.info(f"[{self.node_name}] Finished fact-checking for claim: '{claim_text}'. Result: Is Fact={result['is_fact']}")
-            return result
-
-        except ValueError as ve:
-            logger.error(f"[{self.node_name}] Input validation error during fact-checking: {ve}")
-            raise # Re-raise ValueError as it's an expected input failure
         except Exception as e:
-            logger.exception(f"[{self.node_name}] An unexpected error occurred while processing claim '{original_data_input}': {e}")
-            # Construct an error result before re-raising or returning a partial one
-            error_result = {
-                "original_claim": original_data_input,
-                "is_fact": None,
-                "confidence": 0.0,
-                "explanation": f"An internal error prevented fact-checking: {type(e).__name__} - {e}",
-                "sources_checked": []
-            }
-            # Depending on system design, one might return the error_result or re-raise.
-            # For a critical processing error, re-raising is often preferred to halt the pipeline.
-            raise
+            logger.error(f"[{self.node_name}] An unexpected error occurred during fact checking: {e}", exc_info=True)
+            result["is_fact"] = False
+            result["confidence"] = 0.0
+            result["reason"] = f"Error during fact-checking process: {type(e).__name__}"
+
+        logger.info(f"[{self.node_name}] Fact-checking complete for statement: '{statement[:50]}...'")
+        logger.debug(f"[{self.node_name}] Result: {result}")
+        return result
