@@ -1,125 +1,128 @@
 import re
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List, Union
 
-# Assuming BaseNode is located at vishustra_core/nodes/base_node.py
+# Assuming vishustra_core is accessible as a package for node imports
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class PIIRedactorNode(BaseNode):
     """
-    A Vishustra processing node responsible for redacting Personally Identifiable
-    Information (PII) from input text data.
+    A Vishustra node that redacts personally identifiable information (PII)
+    from input data. It identifies common PII patterns like emails, phone numbers,
+    and social security numbers and replaces them with a configurable placeholder.
 
-    This node identifies common PII patterns such as email addresses, phone numbers,
-    US Social Security Numbers (SSN), and credit card numbers using regular expressions
-    and replaces them with generic redacted placeholders.
+    This node recursively processes strings within dictionaries and lists.
     """
+
+    DEFAULT_REDACTION_PLACEHOLDER = "[REDACTED_PII]"
+
+    # Pre-compiled regex patterns for common PII types.
+    # These are illustrative and can be extended or configured via __init__.
+    _default_pii_patterns: List[re.Pattern] = [
+        re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"),  # Email addresses
+        re.compile(r"\b(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"),  # Phone numbers (various formats)
+        re.compile(r"\b\d{3}[-.\s]?\d{2}[-.\s]?\d{4}\b"),  # US Social Security Numbers (simplified XXX-XX-XXXX)
+        # Add more patterns as needed for specific project requirements, e.g.:
+        # re.compile(r"\b(?:4\d{3}|5[1-5]\d{2}|6011|3[47]\d{2})[- ]?(?:\d{4}[- ]?){3}\b"), # Simplified credit card numbers
+        # re.compile(r"\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b") # IPv4 addresses
+    ]
+
+    def __init__(self, custom_regex_patterns: List[str] = None, redaction_placeholder: str = None):
+        """
+        Initializes the PII Redactor node.
+
+        Args:
+            custom_regex_patterns (List[str], optional): A list of additional regex patterns (as strings)
+                                                         to use for PII detection. These will be compiled.
+                                                         Invalid patterns will be logged and ignored.
+            redaction_placeholder (str, optional): The string to replace identified PII with.
+                                                   Defaults to '[REDACTED_PII]'.
+        """
+        self._current_patterns = list(self._default_pii_patterns) # Start with default patterns
+        
+        if custom_regex_patterns:
+            for pattern_str in custom_regex_patterns:
+                try:
+                    self._current_patterns.append(re.compile(pattern_str))
+                except re.error as e:
+                    logger.warning(f"Failed to compile custom regex pattern '{pattern_str}'. It will be ignored: {e}")
+        
+        self._redaction_placeholder = redaction_placeholder if redaction_placeholder is not None else self.DEFAULT_REDACTION_PLACEHOLDER
+        
+        logger.debug(
+            f"PIIRedactorNode initialized with {len(self._current_patterns)} patterns "
+            f"and placeholder '{self._redaction_placeholder}'."
+        )
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """Returns the descriptive name of the node."""
         return "PII Redactor"
 
-    def __init__(self):
+    def _redact_string(self, text: str, placeholder: str) -> str:
         """
-        Initializes the PIIRedactorNode with predefined PII patterns.
+        Applies all configured PII patterns to redact sensitive information from a string.
         """
-        self._pii_patterns = [
-            # Email Address
-            (re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'), '[REDACTED_EMAIL]'),
-            # Phone Numbers (various formats: (123) 456-7890, 123-456-7890, +1 123 456 7890)
-            (re.compile(r'\b(?:\+\d{1,3}[-. ]?)?\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}\b'), '[REDACTED_PHONE]'),
-            # US Social Security Number (XXX-XX-XXXX)
-            (re.compile(r'\b\d{3}-\d{2}-\d{4}\b'), '[REDACTED_SSN]'),
-            # Credit Card Numbers (13-16 digits, with or without spaces/hyphens)
-            # This is a simplified pattern and might falsely identify other long numbers.
-            # For production, consider Luhn algorithm validation or dedicated libraries.
-            (re.compile(r'\b(?:4\d{3}|5[1-5]\d{2}|6011|3[47]\d{2})[- ]?(?:\d{4}[- ]?){2}\d{3,4}\b'), '[REDACTED_CREDIT_CARD]'),
-        ]
-        logger.info(f"Initialized {self.node_name} with {len(self._pii_patterns)} PII detection patterns.")
+        if not isinstance(text, str):
+            logger.debug(f"Attempted to redact non-string data of type {type(text).__name__}. Returning as-is.")
+            return text
+            
+        redacted_text = text
+        for pattern in self._current_patterns:
+            redacted_text = pattern.sub(placeholder, redacted_text)
+        return redacted_text
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
         Processes the input data to identify and redact PII.
 
+        The method handles strings, dictionaries, and lists recursively.
+        Other data types are returned as-is. The redaction placeholder
+        can be temporarily overridden via the `context` dictionary.
+
         Args:
-            data: The input data, expected to be a string containing text.
-            context: A dictionary containing context-specific information for processing.
+            data (Any): The input data to be processed. Can be a string, dict, list,
+                        or any other data type.
+            context (Dict[str, Any]): A dictionary containing context-specific information.
+                                      If `context` contains a key 'redaction_placeholder'
+                                      (str), its value will override the node's configured
+                                      placeholder for this specific `process` call.
 
         Returns:
-            The processed data with PII redacted. If the input data is not
-            a string, it is returned as is with a warning.
+            Any: The data with identified PII redacted. Data types not explicitly
+                 handled (e.g., numbers, booleans) are returned without modification.
         """
-        if not isinstance(data, str):
-            logger.warning(
-                f"{self.node_name}: Input data is not a string (type: {type(data).__name__}). "
-                "PII redaction will be skipped. Returning data as-is."
-            )
-            return data
-
-        redacted_data = data
-        redaction_count = 0
-
-        for pattern, replacement_text in self._pii_patterns:
-            original_data_before_sub = redacted_data
-            redacted_data = pattern.sub(replacement_text, redacted_data)
-            
-            # Check if any substitutions were made by this pattern
-            if original_data_before_sub != redacted_data:
-                # Count occurrences replaced by this specific pattern in this pass
-                # Note: this is an approximation if previous patterns already redacted overlapping text
-                current_pattern_matches = len(pattern.findall(original_data_before_sub))
-                redaction_count += current_pattern_matches
-                logger.debug(
-                    f"{self.node_name}: Redacted {current_pattern_matches} instances "
-                    f"using pattern for '{replacement_text.replace('[REDACTED_','').replace(']','')}'."
-                )
+        logger.info(f"Initiating PII redaction for data of type: {type(data).__name__}.")
         
-        if redaction_count > 0:
-            logger.info(
-                f"{self.node_name}: Successfully redacted {redaction_count} potential PII instances."
+        # Allow context to temporarily override the placeholder for this specific processing run
+        current_placeholder = context.get('redaction_placeholder', self._redaction_placeholder)
+
+        try:
+            if isinstance(data, str):
+                return self._redact_string(data, current_placeholder)
+            elif isinstance(data, dict):
+                redacted_dict = {}
+                for key, value in data.items():
+                    # Recursively process dictionary values
+                    redacted_dict[key] = self.process(value, context)
+                return redacted_dict
+            elif isinstance(data, list):
+                # Recursively process list elements
+                redacted_list = [self.process(item, context) for item in data]
+                return redacted_list
+            else:
+                logger.debug(
+                    f"Data type {type(data).__name__} is not a string, dict, or list; "
+                    "skipping deep PII redaction and returning data as-is."
+                )
+                return data
+        except Exception as e:
+            logger.error(
+                f"An unexpected error occurred during PII redaction for data of type {type(data).__name__}: {e}",
+                exc_info=True
             )
-        else:
-            logger.debug(f"{self.node_name}: No PII found or redacted in the provided data.")
-
-        return redacted_data
-
-if __name__ == '__main__':
-    # Example usage for testing
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    
-    pii_redactor = PIIRedactorNode()
-
-    test_data_1 = (
-        "Hello, my name is John Doe. You can reach me at john.doe@example.com "
-        "or call me at +1 (555) 123-4567. My SSN is 123-45-6789. "
-        "Also, don't use credit card 1111-2222-3333-4444."
-    )
-    test_data_2 = "No PII here, just a regular sentence."
-    test_data_3 = 12345 # Non-string data
-    test_data_4 = (
-        "Please contact me via email at test@mail.co.uk or on my mobile "
-        "07700 900333. My MasterCard is 5432 1098 7654 3210. Another phone number: 012-345-6789."
-    )
-
-    print("\n--- Test Case 1 ---")
-    print("Original:", test_data_1)
-    redacted_1 = pii_redactor.process(test_data_1, {})
-    print("Redacted:", redacted_1)
-
-    print("\n--- Test Case 2 ---")
-    print("Original:", test_data_2)
-    redacted_2 = pii_redactor.process(test_data_2, {})
-    print("Redacted:", redacted_2)
-
-    print("\n--- Test Case 3 (Non-string) ---")
-    print("Original:", test_data_3)
-    redacted_3 = pii_redactor.process(test_data_3, {})
-    print("Redacted:", redacted_3)
-
-    print("\n--- Test Case 4 (More PII) ---")
-    print("Original:", test_data_4)
-    redacted_4 = pii_redactor.process(test_data_4, {})
-    print("Redacted:", redacted_4)
+            # In case of an unexpected error, return the original data to prevent data loss,
+            # but ensure the error is logged for investigation.
+            return data
