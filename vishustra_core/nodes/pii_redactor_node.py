@@ -1,111 +1,125 @@
-import logging
 import re
+import logging
 from typing import Any, Dict
 
+# Assuming BaseNode is located at vishustra_core/nodes/base_node.py
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class PIIRedactorNode(BaseNode):
     """
-    A Vishustra processing node that redacts common Personally Identifiable Information (PII)
-    from text data using regular expressions.
+    A Vishustra processing node responsible for redacting Personally Identifiable
+    Information (PII) from input text data.
 
-    This node is designed to identify and replace sensitive data patterns, ensuring
-    privacy compliance for information flowing through the orchestration framework.
-
-    Supported PII types for redaction (configurable via `redact_patterns` in context):
-    - Email addresses: Standard email formats.
-    - US Phone numbers: Various common US phone number formats.
-    - US Social Security Numbers (SSN): Standard XXX-XX-XXXX format.
-    - Credit Card numbers: Basic 16-digit patterns (with or without hyphens/spaces).
-    - IP Addresses: Standard IPv4 formats.
+    This node identifies common PII patterns such as email addresses, phone numbers,
+    US Social Security Numbers (SSN), and credit card numbers using regular expressions
+    and replaces them with generic redacted placeholders.
     """
-
-    # Class-level definition of PII patterns. This design centralizes pattern management
-    # and allows for efficient compilation and reuse across instances.
-    _PII_PATTERNS = {
-        "email": r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-        "phone_us": r'\b(?:\+?1[\s-]?)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}\b',
-        "ssn_us": r'\b\d{3}-\d{2}-\d{4}\b',
-        "credit_card": r'\b(?:\d{4}[- ]){3}\d{4}|\d{16}\b',
-        "ip_address": r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b'
-    }
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """Returns the name of the node."""
         return "PII Redactor"
+
+    def __init__(self):
+        """
+        Initializes the PIIRedactorNode with predefined PII patterns.
+        """
+        self._pii_patterns = [
+            # Email Address
+            (re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'), '[REDACTED_EMAIL]'),
+            # Phone Numbers (various formats: (123) 456-7890, 123-456-7890, +1 123 456 7890)
+            (re.compile(r'\b(?:\+\d{1,3}[-. ]?)?\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}\b'), '[REDACTED_PHONE]'),
+            # US Social Security Number (XXX-XX-XXXX)
+            (re.compile(r'\b\d{3}-\d{2}-\d{4}\b'), '[REDACTED_SSN]'),
+            # Credit Card Numbers (13-16 digits, with or without spaces/hyphens)
+            # This is a simplified pattern and might falsely identify other long numbers.
+            # For production, consider Luhn algorithm validation or dedicated libraries.
+            (re.compile(r'\b(?:4\d{3}|5[1-5]\d{2}|6011|3[47]\d{2})[- ]?(?:\d{4}[- ]?){2}\d{3,4}\b'), '[REDACTED_CREDIT_CARD]'),
+        ]
+        logger.info(f"Initialized {self.node_name} with {len(self._pii_patterns)} PII detection patterns.")
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data to redact PII based on configured patterns.
+        Processes the input data to identify and redact PII.
 
-        The method expects text data (`str`) and will return the redacted text.
-        If the input `data` is not a string, a warning will be logged, and the
-        original data will be returned unmodified, ensuring non-textual data
-        is not erroneously processed.
+        Args:
+            data: The input data, expected to be a string containing text.
+            context: A dictionary containing context-specific information for processing.
 
-        Configuration options passed via the `context` dictionary:
-        - `redaction_token` (str, optional): The string used to replace identified PII.
-          Defaults to "[REDACTED]".
-        - `redact_patterns` (list[str], optional): A list of keys from the `_PII_PATTERNS`
-          dictionary specifying which types of PII should be targeted for redaction.
-          If this key is omitted or an empty list is provided, all defined PII patterns
-          will be applied. Example: `['email', 'phone_us']`.
+        Returns:
+            The processed data with PII redacted. If the input data is not
+            a string, it is returned as is with a warning.
         """
         if not isinstance(data, str):
             logger.warning(
-                f"[{self.node_name}] Received non-string data (type: '{type(data).__name__}'). "
-                "PII redaction skipped. Returning data as is."
+                f"{self.node_name}: Input data is not a string (type: {type(data).__name__}). "
+                "PII redaction will be skipped. Returning data as-is."
             )
             return data
 
-        redacted_text = data
-        redaction_token = context.get('redaction_token', "[REDACTED]")
-        
-        # Determine which specific PII patterns to apply based on context.
-        # If 'redact_patterns' is not specified or empty, all known patterns are used.
-        patterns_to_use_keys = context.get('redact_patterns', list(self._PII_PATTERNS.keys()))
-        
-        applied_redactions_log = []
+        redacted_data = data
+        redaction_count = 0
 
-        for pii_type_key in patterns_to_use_keys:
-            pattern_str = self._PII_PATTERNS.get(pii_type_key)
-            if pattern_str:
-                try:
-                    # Compile regex for efficiency if not already compiled (re.compile caches)
-                    pattern = re.compile(pattern_str)
-                    
-                    # Track if any changes occur for logging purposes
-                    initial_length = len(redacted_text)
-                    redacted_text = pattern.sub(redaction_token, redacted_text)
-                    
-                    if len(redacted_text) != initial_length or re.search(pattern, data):
-                        # Log only if actual redaction happened or pattern was found in original
-                        applied_redactions_log.append(pii_type_key)
-                        logger.debug(
-                            f"[{self.node_name}] Redacted occurrences of '{pii_type_key}'. "
-                            f"Using token: '{redaction_token}'."
-                        )
-                except re.error as e:
-                    logger.error(
-                        f"[{self.node_name}] Failed to apply regex pattern for '{pii_type_key}': {e}. "
-                        "Skipping this pattern."
-                    )
-            else:
-                logger.warning(
-                    f"[{self.node_name}] Requested PII type '{pii_type_key}' not defined "
-                    "in available patterns. Skipping redaction for this type."
+        for pattern, replacement_text in self._pii_patterns:
+            original_data_before_sub = redacted_data
+            redacted_data = pattern.sub(replacement_text, redacted_data)
+            
+            # Check if any substitutions were made by this pattern
+            if original_data_before_sub != redacted_data:
+                # Count occurrences replaced by this specific pattern in this pass
+                # Note: this is an approximation if previous patterns already redacted overlapping text
+                current_pattern_matches = len(pattern.findall(original_data_before_sub))
+                redaction_count += current_pattern_matches
+                logger.debug(
+                    f"{self.node_name}: Redacted {current_pattern_matches} instances "
+                    f"using pattern for '{replacement_text.replace('[REDACTED_','').replace(']','')}'."
                 )
         
-        if applied_redactions_log:
+        if redaction_count > 0:
             logger.info(
-                f"[{self.node_name}] Successfully redacted PII types: "
-                f"{', '.join(sorted(set(applied_redactions_log)))}. "
-                f"Original text length: {len(data)}, Redacted text length: {len(redacted_text)}."
+                f"{self.node_name}: Successfully redacted {redaction_count} potential PII instances."
             )
         else:
-            logger.info(f"[{self.node_name}] No specified PII types found or redacted in the data.")
+            logger.debug(f"{self.node_name}: No PII found or redacted in the provided data.")
 
-        return redacted_text
+        return redacted_data
+
+if __name__ == '__main__':
+    # Example usage for testing
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    
+    pii_redactor = PIIRedactorNode()
+
+    test_data_1 = (
+        "Hello, my name is John Doe. You can reach me at john.doe@example.com "
+        "or call me at +1 (555) 123-4567. My SSN is 123-45-6789. "
+        "Also, don't use credit card 1111-2222-3333-4444."
+    )
+    test_data_2 = "No PII here, just a regular sentence."
+    test_data_3 = 12345 # Non-string data
+    test_data_4 = (
+        "Please contact me via email at test@mail.co.uk or on my mobile "
+        "07700 900333. My MasterCard is 5432 1098 7654 3210. Another phone number: 012-345-6789."
+    )
+
+    print("\n--- Test Case 1 ---")
+    print("Original:", test_data_1)
+    redacted_1 = pii_redactor.process(test_data_1, {})
+    print("Redacted:", redacted_1)
+
+    print("\n--- Test Case 2 ---")
+    print("Original:", test_data_2)
+    redacted_2 = pii_redactor.process(test_data_2, {})
+    print("Redacted:", redacted_2)
+
+    print("\n--- Test Case 3 (Non-string) ---")
+    print("Original:", test_data_3)
+    redacted_3 = pii_redactor.process(test_data_3, {})
+    print("Redacted:", redacted_3)
+
+    print("\n--- Test Case 4 (More PII) ---")
+    print("Original:", test_data_4)
+    redacted_4 = pii_redactor.process(test_data_4, {})
+    print("Redacted:", redacted_4)
