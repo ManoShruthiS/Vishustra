@@ -5,80 +5,118 @@ from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-class LanguageTranslatorNode(BaseNode):
+class LanguageTranslator(BaseNode):
     """
-    A Vishustra node responsible for simulating language translation of text data.
+    A Vishustra processing node that simulates language translation of text data.
 
-    This node processes an input string, attempting to translate it into a
-    specified target language using parameters from the execution context.
-    It is designed to integrate into orchestration pipelines where text
-    localization or cross-lingual communication is required.
+    This node expects text data as input and a 'target_language' specified
+    in the context dictionary. It provides a mocked translation for demonstration
+    purposes. In a production environment, this would interface with a
+    real translation API.
     """
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of this processing node.
-        """
+        """Returns the name of the node."""
         return "LanguageTranslator"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Translates the input text based on the 'target_language' provided in the context.
+        Translates the input text data to the specified target language.
+
+        The `context` dictionary must contain a 'target_language' key
+        with the ISO 639-1 code (e.g., 'fr', 'es', 'de').
 
         Args:
-            data: The text content (string) to be translated.
-            context: A dictionary containing execution parameters, expected to include:
-                     - 'target_language' (str): The ISO 639-1 code for the language
-                                                to translate into (e.g., 'en', 'es', 'fr').
-                     - 'source_language' (str, optional): The ISO 639-1 code for the original
-                                                          language of the text. Defaults to 'auto-detect'.
+            data (Any): The text data to be translated. Expected to be a string.
+                        If not a string, an attempt will be made to convert it.
+            context (Dict[str, Any]): A dictionary containing operational context,
+                                      including 'target_language'.
 
         Returns:
-            str: The simulated translated text. In a real implementation, this would be
-                 the output from an external translation service.
+            Any: The translated text as a string.
 
         Raises:
-            ValueError: If `data` is not a string or if 'target_language' is missing from `context`.
-            RuntimeError: If an unexpected error occurs during the translation simulation.
+            ValueError: If 'target_language' is missing in the context or
+                        if the input data cannot be processed as text.
         """
         if not isinstance(data, str):
-            logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected 'str', "
-                f"but received '{type(data).__name__}'."
+            logger.warning(
+                f"Input data for LanguageTranslator is of type {type(data).__name__}. "
+                "Attempting to convert to string for translation."
             )
-            raise ValueError(f"[{self.node_name}] Input data must be a string for translation.")
+            try:
+                data = str(data)
+            except Exception as e:
+                logger.error(f"Failed to convert input data to string: {e}")
+                raise ValueError(
+                    "LanguageTranslator expects string data or data convertible to string."
+                ) from e
 
-        target_language = context.get('target_language')
+        target_language = context.get("target_language")
         if not target_language or not isinstance(target_language, str):
             logger.error(
-                f"[{self.node_name}] 'target_language' key is missing or not a string "
-                f"in the context. Translation cannot proceed."
+                "Missing or invalid 'target_language' in context for LanguageTranslator. "
+                "Expected a string (e.g., 'fr', 'es')."
             )
             raise ValueError(
-                f"[{self.node_name}] 'target_language' (str) must be provided in the context "
-                f"for translation."
+                "Translation requires a valid 'target_language' (str) in context."
             )
 
-        source_language = context.get('source_language', 'auto-detect')
         logger.info(
-            f"[{self.node_name}] Initiating translation from '{source_language}' "
-            f"to '{target_language}' for input text (first 50 chars): '{data[:50]}...'"
+            f"Attempting to translate data to '{target_language}': '{data[:100]}{'...' if len(data) > 100 else ''}'"
         )
 
-        try:
-            # Simulate the translation process.
-            # In a production environment, this would involve an API call to a
-            # language translation service (e.g., Google Translate, DeepL, Azure Translator).
-            translated_text = f"{data} [Translated to {target_language.upper()}]"
-            logger.debug(
-                f"[{self.node_name}] Successfully simulated translation. "
-                f"Output (first 50 chars): '{translated_text[:50]}...'"
-            )
-            return translated_text
-        except Exception as e:
-            logger.critical(
-                f"[{self.node_name}] An unexpected error occurred during language translation "
-                f"simulation: {e}", exc_info=True
-            )
-            raise RuntimeError(f"[{self.node_name}] Failed to complete translation simulation: {e}") from e
+        # --- Simulated Translation Logic ---
+        # In a real scenario, this would involve calling a translation API
+        # (e.g., Google Translate, DeepL, Azure Translator).
+        # For demonstration, we use a simple mock dictionary and word-by-word substitution.
+        
+        mock_phrase_translations = {
+            "hello world": {"fr": "bonjour le monde", "es": "hola mundo", "de": "hallo welt"},
+            "how are you": {"fr": "comment allez-vous", "es": "¿cómo estás?", "de": "wie geht es dir"},
+            "thank you": {"fr": "merci", "es": "gracias", "de": "danke schön"},
+            "please translate this": {"fr": "veuillez traduire ceci", "es": "por favor traduce esto", "de": "bitte übersetzen sie dies"},
+        }
+        
+        # Check for whole phrase matches first
+        data_lower = data.lower()
+        if data_lower in mock_phrase_translations and target_language in mock_phrase_translations[data_lower]:
+            translated_data = mock_phrase_translations[data_lower][target_language]
+            logger.debug(f"Translated whole phrase '{data_lower}' to '{translated_data}' using mock.")
+        else:
+            # Fallback to word-by-word simulation
+            mock_word_translations = {
+                "hello": {"fr": "bonjour", "es": "hola", "de": "hallo"},
+                "world": {"fr": "monde", "es": "mundo", "de": "welt"},
+                "how": {"fr": "comment", "es": "cómo", "de": "wie"},
+                "are": {"fr": "êtes", "es": "estás", "de": "sind"}, # Simplified verb conjugation
+                "you": {"fr": "vous", "es": "tú", "de": "du"},
+                "i": {"fr": "je", "es": "yo", "de": "ich"},
+                "am": {"fr": "suis", "es": "soy", "de": "bin"},
+                "a": {"fr": "un", "es": "un", "de": "ein"},
+                "the": {"fr": "le", "es": "el", "de": "der"},
+                "this": {"fr": "ceci", "es": "esto", "de": "dies"},
+                "is": {"fr": "est", "es": "es", "de": "ist"},
+                "good": {"fr": "bon", "es": "bueno", "de": "gut"},
+            }
+
+            translated_parts = []
+            # Split by whitespace, preserving original casing where possible for untranslated parts
+            words = data.split()
+            
+            for word in words:
+                original_word_lower = word.lower()
+                if original_word_lower in mock_word_translations and target_language in mock_word_translations[original_word_lower]:
+                    translated_parts.append(mock_word_translations[original_word_lower][target_language])
+                else:
+                    # For words not in our mock, we'll append a marker to indicate simulation
+                    translated_parts.append(f"{word}[{target_language}]")
+            
+            translated_data = " ".join(translated_parts)
+            logger.debug(f"Translated word-by-word to '{translated_data}' using mock.")
+
+        logger.info(
+            f"Translation completed to '{target_language}'. Output: '{translated_data[:100]}{'...' if len(translated_data) > 100 else ''}'"
+        )
+        return translated_data
