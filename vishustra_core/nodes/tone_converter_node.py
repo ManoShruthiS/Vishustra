@@ -1,140 +1,99 @@
 import logging
 from typing import Any, Dict
-
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class ToneConverterNode(BaseNode):
     """
-    A processing node designed to convert the tone of a given text.
-    It expects a string as input data and requires a 'target_tone' parameter
-    in the context dictionary to determine the desired output tone.
+    A Vishustra processing node designed to convert the tone of input text
+    based on a specified target tone provided in the context.
+
+    This node simulates the functionality of an underlying language model
+    to achieve stylistic text transformations.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "ToneConverterNode"
+        """Returns the name of the node."""
+        return "ToneConverter"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data (text) to convert its tone based on the
-        'target_tone' specified in the context.
+        Processes the input data (text) to convert its tone to the target tone
+        specified in the context.
 
-        Args:
-            data: The input text, expected to be a string.
-            context: A dictionary containing processing parameters.
-                     Must include 'target_tone' (e.g., 'formal', 'casual', 'neutral').
-
-        Returns:
-            The text with its tone converted to the target tone.
+        Expected `data`: A string representing the text content to be converted.
+        Expected `context`: A dictionary that *must* contain a 'target_tone' key
+                           whose value is a string (e.g., 'formal', 'casual',
+                           'sarcastic', 'professional', 'friendly').
 
         Raises:
             ValueError: If `data` is not a string, or if 'target_tone' is
-                        missing from the context.
-            Exception: For any unexpected errors during tone conversion.
+                        missing from the context or is not a string.
+            Exception: For any unforeseen errors that occur during the
+                       conversion process.
         """
-        logger.debug(
-            "ToneConverterNode received data of type %s and context: %s",
-            type(data),
-            context
-        )
+        logger.info(f"[{self.node_name}] Initiating tone conversion process.")
 
         if not isinstance(data, str):
             logger.error(
-                "ToneConverterNode expects string data for processing. Received type: %s",
-                type(data)
-            )
-            raise ValueError("Input data for ToneConverterNode must be a string.")
-
-        target_tone_raw = context.get("target_tone")
-        if not target_tone_raw:
-            logger.error(
-                "Required parameter 'target_tone' missing in context for ToneConverterNode."
+                f"[{self.node_name}] Invalid input data type. Expected 'str', "
+                f"received '{type(data).__name__}'."
             )
             raise ValueError(
-                "The 'target_tone' parameter is mandatory in the context "
-                "for ToneConverterNode processing."
+                f"Input data for '{self.node_name}' must be a string. "
+                f"Received type: {type(data).__name__}."
             )
-
-        target_tone = str(target_tone_raw).lower()
-        original_text = data
-        converted_text = original_text
 
         try:
-            if target_tone == "formal":
-                converted_text = self._convert_to_formal(original_text)
-                logger.info("Text converted to 'formal' tone.")
-            elif target_tone == "casual":
-                converted_text = self._convert_to_casual(original_text)
-                logger.info("Text converted to 'casual' tone.")
-            elif target_tone == "neutral":
-                # No change needed for neutral tone.
-                logger.info("Target tone 'neutral' requested. No tone conversion applied.")
-                converted_text = original_text
-            else:
-                logger.warning(
-                    "Unsupported target_tone '%s' provided. Returning original text without modification.",
-                    target_tone
+            target_tone = context.get('target_tone')
+            if not isinstance(target_tone, str):
+                logger.error(
+                    f"[{self.node_name}] 'target_tone' is missing or invalid in context. "
+                    f"Expected 'str', received '{type(target_tone).__name__ if target_tone is not None else 'None'}'."
                 )
-                converted_text = original_text
+                raise ValueError(
+                    f"Context for '{self.node_name}' must contain a 'target_tone' key "
+                    f"with a string value. Received: {target_tone}."
+                )
 
+            logger.debug(f"[{self.node_name}] Attempting to convert text to '{target_tone}' tone.")
+
+            # Simulate the tone conversion. In a production environment, this
+            # would typically involve an API call to a sophisticated language model.
+            converted_text = self._simulate_tone_conversion(data, target_tone.lower())
+
+            logger.info(f"[{self.node_name}] Tone conversion completed successfully to '{target_tone}' tone.")
+            return converted_text
+        except ValueError as ve:
+            logger.error(f"[{self.node_name}] Configuration or input validation error: {ve}")
+            raise
         except Exception as e:
-            logger.error(
-                "An unexpected error occurred during tone conversion to '%s': %s",
-                target_tone, e, exc_info=True
-            )
-            # Re-raise the exception to indicate a critical processing failure
+            logger.exception(f"[{self.node_name}] An unexpected error occurred during processing.")
             raise
 
-        logger.debug(
-            "ToneConverterNode successfully processed data. Original length: %d, Converted length: %d",
-            len(original_text), len(converted_text)
-        )
-        return converted_text
-
-    def _convert_to_formal(self, text: str) -> str:
+    def _simulate_tone_conversion(self, text: str, tone: str) -> str:
         """
-        Simulates converting text to a more formal tone.
-        This is a placeholder for a more sophisticated conversion mechanism.
+        Internal method to simulate the application of a specific tone to the text.
+        This provides a tangible demonstration of functionality without requiring
+        an actual LLM integration.
         """
-        if not text:
-            return ""
-        
-        # A very basic simulation: capitalize sentences, add formal greetings/closings
-        sentences = text.split('.')
-        formal_parts = []
-        for sentence in sentences:
-            stripped = sentence.strip()
-            if stripped:
-                formal_parts.append(stripped[0].upper() + stripped[1:] if stripped[0].islower() else stripped)
-        
-        formatted_text = ". ".join(formal_parts).replace("i am", "I am").replace("i'm", "I am")
-        
-        if not formatted_text.strip().startswith("Dear"):
-            formatted_text = "Dear Sir/Madam, " + formatted_text
-        if not formatted_text.strip().endswith("Regards."):
-            formatted_text += " Regards."
-            
-        return formatted_text
-
-    def _convert_to_casual(self, text: str) -> str:
-        """
-        Simulates converting text to a more casual tone.
-        This is a placeholder for a more sophisticated conversion mechanism.
-        """
-        if not text:
-            return ""
-            
-        # A very basic simulation: lowercasing, adding casual phrases, removing formal elements
-        casual_text = text.lower()
-        casual_text = casual_text.replace("dear sir/madam", "hey there")
-        casual_text = casual_text.replace("regards", "cheers")
-        casual_text = casual_text.replace("sincerely", "later")
-        casual_text = casual_text.replace(".", "...").replace("!", "!!!").replace("?", "???")
-        
-        if not casual_text.strip().startswith("hey"):
-            casual_text = "hey! " + casual_text
-        
-        return casual_text
+        # Basic examples for demonstration. A real implementation would be
+        # significantly more nuanced via an LLM.
+        if tone == 'formal':
+            return f"Indeed, it is imperative to acknowledge that {text.lower()}."
+        elif tone == 'casual':
+            return f"Hey, just wanted to share that {text.lower()}."
+        elif tone == 'sarcastic':
+            return f"Oh, absolutely, because {text.lower()}... obviously."
+        elif tone == 'professional':
+            return f"Regarding the matter of {text}, our analysis indicates the following:"
+        elif tone == 'friendly':
+            return f"Hi there! Just a friendly note about {text}!"
+        else:
+            logger.warning(
+                f"[{self.node_name}] Unsupported target tone '{tone}' specified. "
+                f"The original text will be returned without modification."
+            )
+            return text
