@@ -1,85 +1,162 @@
 import logging
 import re
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Set, Tuple
 
+# Assuming BaseNode is located here based on the project context
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-# A predefined set of common English stop words for demonstration purposes.
-# In a real-world scenario, this might be loaded from a more comprehensive NLP library or configuration.
-_STOP_WORDS: Set[str] = {
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-    "and", "or", "but", "if", "then", "else", "when", "where", "why", "how",
-    "for", "to", "with", "at", "by", "from", "on", "off", "up", "down", "in", "out",
-    "this", "that", "these", "those", "he", "she", "it", "we", "you", "they",
-    "me", "him", "her", "us", "them", "my", "your", "his", "her", "its", "our", "their",
-    "i", "you", "we", "they", "it", "not", "no", "yes", "can", "will", "would", "should", "could",
-    "do", "does", "did", "don't", "doesn't", "didn't", "have", "has", "had", "haven't", "hasn't", "hadn't",
-    "shall", "may", "might", "must", "much", "many", "just", "only", "such", "too", "very", "also", "get", "go",
-    "here", "there", "all", "any", "both", "each", "few", "more", "most", "other", "some", "such", "no", "nor", "not",
-    "only", "own", "same", "so", "than", "too", "very", "s", "t", "can", "will", "just", "don", "should", "now"
-}
-
-
-class KeywordExtractor(BaseNode):
+class KeywordExtractorNode(BaseNode):
     """
-    A processing node that extracts keywords from a given text string.
+    A Vishustra processing node designed to extract relevant keywords from textual data.
 
-    This node tokenizes the input text, converts words to lowercase,
-    removes punctuation, filters out common stop words, and returns
-    a sorted list of unique keywords.
+    This node takes a string as input and applies a set of configurable rules
+    to identify and return a list of significant keywords. The current implementation
+    employs heuristics like word length, exclusion of common words, and frequency
+    analysis to simulate a robust extraction process.
     """
+
+    # A predefined set of common English stopwords for basic filtering
+    _common_english_words: Set[str] = {
+        "the", "and", "a", "an", "is", "it", "in", "on", "of", "to", "for", "with",
+        "as", "at", "by", "from", "he", "she", "i", "we", "you", "they", "that",
+        "this", "but", "or", "not", "be", "have", "do", "say", "get", "make", "go",
+        "know", "take", "see", "come", "think", "look", "want", "give", "use",
+        "find", "tell", "ask", "work", "seem", "feel", "try", "leave", "call",
+        "good", "new", "first", "last", "long", "great", "little", "own", "other",
+        "old", "right", "big", "high", "different", "small", "large", "next",
+        "early", "important", "few", "public", "bad", "same", "able", "would",
+        "could", "should", "will", "can", "may", "much", "many", "such", "also",
+        "about", "all", "any", "both", "each", "every", "here", "how", "if", "into",
+        "like", "most", "no", "nor", "only", "other", "our", "out", "over", "some",
+        "than", "then", "there", "these", "through", "under", "up", "very", "was",
+        "when", "where", "which", "while", "who", "whom", "why", "your"
+    }
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """Returns the descriptive name of the node."""
         return "KeywordExtractor"
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Processes the input data to extract keywords.
+        Processes the input data to identify and extract key terms or phrases.
+
+        This method expects the 'data' parameter to be a string (text) and uses
+        configuration from the 'context' dictionary to guide the extraction process.
+        It tokenizes the text, filters words based on length and commonality,
+        and then selects the most frequent candidate keywords up to a specified limit.
 
         Args:
-            data: The input text as a string from which to extract keywords.
-            context: A dictionary containing contextual information
-                     (not directly used by this node but required by BaseNode).
+            data (Any): The input data, expected to be a string containing the text
+                        from which keywords should be extracted.
+            context (Dict[str, Any]): A dictionary providing configuration for the
+                                       keyword extraction logic. Expected keys:
+                                       - 'min_word_length' (int, optional): The minimum
+                                         length a word must have to be considered a keyword.
+                                         Defaults to 4.
+                                       - 'max_keywords' (int, optional): The maximum number
+                                         of keywords to return. Defaults to 10.
+                                       - 'exclude_common_words' (bool, optional): If True,
+                                         common English stopwords are filtered out. Defaults to True.
+                                       - 'pattern' (str, optional): A regex pattern to split
+                                         the text into words. Defaults to r'\b\w+\b'.
 
         Returns:
-            A sorted list of unique keyword strings.
+            List[str]: A list of strings, each representing an extracted keyword.
+                       The list is sorted by frequency (descending) and then
+                       alphabetically (ascending) for consistency. Returns an
+                       empty list if the input is empty, invalid, or no keywords
+                       are found.
 
         Raises:
-            TypeError: If the input 'data' is not a string.
+            ValueError: If 'data' is not a string, or if context parameters are
+                        of an invalid type or value.
+            Exception: Catches and logs any unexpected errors during the processing
+                       logic, re-raising them to indicate a failure.
         """
-        logger.debug(f"[{self.node_name}] Starting process for data type: {type(data)}")
-
+        # --- Input Data Validation ---
         if not isinstance(data, str):
-            logger.error(f"[{self.node_name}] Invalid input type. Expected 'str', got '{type(data).__name__}'.")
-            raise TypeError(
-                f"KeywordExtractor expects 'data' to be a string, but received {type(data).__name__}."
+            logger.error(f"KeywordExtractor received invalid data type. Expected 'str', got {type(data)}.")
+            raise ValueError(
+                f"Invalid input data type for KeywordExtractor. Expected a string, "
+                f"but received {type(data).__name__}."
             )
 
-        text = data.strip()
-        if not text:
-            logger.warning(f"[{self.node_name}] Received an empty or whitespace-only string. No keywords to extract.")
+        if not data.strip():
+            logger.info("Empty or whitespace-only input string provided to KeywordExtractor. Returning an empty list.")
             return []
 
-        # Tokenize the text by splitting on non-alphanumeric characters, convert to lowercase
-        # and filter out empty strings resulting from multiple delimiters.
-        words = [
-            word.lower() for word in re.findall(r'\b\w+\b', text)
-            if word # ensure word is not empty after regex
-        ]
+        # --- Context Parameter Processing ---
+        try:
+            min_word_length = int(context.get('min_word_length', 4))
+            max_keywords = int(context.get('max_keywords', 10))
+            exclude_common_words = bool(context.get('exclude_common_words', True))
+            word_split_pattern = str(context.get('pattern', r'\b\w+\b'))
 
-        extracted_keywords: Set[str] = set()
-        for word in words:
-            # Basic cleaning: remove any remaining non-alphanumeric characters at word boundaries
-            cleaned_word = re.sub(r'^\W+|\W+$', '', word)
-            if cleaned_word and cleaned_word not in _STOP_WORDS:
-                extracted_keywords.add(cleaned_word)
+            if min_word_length <= 0:
+                logger.warning(
+                    f"Invalid 'min_word_length' ({min_word_length}) provided. "
+                    f"Clamping to default value: 4."
+                )
+                min_word_length = 4
+            if max_keywords <= 0:
+                logger.warning(
+                    f"Invalid 'max_keywords' ({max_keywords}) provided. "
+                    f"Clamping to default value: 10."
+                )
+                max_keywords = 10
 
-        # Sort the keywords for consistent output
-        keywords_list = sorted(list(extracted_keywords))
+        except (TypeError, ValueError) as e:
+            logger.error(
+                f"Failed to parse context parameters for KeywordExtractor: {e}. "
+                f"Context: {context}"
+            )
+            raise ValueError(f"Invalid type or value for context parameter: {e}") from e
 
-        logger.debug(f"[{self.node_name}] Successfully extracted {len(keywords_list)} keywords.")
-        return keywords_list
+        logger.debug(
+            f"KeywordExtractor initialized with: min_word_length={min_word_length}, "
+            f"max_keywords={max_keywords}, exclude_common_words={exclude_common_words}, "
+            f"pattern='{word_split_pattern}'"
+        )
+
+        # --- Keyword Extraction Logic ---
+        extracted_keywords: List[str] = []
+        try:
+            # Tokenize text using the specified pattern
+            words = re.findall(word_split_pattern, data.lower())
+
+            candidate_keywords: List[str] = []
+            for word in words:
+                # Basic cleanup: remove leading/trailing non-alphanumeric (if pattern allows)
+                cleaned_word = word.strip(".,!?;:\"'()[]{}/\\-").lower()
+
+                if len(cleaned_word) >= min_word_length:
+                    if exclude_common_words and cleaned_word in self._common_english_words:
+                        continue
+                    if cleaned_word: # Ensure not empty after cleaning
+                        candidate_keywords.append(cleaned_word)
+
+            # Count word frequencies
+            word_counts: Dict[str, int] = {}
+            for word in candidate_keywords:
+                word_counts[word] = word_counts.get(word, 0) + 1
+
+            # Sort keywords by frequency (descending) and then alphabetically (ascending)
+            # for stable results in case of ties.
+            sorted_keywords: List[Tuple[str, int]] = sorted(
+                word_counts.items(),
+                key=lambda item: (-item[1], item[0])
+            )
+
+            # Select the top N keywords
+            extracted_keywords = [word for word, count in sorted_keywords[:max_keywords]]
+
+            logger.info(f"Successfully extracted {len(extracted_keywords)} keywords.")
+
+        except Exception as e:
+            logger.exception(f"An unexpected error occurred during keyword extraction processing: {e}")
+            raise # Re-raise the exception after logging
+
+        return extracted_keywords
