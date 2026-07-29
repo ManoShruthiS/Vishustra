@@ -1,126 +1,100 @@
 import logging
 from typing import Any, Dict
 
-from vishustra_core.nodes.base_node import BaseNode # Import BaseNode as per requirements
+from vishustra_core.nodes.base_node import BaseNode
 
-# Setup logger for this module
 logger = logging.getLogger(__name__)
 
-class ToneConverter(BaseNode):
+class ToneConverterNode(BaseNode):
     """
-    A Vishustra node that converts the tone of an input text.
+    A processing node designed to simulate converting the tone of text data.
 
-    This node is designed to simulate a tone transformation on textual data.
-    It allows specifying a default target tone during initialization, which
-    can subsequently be overridden by a 'target_tone' entry within the
-    `context` dictionary during the `process` method call.
-
-    In a production environment, the tone conversion logic within the `process`
-    method would typically integrate with advanced NLP models or external
-    APIs to perform sophisticated linguistic transformations. For this
-    demonstration, a simplified approach of appending a tone-modifying
-    phrase is used.
+    This node takes text as input and conceptually transforms its tone
+    based on a specified target tone. In a real-world scenario within Vishustra,
+    this would typically involve an interaction with an underlying Large Language Model
+    to perform the actual tone transformation.
     """
 
-    # Internal mapping of supported tones to a descriptive phrase simulating
-    # the outcome of a tone conversion.
-    _TONE_TRANSFORMATIONS: Dict[str, str] = {
-        "professional": "Ensuring optimal clarity and adherence to best practices, this content has been refined to reflect a professional standard.",
-        "casual": "Just chilling here, making sure this message sounds super laid-back and easygoing!",
-        "formal": "With due diligence and adherence to established protocols, the preceding discourse has been meticulously adjusted to embody a distinctly formal register.",
-        "humorous": "Ha! Bet you didn't see *that* coming, did you? We've sprinkled some giggles into this text for maximum chuckle-factor!",
-        "optimistic": "Approaching this with boundless enthusiasm, the message has been imbued with a forward-looking and positive outlook!",
-        "pessimistic": "While striving for accuracy, one cannot ignore the inherent challenges and potential pitfalls, thus the message reflects a cautious and perhaps somber perspective.",
-    }
-
-    def __init__(self, default_target_tone: str = "professional"):
+    def __init__(self, target_tone: str = "neutral"):
         """
-        Initializes the ToneConverter node with a default target tone.
+        Initializes the ToneConverterNode with a specified target tone.
 
         Args:
-            default_target_tone (str): The default tone to convert to if
-                                       'target_tone' is not provided in the
-                                       processing context. This value must
-                                       be one of the supported tones defined
-                                       within the node.
+            target_tone (str): The desired tone to convert the input text to.
+                               Examples include "formal", "informal", "sarcastic",
+                               "joyful", "neutral", etc. Case-insensitive.
 
         Raises:
-            ValueError: If the provided `default_target_tone` is not supported.
+            ValueError: If 'target_tone' is not a non-empty string.
         """
-        if default_target_tone not in self._TONE_TRANSFORMATIONS:
-            raise ValueError(
-                f"Unsupported default_target_tone: '{default_target_tone}'. "
-                f"Supported tones are: {list(self._TONE_TRANSFORMATIONS.keys())}"
-            )
-        self._default_target_tone = default_target_tone
-        logger.debug(f"ToneConverter initialized with default_target_tone: '{self._default_target_tone}'")
+        if not isinstance(target_tone, str) or not target_tone.strip():
+            logger.error("Initialization failed: target_tone must be a non-empty string.")
+            raise ValueError("target_tone must be a non-empty string for ToneConverterNode.")
+        self._target_tone = target_tone.strip().lower()
+        logger.debug(f"ToneConverterNode initialized with target_tone: '{self._target_tone}'.")
 
     @property
     def node_name(self) -> str:
         """
-        Returns the descriptive name of the node.
+        Returns the descriptive name of this node, including its configured target tone.
         """
-        return "ToneConverter"
+        return f"ToneConverter:{self._target_tone.capitalize()}"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> str:
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data by converting its tone to a specified target.
+        Processes the input data by simulating a tone conversion.
 
-        The method expects the input `data` to be a string. The desired
-        `target_tone` can be passed via the `context` dictionary under the key
-        'target_tone'. If 'target_tone' is not present in `context`, the
-        node's `default_target_tone` (set during initialization) will be used.
+        This method expects the 'data' to be a string (text). It prepends a
+        marker indicating the simulated tone conversion. In a full Vishustra
+        implementation, this would involve calling an LLM service with the
+        input text and the 'target_tone' parameter.
+
+        The 'context' dictionary can be utilized to pass LLM client instances,
+        specific model configurations, or user preferences relevant to the
+        tone conversion process.
 
         Args:
-            data (Any): The input data to be processed. Expected to be a string
-                        containing the text whose tone needs conversion.
-            context (Dict[str, Any]): A dictionary containing runtime parameters.
-                                      May include 'target_tone' (str) to override
-                                      the default.
+            data (Any): The input data, expected to be a string containing text.
+            context (Dict[str, Any]): A dictionary providing contextual information
+                                      for the processing, such as LLM client,
+                                      model parameters, or user settings.
 
         Returns:
-            str: The processed text, with a simulated tone adjustment applied.
+            Any: The processed data, which is a string prefixed with a tone conversion
+                 marker, or the original data if it was an empty string.
 
         Raises:
-            TypeError: If the input `data` is not a string.
-            ValueError: If the specified `target_tone` (either from `context`
-                        or the default) is not one of the supported tones.
+            TypeError: If the input 'data' is not a string.
         """
         if not isinstance(data, str):
             logger.error(
-                f"Invalid input data type for ToneConverter. Expected 'str', "
-                f"but received '{type(data).__name__}'. Data: '{str(data)[:100]}...'"
+                f"Invalid input type for {self.node_name}. Expected 'str', "
+                f"but received '{type(data).__name__}'. Data: '{data}'."
             )
-            raise TypeError(
-                f"ToneConverter expects string data, but received {type(data).__name__}. "
-                "Ensure previous nodes provide string output."
+            raise TypeError(f"{self.node_name} expects string data for tone conversion.")
+
+        if not data.strip():
+            logger.warning(
+                f"Received empty string data for tone conversion in {self.node_name}. "
+                "Returning original empty string."
             )
+            return data
 
-        # Determine the target tone, preferring context over instance default
-        target_tone = context.get('target_tone', self._default_target_tone)
-        logger.debug(f"ToneConverter processing with effective target_tone: '{target_tone}'")
-
-        if target_tone not in self._TONE_TRANSFORMATIONS:
-            logger.error(
-                f"Unsupported target_tone '{target_tone}' specified. "
-                f"Supported tones are: {list(self._TONE_TRANSFORMATIONS.keys())}"
-            )
-            raise ValueError(
-                f"Unsupported target_tone: '{target_tone}'. "
-                f"Supported tones are: {list(self._TONE_TRANSFORMATIONS.keys())}"
-            )
-
-        original_text = data.strip()
-        tone_modifier_phrase = self._TONE_TRANSFORMATIONS[target_tone]
-
-        # Simulate tone conversion by appending a modifier phrase.
-        # In a real-world Vishustra pipeline, this logic would invoke
-        # sophisticated NLP services or models.
-        processed_text = f"{original_text} [Tone Adjustment: {tone_modifier_phrase}]"
+        # Simulate tone conversion. In a real scenario, this would involve
+        # an API call to an LLM, possibly using resources from the 'context'.
+        # Example of potential LLM call (conceptual):
+        # llm_client = context.get("llm_client")
+        # if llm_client:
+        #     processed_data = llm_client.convert_tone(text=data, target_tone=self._target_tone)
+        # else:
+        #     logger.warning("No LLM client found in context. Performing simulated tone conversion.")
+        processed_data = f"[Tone: {self._target_tone.capitalize()}]: {data}"
 
         logger.info(
-            f"ToneConverter successfully adjusted text tone to '{target_tone}'. "
-            f"Original (first 50 chars): '{original_text[:50]}...', "
-            f"Processed (first 50 chars): '{processed_text[:50]}...'"
+            f"Successfully simulated tone conversion for {self.node_name}. "
+            f"Target tone: '{self._target_tone}'."
         )
-        return processed_text
+        logger.debug(f"Original text (first 50 chars): '{data[:50]}...'")
+        logger.debug(f"Processed text (first 50 chars): '{processed_data[:50]}...'")
+
+        return processed_data
