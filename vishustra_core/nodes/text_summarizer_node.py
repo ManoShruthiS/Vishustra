@@ -1,121 +1,108 @@
 import logging
-import re
 from typing import Any, Dict
+import re
 
-# Assuming this path exists in the project structure for Vishustra
+# Assuming this path is correct based on the project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
+
 class TextSummarizerNode(BaseNode):
     """
-    A processing node designed to reduce the length of input text by generating
-    a summary. This node supports configurable summarization logic via context
-    parameters.
+    A Vishustra processing node that performs basic text summarization.
 
-    In its current implementation, this node performs a simple extractive
-    summarization by selecting an initial portion of the input text's sentences.
-    For a production system, this would typically integrate with an advanced
-    Language Model (LLM) or a dedicated text summarization service to perform
-    more sophisticated abstractive or extractive summarization.
+    This node takes a string as input and generates a summary by selecting
+    a configurable percentage of the initial sentences. The summarization
+    ratio can be provided via the `context` dictionary.
+
+    If the input data is empty or contains no detectable sentences, it
+    handles these cases gracefully.
     """
+
+    _DEFAULT_SUMMARY_RATIO = 0.3  # Default to summarizing to 30% of original sentence count
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of the node.
-        """
-        return "TextSummarizer"
+        """Returns the descriptive name of the node."""
+        return "TextSummarizerNode"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> str:
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, expecting a string, and returns a summarized version.
+        Processes the input text to produce a summary.
+
+        The summarization logic primarily involves segmenting the text into
+        sentences and then retaining the first `N` sentences, where `N` is
+        determined by the `summary_ratio` parameter.
 
         Args:
-            data (Any): The input text to be summarized. Must be a string.
-            context (Dict[str, Any]): A dictionary containing processing parameters.
-                                      Expected keys (optional):
-                                      - 'summary_ratio' (float): The target ratio (0.0 to 1.0)
-                                        of the original text's sentences to retain in the summary.
-                                        Defaults to 0.3 (30%).
-                                      - 'min_sentences' (int): The minimum number of sentences
-                                        to include in the summary, regardless of 'summary_ratio'.
-                                        Defaults to 2.
+            data: The input text (str) that needs to be summarized.
+            context: A dictionary containing operational parameters for this node.
+                     Expected keys:
+                     - 'summary_ratio' (float, optional): A value between 0.0 and 1.0
+                       representing the fraction of sentences to retain for the summary.
+                       If not provided, the node defaults to `_DEFAULT_SUMMARY_RATIO`.
 
         Returns:
-            str: The summarized text.
+            str: The summarized text. Returns an empty string if the input
+                 data is empty or contains no processable content.
 
         Raises:
             TypeError: If the input 'data' is not a string.
-            ValueError: If 'summary_ratio' is outside the valid range [0.0, 1.0]
-                        or 'min_sentences' is negative.
+            ValueError: If the 'summary_ratio' provided in the context is
+                        not a valid float between 0.0 and 1.0.
         """
+        logger.debug(f"[{self.node_name}] Starting text summarization process.")
+
         if not isinstance(data, str):
-            logger.error(
-                f"Input data for TextSummarizerNode must be a string, "
-                f"but received {type(data).__name__}. Aborting summarization."
-            )
+            logger.error(f"[{self.node_name}] Invalid input type. Expected 'str', but received '{type(data).__name__}'.")
             raise TypeError(
-                f"TextSummarizerNode expects string input, but received {type(data).__name__}."
+                f"[{self.node_name}] Input 'data' must be a string for summarization, "
+                f"received type '{type(data).__name__}'."
             )
 
-        # Handle empty or whitespace-only input gracefully
-        if not data.strip():
-            logger.warning(
-                "Received empty or whitespace-only text for summarization. Returning an empty string."
-            )
+        stripped_data = data.strip()
+        if not stripped_data:
+            logger.info(f"[{self.node_name}] Input data is empty or whitespace-only. Returning an empty string.")
             return ""
 
-        # Retrieve and validate context parameters
-        summary_ratio = context.get("summary_ratio", 0.3)
-        min_sentences = context.get("min_sentences", 2)
+        # Retrieve summary_ratio from context or use the default value
+        summary_ratio = context.get("summary_ratio", self._DEFAULT_SUMMARY_RATIO)
 
-        if not (0.0 <= summary_ratio <= 1.0):
-            logger.error(
-                f"Invalid 'summary_ratio' value: {summary_ratio}. Must be between 0.0 and 1.0."
+        # Validate summary_ratio
+        if not isinstance(summary_ratio, (int, float)) or not (0.0 <= summary_ratio <= 1.0):
+            logger.error(f"[{self.node_name}] Invalid 'summary_ratio' in context: '{summary_ratio}'. "
+                         "Must be a float between 0.0 and 1.0.")
+            raise ValueError(
+                f"[{self.node_name}] Invalid 'summary_ratio' in context. "
+                f"Expected a float between 0.0 and 1.0, received '{summary_ratio}'."
             )
-            raise ValueError("Summary ratio must be between 0.0 and 1.0.")
-        if not isinstance(min_sentences, int) or min_sentences < 0:
-            logger.error(
-                f"Invalid 'min_sentences' value: {min_sentences}. Must be a non-negative integer."
-            )
-            raise ValueError("Minimum sentences must be a non-negative integer.")
 
-        # Basic sentence tokenization: splits on common sentence-ending punctuation
-        # followed by one or more spaces. This is a simple approximation.
-        sentences = re.split(r"(?<=[.!?])\s+", data)
-        # Filter out any empty strings that might result from tokenization
+        # Basic sentence splitting: Splits on periods, exclamation marks, or question marks
+        # followed by one or more whitespace characters.
+        # The positive lookbehind `(?<=[.!?])` ensures the delimiter is kept with the sentence.
+        sentences = re.split(r'(?<=[.!?])\s+', stripped_data)
+        # Filter out any empty strings that might result from splitting
         sentences = [s.strip() for s in sentences if s.strip()]
 
         if not sentences:
-            logger.debug(
-                "No valid sentences found in the input text after tokenization. "
-                "Returning an empty string."
-            )
-            return ""
+            logger.info(f"[{self.node_name}] No discernible sentences found in the input data. Returning original content.")
+            return stripped_data
 
-        num_original_sentences = len(sentences)
-        # Calculate the number of sentences to include based on ratio and minimum
-        num_sentences_to_include = max(
-            min_sentences, int(num_original_sentences * summary_ratio)
+        # Calculate the number of sentences to keep. Ensure at least one sentence is kept
+        # unless summary_ratio is exactly 0 and there are no sentences (handled above).
+        num_sentences_to_keep = max(1, int(len(sentences) * summary_ratio))
+
+        # Select the first 'num_sentences_to_keep' sentences
+        summarized_sentences = sentences[:num_sentences_to_keep]
+
+        # Join the selected sentences back into a single string.
+        # A simple space join works well as the sentence splitting already retains punctuation.
+        summarized_text = " ".join(summarized_sentences).strip()
+
+        logger.debug(
+            f"[{self.node_name}] Summarization complete. "
+            f"Original sentences: {len(sentences)}, Kept: {len(summarized_sentences)}."
         )
-
-        # Ensure we don't try to include more sentences than are actually available
-        num_sentences_to_include = min(
-            num_sentences_to_include, num_original_sentences
-        )
-
-        # Extractive summarization: take the first N sentences
-        summary_sentences = sentences[:num_sentences_to_include]
-        summary = " ".join(summary_sentences)
-
-        logger.info(
-            f"Summarized text from {num_original_sentences} sentences to "
-            f"{len(summary_sentences)} sentences (target ratio: {summary_ratio:.2f}, "
-            f"min: {min_sentences})."
-        )
-        # Log a snippet for debugging, avoiding logging full potentially large texts
-        logger.debug(f"Original text start: '{data[:100].replace('\\n', ' ')}...'")
-        logger.debug(f"Summarized text start: '{summary[:100].replace('\\n', ' ')}...'")
-
-        return summary
+        logger.debug(f"[{self.node_name}] Exiting text summarization process.")
+        return summarized_text
