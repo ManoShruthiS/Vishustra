@@ -1,97 +1,79 @@
-import logging
 import re
-from typing import Any, Dict, List, Set, Union
+import logging
+from typing import Any, Dict, List, Union, Set
 
+# Assuming BaseNode is available at this path as per project context
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class URLExtractorNode(BaseNode):
     """
-    A Vishustra node that extracts unique URLs from text content.
-    It can process a single string or a list of strings, returning
-    a unique list of discovered URLs.
+    A Vishustra processing node that extracts URLs from text data.
+
+    This node can process a single string or a list of strings, identifying
+    common HTTP/HTTPS URLs and returning them as a unique, sorted list.
     """
 
-    # Compiled regular expression for robust URL matching.
-    # This pattern aims to capture common URL formats, including those starting
-    # with http(s)://, ftp://, or www., and covers various domain structures,
-    # paths, queries, and fragments.
-    _URL_REGEX = re.compile(
-        r'(?:(?:https?|ftp):\/\/|www\.|ftp\.)'  # Protocol prefix (http, https, ftp) or www.
-        r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+' # Domain name (e.g., example.com)
-        r'[a-zA-Z]{2,6}'  # Top-level domain (e.g., com, org, net)
-        r'(?::\d{1,5})?'  # Optional port number
-        r'(?:[\/?#]\S*)?' # Optional path, query string, or fragment
-        r'\b',            # Word boundary to ensure clean matches
-        re.IGNORECASE
-    )
+    # A robust regular expression pattern for matching common HTTP/HTTPS URLs.
+    # This pattern covers common domain structures, optional 'www.',
+    # and potential paths, queries, or fragments.
+    _url_regex_pattern: str = r'https?://(?:www\.)?[a-zA-Z0-9-]+(?:\.[a-zA-Z]{2,})+(?:/[^"\s]*)?'
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """Returns the descriptive name of the node."""
         return "URLExtractorNode"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
+    def process(self, data: Union[str, List[str]], context: Dict[str, Any]) -> List[str]:
         """
         Extracts unique URLs from the input data.
 
+        The input `data` can be a single string or a list of strings.
+        URLs are identified using a robust regular expression. The `context`
+        parameter is currently not utilized by this node but is provided
+        for future extensibility.
+
         Args:
-            data (Union[str, List[str]]): The input data to process.
-                                         Expected to be a string or a list of strings.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                      for processing. Not directly used by this node,
-                                      but required by the BaseNode interface.
+            data: The input text (string or list of strings) from which to extract URLs.
+            context: A dictionary containing contextual information for processing.
 
         Returns:
-            List[str]: A sorted list of unique URLs found in the input data.
-                       Returns an empty list if no URLs are found or
-                       if the input data is of an unsupported type.
+            A list of unique URLs found in the input data, sorted alphabetically.
+
+        Raises:
+            TypeError: If the input `data` is not a string or a list of strings.
         """
         extracted_urls: Set[str] = set()
-        
-        # Normalize input to always be an iterable of strings
-        if isinstance(data, str):
-            items_to_process = [data]
-        elif isinstance(data, (list, tuple)):
-            items_to_process = data
-        else:
-            logger.warning(
-                f"[{self.node_name}] Received unsupported data type: {type(data).__name__}. "
-                "Expected str or List[str]. Returning an empty list."
-            )
-            return []
 
-        for item in items_to_process:
-            if not isinstance(item, str):
-                logger.debug(
-                    f"[{self.node_name}] Skipping non-string item in input list: {type(item).__name__}. "
-                    "Only string items are processed for URL extraction."
-                )
-                continue
-            
-            try:
-                found_urls = self._URL_REGEX.findall(item)
-                for url in found_urls:
-                    # Normalize URLs that start with 'www.' but lack a protocol,
-                    # by prepending 'http://' as a common default.
-                    if url.startswith("www.") and not url.startswith(("http://", "https://", "ftp://")):
-                        extracted_urls.add(f"http://{url}")
-                    else:
-                        extracted_urls.add(url)
-                
-                logger.debug(f"[{self.node_name}] Extracted {len(found_urls)} potential URLs from an item.")
-            except re.error as e:
-                logger.error(
-                    f"[{self.node_name}] Regex error encountered while processing item (first 100 chars): '{item[:100]}...'. "
-                    f"Error: {e}", exc_info=True
-                )
-            except Exception as e:
-                logger.error(
-                    f"[{self.node_name}] An unexpected error occurred while processing item (first 100 chars): '{item[:100]}...'. "
-                    f"Error: {e}", exc_info=True
-                )
+        if isinstance(data, str):
+            urls_in_data = re.findall(self._url_regex_pattern, data)
+            extracted_urls.update(urls_in_data)
+            logger.debug(f"Processed single string input. Found {len(urls_in_data)} URLs.")
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                if isinstance(item, str):
+                    urls_in_item = re.findall(self._url_regex_pattern, item)
+                    extracted_urls.update(urls_in_item)
+                    logger.debug(f"Processed list item {i}. Found {len(urls_in_item)} URLs.")
+                else:
+                    logger.warning(
+                        f"URLExtractorNode received a non-string item at index {i} in the input list "
+                        f"(type: {type(item).__name__}). Skipping this item."
+                    )
+        else:
+            logger.error(
+                f"Invalid input data type for URLExtractorNode. "
+                f"Expected 'str' or 'List[str]', but received '{type(data).__name__}'."
+            )
+            raise TypeError("URLExtractorNode expects 'data' to be a string or a list of strings.")
 
         result = sorted(list(extracted_urls))
-        logger.debug(f"[{self.node_name}] Finished processing. Found {len(result)} unique URLs.")
+
+        if not result:
+            logger.info("URLExtractorNode finished processing, but no URLs were found.")
+        else:
+            logger.info(f"URLExtractorNode finished processing. Extracted {len(result)} unique URLs.")
+            logger.debug(f"Extracted URLs: {result}")
+
         return result
