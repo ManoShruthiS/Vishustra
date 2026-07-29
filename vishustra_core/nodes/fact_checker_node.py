@@ -1,130 +1,127 @@
 import logging
 from typing import Any, Dict
 
-# Assuming BaseNode is available at this path as per project context
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
+
 class FactCheckerNode(BaseNode):
     """
-    A Vishustra node that simulates fact-checking of input statements.
+    A Vishustra processing node that simulates fact-checking of a given statement.
 
-    This node takes a statement (expected within a dictionary under the 'statement' key)
-    and attempts to verify its veracity based on predefined rules or a simulated
-    external check. It returns a result indicating whether the statement is
-    considered a fact, a confidence score, and a reason for the determination.
+    This node takes a statement as input and returns a simulated fact-check result
+    (e.g., 'TRUE', 'FALSE', 'NEEDS_MORE_INFO', 'UNVERIFIED') along with a
+    confidence score and explanatory details.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """Returns the descriptive name of the node."""
         return "FactCheckerNode"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
+    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input data to determine the veracity of a statement.
+        Processes the input data to simulate fact-checking a statement.
+
+        The `context` dictionary is available for more advanced scenarios (e.g.,
+        external API keys, session-specific parameters), but is not used in this
+        simulated fact-checking logic.
 
         Expected `data` format:
-        `{"statement": "The sky is green."}`
-
-        Expected `context` parameters (optional):
-        - `fact_check_depth`: str ('shallow', 'deep') - Influences simulation complexity.
-        - `known_facts`: Dict[str, bool] - A mapping of statements to their known truth value.
-
-        Args:
-            data (Any): The input data containing the statement to be checked.
-            context (Dict[str, Any]): A dictionary of context variables for processing.
+        A dictionary containing at least a "statement" key.
+        Optionally, it can include a "sources" key with a list of strings.
+        Example:
+        ```json
+        {
+            "statement": "The sky is green.",
+            "sources": ["nasa.gov/color_of_sky"]
+        }
+        ```
 
         Returns:
-            Any: A dictionary containing the original statement, its verification status,
-                 a confidence score, and a reason for the status.
-                 Example:
-                 `{"original_statement": "The sky is blue.", "is_fact": True,
-                   "confidence": 0.95, "reason": "Common knowledge."}`
+        A dictionary containing the original statement, the simulated fact-check
+        result, a confidence score, and explanatory details.
+        Example:
+        ```json
+        {
+            "statement": "The sky is green.",
+            "fact_check_result": "FALSE",
+            "confidence": 0.95,
+            "details": "Statement contradicts widely accepted facts.",
+            "checked_sources": ["nasa.gov/color_of_sky"]
+        }
+        ```
 
         Raises:
-            TypeError: If the input `data` is not a dictionary.
-            ValueError: If the required 'statement' key is missing from `data`.
+            ValueError: If the input data format is invalid or missing the 'statement' key.
+            RuntimeError: If an unexpected error occurs during the fact-checking simulation.
         """
-        logger.info(f"[{self.node_name}] Starting fact-checking process.")
-        logger.debug(f"[{self.node_name}] Input data: {data}, Context: {context}")
+        logger.debug(f"[{self.node_name}] Starting process for input data.")
 
-        if not isinstance(data, dict):
-            logger.error(f"[{self.node_name}] Invalid input data type. Expected dict, got {type(data)}.")
-            raise TypeError(
-                f"FactCheckerNode expects 'data' to be a dictionary, but received {type(data).__name__}."
+        if not isinstance(data, dict) or "statement" not in data:
+            logger.error(
+                f"[{self.node_name}] Invalid input data format. Expected a dictionary "
+                f"with a 'statement' key. Received: {type(data).__name__}."
             )
-
-        statement = data.get("statement")
-        if not isinstance(statement, str) or not statement.strip():
-            logger.error(f"[{self.node_name}] Missing or invalid 'statement' in input data.")
             raise ValueError(
-                f"FactCheckerNode requires a non-empty string 'statement' key in the input data."
+                "Input data must be a dictionary containing a 'statement' key."
             )
 
-        statement_lower = statement.strip().lower()
-        result = {
-            "original_statement": statement,
-            "is_fact": False,
-            "confidence": 0.0,
-            "reason": "Could not verify statement."
-        }
+        statement = str(data["statement"]).strip()
+        sources = data.get("sources", [])
 
-        # Simulate different fact-checking mechanisms based on context
-        fact_check_depth = context.get("fact_check_depth", "shallow").lower()
-        known_facts = context.get("known_facts", {})
+        # --- Simulate Fact-Checking Logic ---
+        # In a production system, this section would integrate with advanced
+        # NLP models, external fact-checking APIs, knowledge graphs, or a
+        # dedicated verification pipeline. This simulation uses simple keyword
+        # matching for demonstration purposes.
+        fact_check_result: str
+        confidence: float
+        details: str
 
         try:
-            # 1. Check against explicitly provided known facts (high confidence)
-            if statement_lower in known_facts:
-                result["is_fact"] = known_facts[statement_lower]
-                result["confidence"] = 0.99
-                result["reason"] = "Matched against known facts from context."
-                logger.debug(f"[{self.node_name}] Statement matched known facts.")
-                return result
+            lower_statement = statement.lower()
 
-            # 2. Basic keyword matching for simulation (shallow check)
-            if fact_check_depth == "shallow":
-                if "water is wet" in statement_lower or "sky is blue" in statement_lower:
-                    result["is_fact"] = True
-                    result["confidence"] = 0.90
-                    result["reason"] = "Matched against common knowledge keywords (shallow check)."
-                elif "sun is cold" in statement_lower or "humans have wings" in statement_lower:
-                    result["is_fact"] = False
-                    result["confidence"] = 0.85
-                    result["reason"] = "Contradicts common knowledge keywords (shallow check)."
-                logger.debug(f"[{self.node_name}] Performed shallow fact check.")
-
-            # 3. More sophisticated simulation (deep check)
-            elif fact_check_depth == "deep":
-                # Simulate a more complex check, perhaps involving multiple criteria
-                if "earth orbits sun" in statement_lower:
-                    result["is_fact"] = True
-                    result["confidence"] = 0.98
-                    result["reason"] = "Verified through simulated deep astronomical data analysis."
-                elif "pi is exactly 3" in statement_lower:
-                    result["is_fact"] = False
-                    result["confidence"] = 0.97
-                    result["reason"] = "Refuted by simulated deep mathematical analysis."
-                else:
-                    # Fallback to general unknown if deep check doesn't find specific match
-                    result["is_fact"] = False
-                    result["confidence"] = 0.40 # Lower confidence for deep check unknowns
-                    result["reason"] = "Statement could not be definitively verified or refuted by deep analysis."
-                logger.debug(f"[{self.node_name}] Performed deep fact check.")
-
+            if "sky is blue" in lower_statement or "water is wet" in lower_statement:
+                fact_check_result = "TRUE"
+                confidence = 0.99
+                details = "Statement aligns with widely accepted, fundamental facts."
+            elif "sky is green" in lower_statement or "cats can fly" in lower_statement:
+                fact_check_result = "FALSE"
+                confidence = 0.95
+                details = "Statement directly contradicts widely accepted facts or physical laws."
+            elif "new scientific discovery" in lower_statement and sources:
+                fact_check_result = "NEEDS_MORE_INFO"
+                confidence = 0.70
+                details = "Statement suggests emerging information; further verification with provided sources is required."
+            elif any(keyword in lower_statement for keyword in ["unproven", "speculation", "allegedly"]):
+                fact_check_result = "UNVERIFIED"
+                confidence = 0.40
+                details = "Statement contains qualifiers indicating lack of verification or is highly speculative."
             else:
-                logger.warning(
-                    f"[{self.node_name}] Unknown 'fact_check_depth' '{fact_check_depth}'. Defaulting to unverified."
-                )
+                fact_check_result = "UNVERIFIED"
+                confidence = 0.50
+                details = "Could not definitively verify or refute the statement with simulated knowledge."
+
+            result = {
+                "statement": statement,
+                "fact_check_result": fact_check_result,
+                "confidence": confidence,
+                "details": details,
+                "checked_sources": sources,  # Reflect sources considered for checking
+            }
+            logger.debug(
+                f"[{self.node_name}] Successfully processed statement: '{statement}'. "
+                f"Result: {fact_check_result} (Confidence: {confidence:.2f})."
+            )
+            return result
 
         except Exception as e:
-            logger.error(f"[{self.node_name}] An unexpected error occurred during fact checking: {e}", exc_info=True)
-            result["is_fact"] = False
-            result["confidence"] = 0.0
-            result["reason"] = f"Error during fact-checking process: {type(e).__name__}"
-
-        logger.info(f"[{self.node_name}] Fact-checking complete for statement: '{statement[:50]}...'")
-        logger.debug(f"[{self.node_name}] Result: {result}")
-        return result
+            logger.exception(
+                f"[{self.node_name}] An unexpected error occurred during "
+                f"fact-checking simulation for statement '{statement}'."
+            )
+            raise RuntimeError(
+                f"FactCheckerNode failed to process statement: '{statement}' due to an internal error."
+            ) from e
