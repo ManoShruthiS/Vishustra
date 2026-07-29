@@ -1,101 +1,121 @@
 import logging
+import re
 from typing import Any, Dict
 
-# Assuming BaseNode is located in the specified core path
+# Assuming this path exists in the project structure for Vishustra
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class TextSummarizerNode(BaseNode):
     """
-    A Vishustra processing node responsible for generating a summary of input text.
+    A processing node designed to reduce the length of input text by generating
+    a summary. This node supports configurable summarization logic via context
+    parameters.
 
-    This node simulates the functionality of an abstractive text summarizer,
-    taking a longer piece of text and producing a condensed version.
-    The actual summarization logic is a placeholder for demonstration.
+    In its current implementation, this node performs a simple extractive
+    summarization by selecting an initial portion of the input text's sentences.
+    For a production system, this would typically integrate with an advanced
+    Language Model (LLM) or a dedicated text summarization service to perform
+    more sophisticated abstractive or extractive summarization.
     """
 
     @property
     def node_name(self) -> str:
         """
-        Returns the descriptive name of this processing node.
+        Returns the descriptive name of the node.
         """
         return "TextSummarizer"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
+    def process(self, data: Any, context: Dict[str, Any]) -> str:
         """
-        Processes the input data to generate a simulated text summary.
-
-        The summarization behavior can be influenced by parameters provided
-        in the `context` dictionary.
+        Processes the input data, expecting a string, and returns a summarized version.
 
         Args:
-            data: The input data, expected to be a string containing the text
-                  to be summarized.
-            context: A dictionary containing operational context for the node.
-                     - `summary_length_ratio` (float, optional): A value
-                       between 0 and 1 indicating the desired summary length
-                       as a ratio of the original text's length. Defaults to 0.3.
+            data (Any): The input text to be summarized. Must be a string.
+            context (Dict[str, Any]): A dictionary containing processing parameters.
+                                      Expected keys (optional):
+                                      - 'summary_ratio' (float): The target ratio (0.0 to 1.0)
+                                        of the original text's sentences to retain in the summary.
+                                        Defaults to 0.3 (30%).
+                                      - 'min_sentences' (int): The minimum number of sentences
+                                        to include in the summary, regardless of 'summary_ratio'.
+                                        Defaults to 2.
 
         Returns:
-            A string representing the simulated summary of the input text.
+            str: The summarized text.
 
         Raises:
-            TypeError: If the input `data` is not a string.
-            ValueError: If `summary_length_ratio` in context is invalid.
+            TypeError: If the input 'data' is not a string.
+            ValueError: If 'summary_ratio' is outside the valid range [0.0, 1.0]
+                        or 'min_sentences' is negative.
         """
-        logger.debug("TextSummarizerNode received data type: %s", type(data))
-        logger.debug("TextSummarizerNode received context: %s", context)
-
         if not isinstance(data, str):
-            logger.error("TextSummarizerNode received non-string data: %s", type(data).__name__)
+            logger.error(
+                f"Input data for TextSummarizerNode must be a string, "
+                f"but received {type(data).__name__}. Aborting summarization."
+            )
             raise TypeError(
-                f"TextSummarizerNode expects 'data' to be a string, "
-                f"but received {type(data).__name__}."
+                f"TextSummarizerNode expects string input, but received {type(data).__name__}."
             )
 
+        # Handle empty or whitespace-only input gracefully
         if not data.strip():
-            logger.info("TextSummarizerNode received empty or whitespace-only data. Returning empty string.")
+            logger.warning(
+                "Received empty or whitespace-only text for summarization. Returning an empty string."
+            )
             return ""
 
-        original_text = data.strip()
-        original_length = len(original_text)
-        logger.debug("Original text length: %d characters.", original_length)
+        # Retrieve and validate context parameters
+        summary_ratio = context.get("summary_ratio", 0.3)
+        min_sentences = context.get("min_sentences", 2)
 
-        # Validate and retrieve summary_length_ratio from context
-        summary_length_ratio = context.get('summary_length_ratio', 0.3)
-        if not (isinstance(summary_length_ratio, (int, float)) and 0 < summary_length_ratio <= 1):
-            logger.warning(
-                "Invalid 'summary_length_ratio' (%s) found in context. "
-                "It must be a float or int between 0 and 1. Using default of 0.3.",
-                summary_length_ratio
+        if not (0.0 <= summary_ratio <= 1.0):
+            logger.error(
+                f"Invalid 'summary_ratio' value: {summary_ratio}. Must be between 0.0 and 1.0."
             )
-            summary_length_ratio = 0.3
+            raise ValueError("Summary ratio must be between 0.0 and 1.0.")
+        if not isinstance(min_sentences, int) or min_sentences < 0:
+            logger.error(
+                f"Invalid 'min_sentences' value: {min_sentences}. Must be a non-negative integer."
+            )
+            raise ValueError("Minimum sentences must be a non-negative integer.")
 
-        # Calculate the target character count for the summary.
-        # Ensure a minimum useful length for very short texts, and cap at original length.
-        target_summary_char_count = max(
-            int(original_length * summary_length_ratio),
-            min(50, original_length) # Aim for at least 50 chars, but not more than the original text
+        # Basic sentence tokenization: splits on common sentence-ending punctuation
+        # followed by one or more spaces. This is a simple approximation.
+        sentences = re.split(r"(?<=[.!?])\s+", data)
+        # Filter out any empty strings that might result from tokenization
+        sentences = [s.strip() for s in sentences if s.strip()]
+
+        if not sentences:
+            logger.debug(
+                "No valid sentences found in the input text after tokenization. "
+                "Returning an empty string."
+            )
+            return ""
+
+        num_original_sentences = len(sentences)
+        # Calculate the number of sentences to include based on ratio and minimum
+        num_sentences_to_include = max(
+            min_sentences, int(num_original_sentences * summary_ratio)
         )
 
-        simulated_summary: str
-        if original_length <= 100:
-            # For very short texts, return the text itself as a "summary".
-            simulated_summary = original_text
-        else:
-            # Simulate summarization by truncating the text and appending a marker.
-            # This is a basic simulation and not a functional summarization model.
-            end_index = min(target_summary_char_count, original_length)
-            # Ensure we don't cut off mid-word if possible, though for simulation, simple cut is fine.
-            simulated_summary = original_text[:end_index].strip()
-            if len(simulated_summary) < original_length:
-                simulated_summary += "... [SIMULATED SUMMARY]"
+        # Ensure we don't try to include more sentences than are actually available
+        num_sentences_to_include = min(
+            num_sentences_to_include, num_original_sentences
+        )
+
+        # Extractive summarization: take the first N sentences
+        summary_sentences = sentences[:num_sentences_to_include]
+        summary = " ".join(summary_sentences)
 
         logger.info(
-            "Text summarization simulated. Original length: %d, "
-            "Simulated summary length: %d", original_length, len(simulated_summary)
+            f"Summarized text from {num_original_sentences} sentences to "
+            f"{len(summary_sentences)} sentences (target ratio: {summary_ratio:.2f}, "
+            f"min: {min_sentences})."
         )
-        logger.debug("Simulated summary: %s", simulated_summary)
+        # Log a snippet for debugging, avoiding logging full potentially large texts
+        logger.debug(f"Original text start: '{data[:100].replace('\\n', ' ')}...'")
+        logger.debug(f"Summarized text start: '{summary[:100].replace('\\n', ' ')}...'")
 
-        return simulated_summary
+        return summary
