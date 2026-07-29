@@ -1,92 +1,127 @@
-from vishustra_core.nodes.base_node import BaseNode
-from typing import Any, Dict, Union
 import logging
+from typing import Any, Dict, List, Literal, Optional
+
+# Assuming 'vishustra_core.nodes.base_node' is the correct module path for BaseNode
+from vishustra_core.nodes.base_node import BaseNode 
 
 logger = logging.getLogger(__name__)
 
 class IntentClassifierNode(BaseNode):
     """
-    A Vishustra processing node responsible for classifying the intent
-    of a given text input.
-
-    This node simulates intent classification based on keywords for demonstration
-    purposes. In a production environment, this would typically integrate
-    with an actual machine learning model or a dedicated Natural Language
-    Understanding (NLU) service to provide high-fidelity intent recognition.
+    A Vishustra processing node that classifies the intent of a given text input.
+    
+    This node simulates intent classification based on simple keyword matching.
+    It takes an utterance and attempts to categorize it into one of the 
+    predefined intents based on the presence of associated keywords.
     """
+
+    def __init__(self, 
+                 intent_keywords: Dict[str, List[str]], 
+                 default_intent: str = "unrecognized_intent",
+                 case_sensitive: bool = False):
+        """
+        Initializes the IntentClassifierNode with a mapping of intents to keywords.
+
+        Args:
+            intent_keywords: A dictionary where keys are intent names (str) and values
+                             are lists of keywords (str) associated with that intent.
+                             Example: {"greeting": ["hello", "hi"], "order_status": ["track", "status"]}
+            default_intent: The intent to assign if no keywords for any defined intent are found.
+                            Defaults to "unrecognized_intent".
+            case_sensitive: If True, keyword matching will be case-sensitive. Defaults to False,
+                            meaning both the utterance and keywords will be lowercased before matching.
+
+        Raises:
+            TypeError: If `intent_keywords`, `default_intent`, or `case_sensitive` are of incorrect types.
+        """
+        if not isinstance(intent_keywords, dict) or not all(
+            isinstance(k, str) and isinstance(v, list) and all(isinstance(kw, str) for kw in v) 
+            for k, v in intent_keywords.items()
+        ):
+            raise TypeError("`intent_keywords` must be a dictionary mapping intent names (str) to lists of keywords (str).")
+        if not isinstance(default_intent, str):
+            raise TypeError("`default_intent` must be a string.")
+        if not isinstance(case_sensitive, bool):
+            raise TypeError("`case_sensitive` must be a boolean.")
+
+        self._intent_keywords = {
+            intent: [kw.lower() if not case_sensitive else kw for kw in keywords]
+            for intent, keywords in intent_keywords.items()
+        }
+        self._default_intent = default_intent
+        self._case_sensitive = case_sensitive
+        logger.debug(f"IntentClassifierNode initialized with intents: {list(self._intent_keywords.keys())}, "
+                     f"default: '{self._default_intent}', case-sensitive: {self._case_sensitive}")
+
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of the node.
-        """
+        """Returns the name of the node."""
         return "IntentClassifierNode"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Union[str, float]]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input data (expected to be a string utterance) to classify
-        its underlying intent and assign a confidence score.
+        Classifies the intent of the input text data based on configured keywords.
+
+        Expected `data` input: A string representing the user utterance.
 
         Args:
-            data (Any): The primary input data for the node. For this node, it is
-                        expected to be a string representing a user utterance or query.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                       relevant to the current orchestration flow.
-                                       This can include session data, user preferences,
-                                       or previous node outputs.
+            data: The input data, expected to be a string utterance.
+            context: A dictionary containing contextual information for processing.
+                     (This implementation passes context through but does not
+                     directly use it for classification logic.)
 
         Returns:
-            Dict[str, Union[str, float]]: A dictionary containing the classified intent
-                                          as a string and its associated confidence score
-                                          as a float.
-                                          Example: {"intent": "book_flight", "confidence": 0.98}
+            A dictionary containing:
+            - 'original_data': The original input data.
+            - 'classified_intent': The determined intent as a string.
+            - 'confidence_score': A simulated confidence score (1.0 if matched, 0.0 if default).
+            - 'matched_keywords': A list of unique keywords that contributed to the classification.
+            - 'context': The original context dictionary, passed through.
 
         Raises:
-            TypeError: If the input `data` is not a string, indicating an invalid
-                       input type for intent classification.
+            ValueError: If the input `data` is not a string.
         """
         if not isinstance(data, str):
-            logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected 'str', got '{type(data).__name__}'. "
-                f"Failed to classify intent. Context keys: {list(context.keys())}"
-            )
-            raise TypeError(
-                f"IntentClassifierNode requires input 'data' to be a string. "
-                f"Received type: {type(data).__name__}."
-            )
+            logger.error(f"IntentClassifierNode received non-string data: {type(data)}. Expected a string utterance.")
+            raise ValueError(f"Input data must be a string. Received type: {type(data)}")
 
-        utterance = data.lower().strip()
-        logger.debug(f"[{self.node_name}] Starting intent classification for utterance: '{utterance[:100]}{'...' if len(utterance) > 100 else ''}'")
+        utterance = data
+        processed_utterance = utterance if self._case_sensitive else utterance.lower()
+        
+        classified_intent: str = self._default_intent
+        confidence_score: float = 0.0
+        matched_keywords: List[str] = []
+        
+        # Iterate through intents to find the first match based on keywords
+        for intent, keywords in self._intent_keywords.items():
+            current_intent_matched_kws = []
+            for keyword in keywords:
+                if keyword in processed_utterance:
+                    current_intent_matched_kws.append(keyword)
+            
+            if current_intent_matched_kws:
+                classified_intent = intent
+                confidence_score = 1.0 # Simulate a perfect match
+                matched_keywords.extend(current_intent_matched_kws)
+                logger.debug(f"Classified '{utterance}' as '{intent}' based on keywords: {', '.join(current_intent_matched_kws)}")
+                # For this simple model, we assume the first intent with any match is the winner
+                break 
 
-        # Simulate intent classification based on a simple keyword matching logic.
-        # This can be expanded or replaced with an external NLU model integration.
-        intent: str
-        confidence: float
-
-        if ("book" in utterance and "flight" in utterance) or \
-           ("reserve" in utterance and ("ticket" in utterance or "seat" in utterance)):
-            intent = "book_flight"
-            confidence = 0.95
-        elif "weather" in utterance or "forecast" in utterance or "temperature" in utterance:
-            intent = "get_weather"
-            confidence = 0.90
-        elif "help" in utterance or "support" in utterance or "assist" in utterance or "faq" in utterance:
-            intent = "get_help"
-            confidence = 0.88
-        elif ("cancel" in utterance or "change" in utterance) and \
-             ("booking" in utterance or "reservation" in utterance or "flight" in utterance):
-            intent = "manage_booking"
-            confidence = 0.92
-        elif "price" in utterance or "cost" in utterance or "how much" in utterance:
-            intent = "inquire_price"
-            confidence = 0.85
+        if classified_intent == self._default_intent:
+            logger.info(f"No specific intent keywords found for utterance: '{utterance}'. Assigned default intent: '{self._default_intent}'.")
         else:
-            intent = "general_query"
-            confidence = 0.70
+            # Ensure unique keywords and maintain original order if desired, or just use a set.
+            # For simplicity, we'll use a set to remove duplicates if multiple keywords for the *same* intent matched.
+            # If multiple intents had keywords that matched (which wouldn't happen with the `break` above unless no break),
+            # the `matched_keywords` would accumulate from the first winning intent.
+            matched_keywords = list(set(matched_keywords)) 
+            logger.info(f"Final classification for '{utterance}': '{classified_intent}' with matched keywords: {', '.join(matched_keywords)}")
 
-        result = {"intent": intent, "confidence": confidence}
-        logger.info(
-            f"[{self.node_name}] Classified utterance as intent: '{intent}' "
-            f"with confidence: {confidence:.2f}"
-        )
-        return result
+        return {
+            "original_data": utterance,
+            "classified_intent": classified_intent,
+            "confidence_score": confidence_score,
+            "matched_keywords": matched_keywords,
+            "context": context
+        }
