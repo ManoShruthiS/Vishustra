@@ -1,161 +1,139 @@
 import logging
-from typing import Any, Dict, Type, Union
+from typing import Any, Dict, Tuple, Type, Union
 
-# Assuming vishustra_core is a package and nodes is a subpackage
-# and base_node is a module within nodes.
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-class DataValidator(BaseNode):
+
+class DataValidationException(ValueError):
     """
-    A Vishustra processing node that validates input data against a set of predefined rules.
+    Custom exception raised when data validation fails within the DataValidatorNode.
+    """
+    pass
 
-    This node is crucial for ensuring data integrity and consistency throughout
-    the orchestration pipeline. It can check for required fields and data types,
-    and manage nullable values.
 
-    Validation rules are defined as a dictionary where keys represent the data fields
-    to validate. Each field's rule can specify:
-    - 'required': bool (default: False) - If True, the field must be present in the data.
-    - 'type': Type (default: Any) - The expected Python type of the field's value.
-                                   Must be a concrete type (e.g., str, int, dict).
-    - 'allow_none': bool (default: False) - If True, allows a None value for the field.
-                                            This overrides type checking if the value is None.
+class DataValidatorNode(BaseNode):
+    """
+    A Vishustra processing node responsible for validating input data against a
+    defined schema.
 
-    Example validation_rules:
-    {
-        "user_id": {"type": str, "required": True},
-        "email": {"type": str, "required": True, "allow_none": False},
-        "age": {"type": int, "required": False, "allow_none": True},
-        "preferences": {"type": dict, "required": True, "allow_none": True}
-    }
+    This node ensures that the structure and types of fields within the input data
+    conform to a specified `validation_schema`. It supports checking for required
+    fields, their types, and can optionally enforce strict validation to disallow
+    any fields not explicitly listed in the schema.
     """
 
-    def __init__(self, validation_rules: Dict[str, Dict[str, Any]]):
+    def __init__(self, validation_schema: Dict[str, Union[Type, Tuple[Type, ...]]], strict: bool = False):
         """
-        Initializes the DataValidator node with specific validation rules.
+        Initializes the DataValidatorNode with the validation schema and strictness setting.
+
+        The `validation_schema` dictates the expected fields and their types.
+        For type checking, it leverages Python's `isinstance` function.
 
         Args:
-            validation_rules: A dictionary defining the validation schema.
-                              Keys are field names, values are dictionaries
-                              specifying 'required' (bool), 'type' (Type),
-                              and 'allow_none' (bool).
+            validation_schema (Dict[str, Union[Type, Tuple[Type, ...]]]):
+                A dictionary where keys represent expected field names and values
+                are the expected Python types (e.g., `str`, `int`, `float`, `list`, `dict`).
+                For fields that can accept multiple types (like a union), provide a tuple
+                of types (e.g., `(str, int)`).
+            strict (bool):
+                If `True`, the validator will raise a `DataValidationException` if the
+                input `data` contains any fields that are not specified in the
+                `validation_schema`. Defaults to `False`.
 
         Raises:
-            TypeError: If `validation_rules` is not a dictionary or if a type in
-                       rules is not a valid Python type object.
-            ValueError: If the structure of a rule is invalid.
+            TypeError: If the `validation_schema` is not a dictionary or contains
+                       invalid key/value types.
         """
-        if not isinstance(validation_rules, dict):
-            raise TypeError("Validation rules must be a dictionary.")
-        
-        # Validate the structure and types within validation_rules
-        for field, rules in validation_rules.items():
-            if not isinstance(rules, dict):
-                raise ValueError(f"Rules for field '{field}' must be a dictionary.")
-            
-            # Validate 'type' entry
-            if 'type' in rules and not (isinstance(rules['type'], type) or rules['type'] is Any):
-                raise TypeError(
-                    f"The 'type' specified for field '{field}' must be a Python type "
-                    f"(e.g., str, int, dict) or typing.Any. Got {type(rules['type']).__name__}."
-                )
-            
-            # Validate 'required' entry
-            if 'required' in rules and not isinstance(rules['required'], bool):
-                raise TypeError(f"The 'required' flag for field '{field}' must be a boolean.")
-            
-            # Validate 'allow_none' entry
-            if 'allow_none' in rules and not isinstance(rules['allow_none'], bool):
-                raise TypeError(f"The 'allow_none' flag for field '{field}' must be a boolean.")
+        if not isinstance(validation_schema, dict):
+            raise TypeError("`validation_schema` must be a dictionary.")
+        if not all(isinstance(k, str) for k in validation_schema.keys()):
+            raise TypeError("All keys in `validation_schema` must be strings (field names).")
+        if not all(isinstance(v, (type, tuple)) for v in validation_schema.values()):
+            raise TypeError(
+                "All values in `validation_schema` must be type objects "
+                "(e.g., `str`, `int`) or tuples of type objects."
+            )
 
-        self._validation_rules = validation_rules
-        logger.debug(f"DataValidator node initialized with rules: {validation_rules}")
+        self._validation_schema = validation_schema
+        self._strict = strict
+        logger.debug(
+            f"DataValidatorNode initialized with schema: {self._validation_schema}, strict mode: {self._strict}"
+        )
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """Returns the descriptive name of the node."""
         return "DataValidator"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Validates the input data against the configured rules.
+        Processes the input data by validating it against the configured schema.
+
+        This method expects `data` to be a dictionary. It performs the following
+        checks:
+        1. Verifies that `data` is a dictionary.
+        2. Checks for the presence of all required fields defined in `validation_schema`.
+        3. Validates the type of each field against its expected type(s).
+        4. If `strict` mode is enabled, it checks for and disallows any fields
+           in `data` that are not present in `validation_schema`.
 
         Args:
-            data: The input data to be validated. Expected to be a dictionary.
-            context: A dictionary containing context-specific information for the node.
+            data (Any): The input data to be validated. Expected to be a dictionary.
+            context (Dict[str, Any]): The processing context, which may contain
+                                      additional runtime information. This node
+                                      does not directly use the context for validation.
 
         Returns:
-            The original data if validation passes.
+            Any: The original, validated input data.
 
         Raises:
-            TypeError: If the input 'data' is not a dictionary or if a field's value
-                       does not match its specified type.
-            ValueError: If a required field is missing or if a field's value is None
-                        when `allow_none` is False.
+            DataValidationException: If the input data fails any of the validation rules.
+            TypeError: If the input `data` itself is not a dictionary.
         """
-        logger.info(f"[{self.node_name}] Starting data validation.")
-
         if not isinstance(data, dict):
             logger.error(
-                f"[{self.node_name}] Input data is not a dictionary. "
-                "DataValidator is designed for dictionary validation. "
-                f"Received type: {type(data).__name__}"
+                f"DataValidatorNode received non-dictionary input. Expected dict, got: {type(data).__name__}"
             )
             raise TypeError(
-                f"Input data must be a dictionary for DataValidator, "
-                f"but received {type(data).__name__}."
+                f"Invalid input data type for '{self.node_name}' node: expected dictionary, "
+                f"got {type(data).__name__}"
             )
 
-        for field_name, rules in self._validation_rules.items():
-            is_required = rules.get('required', False)
-            expected_type = rules.get('type', Any)
-            allow_none = rules.get('allow_none', False)
+        logger.info(f"Initiating data validation for node '{self.node_name}' (strict={self._strict}).")
 
+        # 1. Validate required fields and their types
+        for field_name, expected_type in self._validation_schema.items():
             if field_name not in data:
-                if is_required:
-                    logger.warning(
-                        f"[{self.node_name}] Required field '{field_name}' is missing from data."
-                    )
-                    raise ValueError(f"Required field '{field_name}' is missing.")
-                else:
-                    # If not required and not present, skip further validation for this field
-                    continue
+                logger.warning(f"Validation failed: Required field '{field_name}' is missing.")
+                raise DataValidationException(f"Missing required field: '{field_name}'")
 
-            # Field is present, now validate its value
             field_value = data[field_name]
+            if not isinstance(field_value, expected_type):
+                logger.error(
+                    f"Validation failed for field '{field_name}': expected type {expected_type}, "
+                    f"got {type(field_value).__name__} with value: {field_value!r}"
+                )
+                raise DataValidationException(
+                    f"Invalid type for field '{field_name}': expected {expected_type}, "
+                    f"got {type(field_value).__name__}"
+                )
+            logger.debug(f"Field '{field_name}' type validated successfully as {type(field_value).__name__}.")
 
-            if field_value is None:
-                if not allow_none:
-                    # If field is present but None, and None is not explicitly allowed.
-                    logger.warning(
-                        f"[{self.node_name}] Field '{field_name}' received None, but 'allow_none' is False. "
-                        f"Expected type: {expected_type.__name__ if expected_type is not Any else 'Any'}."
-                    )
-                    raise ValueError(
-                        f"Field '{field_name}' received None, but 'allow_none' is False "
-                        f"(expected type: {expected_type.__name__ if expected_type is not Any else 'Any'})."
-                    )
-                else:
-                    # None is allowed for this field, so it passes validation for this specific rule.
-                    logger.debug(
-                        f"[{self.node_name}] Field '{field_name}' is None, which is allowed by rules."
-                    )
-                    continue # Skip type check for None if allowed
-
-            # If field_value is not None, proceed with type check
-            if expected_type is not Any and not isinstance(field_value, expected_type):
+        # 2. Validate for unexpected fields if strict mode is enabled
+        if self._strict:
+            unexpected_fields = set(data.keys()) - set(self._validation_schema.keys())
+            if unexpected_fields:
                 logger.warning(
-                    f"[{self.node_name}] Field '{field_name}' has incorrect type. "
-                    f"Expected '{expected_type.__name__}', got '{type(field_value).__name__}'."
+                    f"Validation failed: Unexpected fields found in data: {', '.join(unexpected_fields)}"
                 )
-                raise TypeError(
-                    f"Field '{field_name}' type mismatch: "
-                    f"expected '{expected_type.__name__}', got '{type(field_value).__name__}'."
+                raise DataValidationException(
+                    f"Unexpected fields present in data: {', '.join(unexpected_fields)}"
                 )
-            
-            logger.debug(f"[{self.node_name}] Field '{field_name}' validated successfully.")
+            logger.debug("No unexpected fields found in strict mode, validation successful.")
+        else:
+            logger.debug("Strict mode is disabled, ignoring unexpected fields.")
 
-        logger.info(f"[{self.node_name}] All data validation checks passed.")
+        logger.info(f"Data successfully validated by node '{self.node_name}'.")
         return data
