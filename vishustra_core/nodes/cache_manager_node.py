@@ -1,174 +1,137 @@
 import logging
+import time
 from typing import Any, Dict, Optional, Tuple
 
-# Assuming BaseNode is located here based on project context
+# Assuming this import path exists in the Vishustra project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class CacheManagerNode(BaseNode):
     """
-    A Vishustra processing node that acts as an in-memory cache manager.
+    A processing node that acts as an in-memory cache manager.
 
-    This node supports common cache operations:
-    - Retrieving a value (get)
-    - Storing a value (set)
-    - Deleting a value (delete)
+    It supports operations like 'set', 'get', 'delete', and 'clear'
+    for managing data within its internal cache, including basic
+    Time-To-Live (TTL) functionality for cached items.
 
-    Operations are determined by the 'cache_operation' key in the context.
-    The 'data' parameter to the process method is always interpreted as the cache key.
+    Input 'data' and 'context' define the operation and parameters:
+    - For 'set': `data` should be `{"key": Any, "value": Any}`, `context` can contain `{"ttl_seconds": Union[int, float]}`.
+    - For 'get': `data` should be the `key` to retrieve.
+    - For 'delete': `data` should be the `key` to delete.
+    - For 'clear': `data` can be ignored.
+
+    The 'operation' is specified via `context["operation"]`.
     """
 
     def __init__(self):
         """
         Initializes the CacheManagerNode with an empty in-memory cache.
+        The cache stores items as `(value, expiration_timestamp_or_None)`.
         """
-        self._cache: Dict[Any, Any] = {}  # Stores Key -> Value
-        logger.debug("CacheManagerNode initialized with an empty in-memory cache.")
+        self._cache: Dict[Any, Tuple[Any, Optional[float]]] = {}
+        logger.debug("CacheManagerNode initialized.")
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of the node.
-        """
-        return "CacheManager"
+        """Returns the name of the node."""
+        return "CacheManagerNode"
 
-    def _get_from_cache(self, key: Any) -> Tuple[Optional[Any], bool]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Internal method to retrieve a value from the cache.
+        Processes the input data to perform cache operations.
 
         Args:
-            key (Any): The key associated with the value to retrieve.
+            data (Any): The primary data for the operation (e.g., key, or key-value pair).
+            context (Dict[str, Any]): A dictionary containing control parameters,
+                                       most importantly `{"operation": "set"|"get"|"delete"|"clear"}`.
+                                       For 'set', `{"ttl_seconds": Union[int, float]}` can also be provided.
 
         Returns:
-            Tuple[Optional[Any], bool]: A tuple containing the value if found
-                                        (or None if not found) and a boolean
-                                        indicating whether a cache hit occurred.
+            Any: A dictionary indicating the status and result of the operation.
+                 E.g., `{"status": "success", "operation": "set", "key": "my_key"}`
+                       `{"status": "hit", "operation": "get", "key": "my_key", "value": "cached_data"}`
+                       `{"status": "miss", "operation": "get", "key": "my_key", "value": None}`
+
+        Raises:
+            ValueError: If the 'operation' is missing, unknown, or required parameters are missing.
+            TypeError: If input parameters are of incorrect types.
         """
-        if key in self._cache:
-            value = self._cache[key]
-            logger.debug(f"Cache hit for key: '{key}'")
-            return value, True
-        logger.debug(f"Cache miss for key: '{key}'")
-        return None, False
+        operation_raw = context.get("operation")
 
-    def _set_in_cache(self, key: Any, value: Any, ttl: Optional[int] = None) -> bool:
-        """
-        Internal method to store a value in the cache.
+        if not operation_raw:
+            logger.error("CacheManagerNode received a request without a specified 'operation' in context.")
+            raise ValueError("Missing 'operation' in context for CacheManagerNode.")
 
-        Args:
-            key (Any): The key to associate with the value.
-            value (Any): The value to store.
-            ttl (Optional[int]): Time-to-live in seconds. (Reserved for future implementation).
+        if not isinstance(operation_raw, str):
+            logger.error(f"CacheManagerNode 'operation' must be a string. Received type: {type(operation_raw).__name__}.")
+            raise TypeError(f"Invalid type for 'operation'. Expected string, got {type(operation_raw).__name__}.")
 
-        Returns:
-            bool: True if the value was successfully set, False otherwise.
-        """
-        try:
-            self._cache[key] = value
-            logger.info(f"Cache set for key: '{key}' (TTL: {ttl if ttl is not None else 'None'})")
-            # Future expansion: Implement actual TTL management here.
-            return True
-        except Exception as e:
-            logger.error(f"Error setting cache for key '{key}': {e}", exc_info=True)
-            return False
-
-    def _delete_from_cache(self, key: Any) -> Tuple[bool, str]:
-        """
-        Internal method to delete a value from the cache.
-
-        Args:
-            key (Any): The key of the item to delete.
-
-        Returns:
-            Tuple[bool, str]: A tuple where the first element is True if deleted,
-                              False otherwise. The second element is a descriptive
-                              message ("Deleted", "Not Found", or an error message).
-        """
-        try:
-            if key in self._cache:
-                del self._cache[key]
-                logger.info(f"Cache deleted for key: '{key}'")
-                return True, "Deleted"
-            logger.debug(f"Attempted to delete non-existent key from cache: '{key}'")
-            return False, "Not Found"
-        except Exception as e:
-            logger.error(f"Error deleting cache for key '{key}': {e}", exc_info=True)
-            return False, str(e)
-
-    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Executes a cache operation based on the provided key (`data`) and `context`.
-
-        Args:
-            data (Any): The cache key for the operation. Must be a hashable type.
-            context (Dict[str, Any]): A dictionary containing operation details.
-                                      Expected keys:
-                                      - "cache_operation" (str, optional): "get", "set", "delete". Defaults to "get".
-                                      - "cache_value" (Any, optional): The value to store for "set" operation.
-                                      - "ttl" (int, optional): Time-to-live in seconds for "set" operation.
-                                                               Currently reserved for future implementation.
-
-        Returns:
-            Dict[str, Any]: A dictionary indicating the result of the operation.
-                            Possible statuses:
-                            - "hit": Item found in cache. Contains "key" and "value".
-                            - "miss": Item not found in cache. Contains "key".
-                            - "set": Item successfully stored. Contains "key" and "value".
-                            - "deleted": Item successfully deleted. Contains "key".
-                            - "key_not_found": Attempted delete on a non-existent key. Contains "key" and "message".
-                            - "error": An error occurred during the operation. Contains "message" and optionally "key".
-        """
-        operation = context.get("cache_operation", "get").lower()
-        
-        # Basic validation for cache key type
-        if not isinstance(data, (str, int, float, bool, tuple)):
-            # More complex objects can be keys if hashable, but restrict to common immutable types
-            # for a robust initial implementation. Custom objects would require __hash__ and __eq__.
-            logger.warning(
-                f"Invalid data type used as cache key: {type(data)}. Key must be hashable and immutable."
-            )
-            return {"status": "error", "message": f"Invalid cache key type: {type(data)}."}
+        operation = operation_raw.lower()
 
         try:
-            if operation == "get":
-                value, hit = self._get_from_cache(data)
-                if hit:
-                    return {"status": "hit", "key": data, "value": value}
-                else:
-                    return {"status": "miss", "key": data}
-            
-            elif operation == "set":
-                value_to_set = context.get("cache_value")
-                ttl = context.get("ttl") # Future use for actual TTL implementation
-                if value_to_set is None:
-                    logger.warning(
-                        f"Attempted 'set' operation for key '{data}' without 'cache_value' in context."
-                    )
-                    return {"status": "error", "message": "Missing 'cache_value' for 'set' operation."}
+            if operation == "set":
+                if not isinstance(data, dict):
+                    logger.error(f"CacheManagerNode 'set' operation expects 'data' to be a dictionary. Received type: {type(data).__name__}.")
+                    raise TypeError("Invalid data format for 'set' operation. Expected dictionary.")
+
+                key = data.get("key")
+                value = data.get("value")
+                ttl_seconds = context.get("ttl_seconds")
+
+                if key is None or value is None:
+                    logger.error(f"CacheManagerNode 'set' operation requires 'key' and 'value' in data. Received data: {data}")
+                    raise ValueError("Missing 'key' or 'value' for 'set' operation.")
                 
-                if self._set_in_cache(data, value_to_set, ttl):
-                    return {"status": "set", "key": data, "value": value_to_set}
-                else:
-                    return {"status": "error", "message": f"Failed to set cache for key: '{data}'"}
-            
-            elif operation == "delete":
-                success, msg = self._delete_from_cache(data)
-                if success:
-                    return {"status": "deleted", "key": data}
-                elif msg == "Not Found":
-                    return {"status": "key_not_found", "key": data, "message": "Key not found for deletion."}
-                else:
-                    return {"status": "error", "key": data, "message": f"Failed to delete cache: {msg}"}
-            
-            else:
-                logger.warning(f"Unknown cache operation '{operation}' for key: '{data}'")
-                return {"status": "error", "message": f"Unknown cache operation: '{operation}'"}
-        
-        except Exception as e:
-            logger.error(
-                f"Unhandled exception during cache operation '{operation}' for key '{data}': {e}", 
-                exc_info=True
-            )
-            return {"status": "error", "message": f"An unexpected error occurred: {e}"}
+                expiration_time = None
+                if ttl_seconds is not None:
+                    if not isinstance(ttl_seconds, (int, float)):
+                        logger.warning(f"CacheManagerNode: Invalid 'ttl_seconds' type for key '{key}'. Expected int or float, got {type(ttl_seconds).__name__}. Storing without TTL.")
+                    elif ttl_seconds <= 0:
+                        logger.warning(f"CacheManagerNode: Non-positive 'ttl_seconds' for key '{key}'. Storing without TTL.")
+                    else:
+                        expiration_time = time.time() + ttl_seconds
 
+                self._cache[key] = (value, expiration_time)
+                logger.debug(f"CacheManagerNode: Key '{key}' set with value (and TTL: {ttl_seconds}s if specified).")
+                return {"status": "success", "operation": "set", "key": key}
+
+            elif operation == "get":
+                key = data # For 'get', data is expected to be the key
+                
+                if key not in self._cache:
+                    logger.debug(f"CacheManagerNode: Cache miss for key '{key}'.")
+                    return {"status": "miss", "operation": "get", "key": key, "value": None}
+                
+                value, expiration_time = self._cache[key]
+
+                if expiration_time is not None and time.time() > expiration_time:
+                    del self._cache[key]
+                    logger.info(f"CacheManagerNode: Key '{key}' expired and removed. Cache miss.")
+                    return {"status": "miss", "operation": "get", "key": key, "value": None, "reason": "expired"}
+                
+                logger.debug(f"CacheManagerNode: Cache hit for key '{key}'.")
+                return {"status": "hit", "operation": "get", "key": key, "value": value}
+
+            elif operation == "delete":
+                key = data # For 'delete', data is expected to be the key
+
+                if key in self._cache:
+                    del self._cache[key]
+                    logger.debug(f"CacheManagerNode: Key '{key}' deleted from cache.")
+                    return {"status": "success", "operation": "delete", "key": key}
+                else:
+                    logger.info(f"CacheManagerNode: Attempted to delete non-existent key '{key}'.")
+                    return {"status": "not_found", "operation": "delete", "key": key}
+
+            elif operation == "clear":
+                self._cache.clear()
+                logger.info("CacheManagerNode: Cache cleared successfully.")
+                return {"status": "success", "operation": "clear"}
+
+            else:
+                logger.error(f"CacheManagerNode received an unknown operation: '{operation}'.")
+                raise ValueError(f"Unknown operation '{operation}' for CacheManagerNode.")
+        except Exception as e:
+            logger.error(f"CacheManagerNode encountered an error during operation '{operation}': {e}", exc_info=True)
+            raise # Re-raise the exception after logging for upstream handling
