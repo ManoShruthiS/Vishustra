@@ -1,35 +1,24 @@
-import logging
 import re
-from typing import Any, Dict, List, Optional, Union
+import logging
+from typing import Any, Dict, List, Union
 
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
+
 class RegexMatcherNode(BaseNode):
     """
     A Vishustra processing node that performs regex matching on input data.
 
-    This node can be configured to:
-    - Search for the first occurrence of a pattern and extract a specific group.
-    - Find all non-overlapping occurrences of a pattern.
+    This node expects the input `data` to be a string and looks for
+    a 'pattern' key in the `context` dictionary. Optionally, a 'flags'
+    key can be provided in the context to modify regex behavior.
 
-    Context Parameters:
-    - pattern (str, required): The regex pattern to use.
-    - flags (int, optional): Bitmask of re flags (e.g., re.IGNORECASE, re.MULTILINE). Default: 0.
-    - return_all_matches (bool, optional): If True, returns a list of all matches (re.findall).
-                                            If False (default), returns the first match's group (re.search).
-    - group_index_or_name (Union[int, str], optional):
-        - If `return_all_matches` is False: The index or name of the capturing group to return from the first match.
-                                          Defaults to 0 (the entire match).
-        - This parameter is ignored when `return_all_matches` is True, as re.findall
-          returns either a list of strings or a list of tuples depending on groups.
-    - default_value (Any, optional): The value to return if no match is found. Defaults to None.
+    Supported string flags (case-insensitive): "IGNORECASE", "MULTILINE",
+    "DOTALL", "UNICODE", "VERBOSE", "ASCII".
 
-    Returns:
-    - If `return_all_matches` is True: List[str] or List[Tuple[str, ...]] containing all matches.
-    - If `return_all_matches` is False: str (the matched group) or the `default_value`.
-    - None if input data or pattern is invalid or an error occurs during processing.
+    Returns a list of all non-overlapping matches found in the data.
     """
 
     @property
@@ -37,74 +26,101 @@ class RegexMatcherNode(BaseNode):
         """Returns the name of the node."""
         return "RegexMatcher"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
+    def _parse_flags(self, flag_strings: Union[str, List[str]]) -> int:
         """
-        Processes the input data using regex matching based on context parameters.
+        Parses string representation of regex flags into a bitmask.
+        """
+        if isinstance(flag_strings, str):
+            flag_strings = [flag_strings]
+
+        parsed_flags = 0
+        for flag_str in flag_strings:
+            upper_flag = flag_str.upper()
+            if upper_flag == "IGNORECASE":
+                parsed_flags |= re.IGNORECASE
+            elif upper_flag == "MULTILINE":
+                parsed_flags |= re.MULTILINE
+            elif upper_flag == "DOTALL":
+                parsed_flags |= re.DOTALL
+            elif upper_flag == "UNICODE":
+                parsed_flags |= re.UNICODE
+            elif upper_flag == "VERBOSE":
+                parsed_flags |= re.VERBOSE
+            elif upper_flag == "ASCII":
+                parsed_flags |= re.ASCII
+            else:
+                logger.warning(
+                    f"[{self.node_name}] Unrecognized regex flag '{flag_str}'. Ignoring."
+                )
+        return parsed_flags
+
+    def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
+        """
+        Processes the input data by applying a regular expression pattern.
 
         Args:
-            data (Any): The input data to search within. Expected to be a string.
-            context (Dict[str, Any]): A dictionary containing parameters for regex matching.
+            data: The input data, expected to be a string to be matched against.
+            context: A dictionary containing operational parameters:
+                - 'pattern' (str): The regular expression pattern to use. (Required)
+                - 'flags' (Union[str, List[str], int], optional): Regex flags. Can be
+                  a single string (e.g., "IGNORECASE"), a list of strings
+                  (e.g., ["IGNORECASE", "MULTILINE"]), or a direct integer bitmask
+                  from the `re` module (e.g., re.IGNORECASE). Defaults to 0.
 
         Returns:
-            Any: The result of the regex operation (matched string, list of strings/tuples, or default value).
+            List[str]: A list of all non-overlapping matches found in the data.
+                       Returns an empty list if no matches are found, or if
+                       the input data is not a string.
+
+        Raises:
+            ValueError: If 'pattern' is missing from context or is not a string.
+            re.error: If the provided regex pattern is invalid.
+            RuntimeError: For other unexpected internal errors during processing.
         """
         if not isinstance(data, str):
-            logger.error(f"[{self.node_name}] Invalid input data type. Expected str, got {type(data).__name__}.")
-            return None
+            logger.warning(
+                f"[{self.node_name}] Input data is not a string. Cannot perform regex matching. "
+                f"Received type: {type(data).__name__}. Returning empty list."
+            )
+            return []
 
-        pattern: Optional[str] = context.get("pattern")
-        if not isinstance(pattern, str):
-            logger.error(f"[{self.node_name}] Missing or invalid 'pattern' in context. Expected str.")
-            return None
+        pattern_str = context.get("pattern")
+        if not isinstance(pattern_str, str):
+            error_msg = (
+                f"[{self.node_name}] Required 'pattern' key missing or not a string "
+                f"in context. Received: {pattern_str!r}."
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
-        flags: int = context.get("flags", 0)
-        return_all_matches: bool = context.get("return_all_matches", False)
-        group_index_or_name: Union[int, str] = context.get("group_index_or_name", 0)
-        default_value: Any = context.get("default_value", None)
-
-        logger.debug(
-            f"[{self.node_name}] Processing data with pattern: '{pattern}', "
-            f"flags: {flags}, return_all_matches: {return_all_matches}, "
-            f"group: {group_index_or_name}"
-        )
+        flags_param = context.get("flags", 0)
+        re_flags = 0
+        if isinstance(flags_param, int):
+            re_flags = flags_param
+        elif isinstance(flags_param, (str, list)):
+            re_flags = self._parse_flags(flags_param)
+        else:
+            logger.warning(
+                f"[{self.node_name}] Unrecognized type for 'flags' in context: "
+                f"{type(flags_param).__name__}. Expected int, str, or list of str. "
+                "Defaulting to no flags."
+            )
 
         try:
-            compiled_pattern = re.compile(pattern, flags)
+            matches = re.findall(pattern_str, data, flags=re_flags)
+            logger.debug(
+                f"[{self.node_name}] Successfully found {len(matches)} matches for pattern '{pattern_str}'."
+            )
+            return matches
         except re.error as e:
-            logger.error(f"[{self.node_name}] Invalid regex pattern '{pattern}': {e}")
-            return None
-        except TypeError as e:
-            logger.error(f"[{self.node_name}] Invalid flags provided: {flags}. Error: {e}")
-            return None
-
-        if return_all_matches:
-            try:
-                matches: List[Union[str, Any]] = compiled_pattern.findall(data)
-                if not matches:
-                    logger.debug(f"[{self.node_name}] No matches found for pattern '{pattern}' using findall.")
-                    return default_value
-                logger.debug(f"[{self.node_name}] Found {len(matches)} matches using findall.")
-                return matches
-            except Exception as e:
-                logger.error(f"[{self.node_name}] An error occurred during findall operation: {e}")
-                return None
-        else:
-            try:
-                match_obj: Optional[re.Match] = compiled_pattern.search(data)
-                if not match_obj:
-                    logger.debug(f"[{self.node_name}] No match found for pattern '{pattern}' using search.")
-                    return default_value
-                
-                try:
-                    result: str = match_obj.group(group_index_or_name)
-                    logger.debug(f"[{self.node_name}] Found match: '{match_obj.group(0)}', extracted group '{group_index_or_name}': '{result}'")
-                    return result
-                except IndexError:
-                    logger.error(f"[{self.node_name}] Group index '{group_index_or_name}' is out of range for pattern '{pattern}'.")
-                    return default_value
-                except KeyError:
-                    logger.error(f"[{self.node_name}] Group name '{group_index_or_name}' not found in pattern '{pattern}'.")
-                    return default_value
-            except Exception as e:
-                logger.error(f"[{self.node_name}] An error occurred during search operation: {e}")
-                return None
+            error_msg = (
+                f"[{self.node_name}] Invalid regex pattern '{pattern_str}': {e}"
+            )
+            logger.error(error_msg)
+            raise re.error(error_msg) from e
+        except Exception as e:
+            error_msg = (
+                f"[{self.node_name}] An unexpected error occurred during regex matching: {e}"
+            )
+            logger.error(error_msg, exc_info=True)
+            raise RuntimeError(error_msg) from e
