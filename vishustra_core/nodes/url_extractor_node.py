@@ -1,5 +1,5 @@
-import re
 import logging
+import re
 from typing import Any, Dict, List
 
 from vishustra_core.nodes.base_node import BaseNode
@@ -8,88 +8,63 @@ logger = logging.getLogger(__name__)
 
 class URLExtractorNode(BaseNode):
     """
-    A Vishustra processing node that extracts URLs from a given string.
-    It identifies URLs starting with 'http(s)://' or 'www.' and intelligently
-    cleans potential trailing punctuation that is not part of the URL.
+    A Vishustra processing node that extracts URLs from text content.
+
+    It identifies common URL patterns (http/https and www.) within the input string
+    and returns them as a list of unique strings.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "URL Extractor"
+        """Returns the name of the node."""
+        return "URLExtractor"
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
         Processes the input data to extract URLs.
 
-        This method expects `data` to be a string and will return a list
-        of unique URLs found within it. Non-string inputs will result in a
-        warning log and an empty list being returned.
-
         Args:
             data (Any): The input data, expected to be a string containing text.
             context (Dict[str, Any]): A dictionary containing contextual information
-                                       for processing. Not directly used by this node,
-                                       but available for framework consistency.
+                                       for the processing. Not directly used by this
+                                       node but part of the signature.
 
         Returns:
-            List[str]: A sorted list of unique URLs found in the input data, with
-                       common trailing punctuation stripped.
-                       Returns an empty list if no URLs are found, or if the
-                       input data is not a string or is empty.
-        """
-        extracted_urls: List[str] = []
+            List[str]: A list of unique URLs found in the input data.
+                       Returns an empty list if data is not a string or no URLs are found.
 
+        Raises:
+            TypeError: If the input data is not a string. (Handled gracefully with logging)
+        """
         if not isinstance(data, str):
             logger.warning(
-                f"[{self.node_name}] Received non-string data of type '{type(data).__name__}'. "
-                "Expected a string for URL extraction. Returning an empty list."
+                f"[{self.node_name}] Invalid input type. Expected string, "
+                f"got {type(data).__name__}. Returning an empty list of URLs."
             )
-            return extracted_urls
+            return []
 
-        stripped_data = data.strip()
-        if not stripped_data:
-            logger.debug(f"[{self.node_name}] Received empty or whitespace-only string data. No URLs to extract.")
-            return extracted_urls
+        # A robust regex pattern to capture URLs, including http(s):// and www.
+        # It attempts to match common domain structures and optional paths/queries.
+        url_pattern = (
+            r'(?:https?://|www\.)'  # http://, https://, or www.
+            r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+'  # Domain parts
+            r'[a-zA-Z]{2,6}'  # TLD (e.g., .com, .org, .net)
+            r'(?:/?|[/?]\S+)'  # Optional path, query, or fragment
+        )
 
-        # Regex to capture potential URLs:
-        # - Starts with 'http(s)://' or 'www.'
-        # - Continues with any non-whitespace character (S+) until a whitespace or end of string.
-        # This broad capture is intentional; trailing punctuation is handled in post-processing.
-        url_pattern = re.compile(r'\b(?:https?://|www\.)\S+')
-
+        extracted_urls: List[str] = []
         try:
-            potential_urls = url_pattern.findall(stripped_data)
-            unique_urls = set()
-
-            for url in potential_urls:
-                cleaned_url = url
-                
-                # Strip common trailing punctuation that is often not part of a URL
-                # but might be captured by the broad regex.
-                # Example: "example.com." -> "example.com"
-                cleaned_url = cleaned_url.rstrip('.,!?;')
-                
-                # Handle cases where URLs are enclosed in parentheses (e.g., in markdown links)
-                # Example: "(https://example.com)" -> "https://example.com"
-                if cleaned_url.startswith('(') and cleaned_url.endswith(')'):
-                    cleaned_url = cleaned_url[1:-1]
-                
-                # Ensure the cleaned URL still has a reasonable length and structure
-                # before adding it. A more advanced node might perform full URL validation.
-                if cleaned_url and (cleaned_url.startswith('http') or cleaned_url.startswith('www.')):
-                    unique_urls.add(cleaned_url)
-
-            extracted_urls = sorted(list(unique_urls))
-
-            if extracted_urls:
-                logger.debug(f"[{self.node_name}] Successfully extracted {len(extracted_urls)} unique URLs.")
-            else:
-                logger.debug(f"[{self.node_name}] No URLs found in the provided data.")
-
-        except re.error as e:
-            logger.error(f"[{self.node_name}] Regular expression error during URL extraction: {e}")
+            # Use re.findall to get all non-overlapping matches
+            matches = re.findall(url_pattern, data)
+            # Convert to a set to remove duplicates, then back to a list
+            extracted_urls = list(set(matches))
+            logger.debug(f"[{self.node_name}] Extracted {len(extracted_urls)} unique URLs.")
         except Exception as e:
-            logger.error(f"[{self.node_name}] An unexpected error occurred during URL extraction: {e}", exc_info=True)
+            logger.error(
+                f"[{self.node_name}] An unexpected error occurred during URL extraction: {e}",
+                exc_info=True
+            )
+            # On unexpected error, return an empty list to avoid propagating issues
+            return []
 
         return extracted_urls
