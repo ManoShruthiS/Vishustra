@@ -1,89 +1,95 @@
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict
 
-# Assuming vishustra_core.nodes.base_node is available in the Python path
+# Assuming this path exists in the Vishustra project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
+class VishustraNodeError(Exception):
+    """Custom exception for errors specific to Vishustra processing nodes."""
+    pass
+
 class SentimentAnalyzerNode(BaseNode):
     """
-    A processing node designed to perform sentiment analysis on input text.
+    A Vishustra processing node designed to perform sentiment analysis on input text.
 
-    This implementation provides a basic, keyword-based simulation of sentiment
-    classification (positive, negative, neutral). In a production scenario,
-    this node would interface with a more sophisticated NLP model or external
-    sentiment analysis service.
+    This node accepts a string as input, analyzes its sentiment (categorizing it
+    as positive, negative, or neutral) using a simplified keyword-based approach,
+    and returns a dictionary containing the original text and the determined sentiment.
+    It's intended for initial data enrichment or as part of a larger NLP pipeline.
     """
 
     @property
     def node_name(self) -> str:
         """
-        Returns the descriptive name of this node.
+        Returns the unique and descriptive name of this processing node.
         """
         return "SentimentAnalyzer"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Analyzes the sentiment of the provided text data.
+        Processes the input data to determine its sentiment.
 
-        The node expects the input `data` to be a string containing the text
-        to be analyzed. It classifies the sentiment as 'positive', 'negative',
-        or 'neutral' based on a simple keyword matching heuristic.
-
-        The `context` dictionary can optionally be used to override the default
-        positive and negative keyword lists.
+        The method expects `data` to be a string. It will analyze the text
+        for predefined positive and negative keywords to assign a sentiment.
 
         Args:
-            data: The text data (string) for which sentiment needs to be analyzed.
-            context: A dictionary containing operational context or configuration.
-                     Expected optional keys:
-                       - 'positive_keywords': A `List[str]` of words indicating positive sentiment.
-                       - 'negative_keywords': A `List[str]` of words indicating negative sentiment.
+            data: The input data, expected to be a string containing the text
+                  for which sentiment analysis is required.
+            context: A dictionary containing contextual information, potentially
+                     including a 'node_id' for logging purposes.
 
         Returns:
-            A dictionary containing the original text and its classified sentiment.
-            Example: {"text": "This product is great!", "sentiment": "positive"}
+            A dictionary structured as `{'text': original_text, 'sentiment': 'category'}`,
+            where 'category' can be 'positive', 'negative', or 'neutral'.
 
         Raises:
-            ValueError: If the input `data` is not a string, as this node
-                        specifically operates on textual input.
+            VishustraNodeError: If the input `data` is not a string, indicating
+                                an invalid input type for this node's operation.
         """
-        logger.info(f"'{self.node_name}' node initiated processing for incoming data.")
+        # Retrieve a unique identifier for this node instance from context,
+        # falling back to the generic node name if not provided.
+        node_id_in_context = context.get('node_id', self.node_name)
+        logger.info(f"[{node_id_in_context}] Starting sentiment analysis for data type: {type(data).__name__}")
 
         if not isinstance(data, str):
-            error_message = (
-                f"'{self.node_name}' node received invalid input type. "
-                f"Expected string, but got {type(data).__name__}."
+            error_msg = (
+                f"[{node_id_in_context}] Invalid input data type for sentiment analysis. "
+                f"Expected 'str', but received '{type(data).__name__}'."
             )
-            logger.error(error_message)
-            raise ValueError(error_message)
+            logger.error(error_msg)
+            raise VishustraNodeError(error_msg)
 
-        text_lower = data.lower()
+        text = data.strip()
+        if not text:
+            logger.warning(f"[{node_id_in_context}] Received an empty string for analysis. Defaulting sentiment to 'neutral'.")
+            return {"text": data, "sentiment": "neutral"}
+
+        # Define keyword sets for simplified sentiment detection.
+        # In a real-world scenario, this would involve a more sophisticated NLP model.
+        positive_keywords = {
+            "good", "great", "excellent", "happy", "love", "awesome",
+            "fantastic", "amazing", "wonderful", "joyful", "positive", "superb"
+        }
+        negative_keywords = {
+            "bad", "terrible", "poor", "sad", "hate", "awful",
+            "horrible", "frustrating", "disappointing", "angry", "negative", "dreadful"
+        }
+
+        # Convert text to lowercase and split into words for keyword matching
+        words = set(text.lower().split())
+
+        positive_matches = sum(1 for word in words if word in positive_keywords)
+        negative_matches = sum(1 for word in words if word in negative_keywords)
+
         sentiment = "neutral"
-
-        # Define default keywords. These can be overridden via the context dictionary.
-        default_positive_keywords: List[str] = ['great', 'excellent', 'love', 'happy', 'good', 'awesome', 'fantastic', 'superb']
-        default_negative_keywords: List[str] = ['bad', 'terrible', 'hate', 'sad', 'poor', 'awful', 'dreadful', 'unpleasant']
-
-        positive_keywords = context.get('positive_keywords', default_positive_keywords)
-        negative_keywords = context.get('negative_keywords', default_negative_keywords)
-
-        is_positive = any(kw in text_lower for kw in positive_keywords)
-        is_negative = any(kw in text_lower for kw in negative_keywords)
-
-        if is_positive and not is_negative:
+        if positive_matches > negative_matches:
             sentiment = "positive"
-        elif is_negative and not is_positive:
+        elif negative_matches > positive_matches:
             sentiment = "negative"
-        elif is_positive and is_negative:
-            # If both positive and negative keywords are found, it's ambiguous.
-            # Defaulting to neutral or could be considered 'mixed' based on requirements.
-            sentiment = "neutral"
-            logger.debug(f"'{self.node_name}' node detected mixed sentiment for text (starts with: '{data[:50]}...'). Defaulting to neutral.")
-        else:
-            sentiment = "neutral"
+        # If counts are equal, or both are zero, sentiment remains "neutral"
 
         result = {"text": data, "sentiment": sentiment}
-        logger.info(f"'{self.node_name}' node completed processing. Detected sentiment: '{sentiment}'.")
+        logger.debug(f"[{node_id_in_context}] Sentiment analysis completed. Result: {result}")
         return result
