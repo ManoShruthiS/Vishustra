@@ -1,5 +1,5 @@
-import re
 import logging
+import re
 from typing import Any, Dict, List
 
 from vishustra_core.nodes.base_node import BaseNode
@@ -8,79 +8,67 @@ logger = logging.getLogger(__name__)
 
 class URLExtractorNode(BaseNode):
     """
-    A Vishustra processing node designed to extract URLs from unstructured text data.
+    A Vishustra processing node designed to extract URLs from textual data.
 
-    This node identifies common web URL patterns (http(s):// and www.) using a
-    regular expression and then performs a light post-processing step to remove
-    common trailing punctuation, aiming for clean and usable URL outputs.
+    This node processes an input string, identifying and returning all URLs
+    that conform to common web address patterns (e.g., http(s):// or www.).
+    It provides a reliable way to isolate web links for further processing
+    or analysis within an orchestration flow.
     """
+
+    # A compiled regular expression to efficiently find URLs.
+    # This pattern broadly covers URLs starting with 'http(s)://' or 'www.',
+    # accounting for common characters found in hostnames, paths, and query parameters.
+    _URL_REGEX = re.compile(
+        r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+        r'|www\.(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+    )
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """
+        Returns the descriptive name of this processing node.
+        """
         return "URL Extractor"
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Processes the input data to extract unique URLs.
-
-        The method expects the input `data` to be a string containing the text
-        from which URLs should be extracted. It uses a regular expression to find
-        potential URLs and then strips common trailing punctuation that might
-        have been captured due to a URL appearing at the end of a sentence.
+        Extracts all identifiable URLs from the provided input data.
 
         Args:
-            data (Any): The input data. Expected to be a string containing text.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                       relevant to the current processing pipeline.
-                                       This node does not directly utilize the context.
+            data (Any): The input data expected to be a string containing text.
+                        If the input is not a string, a warning will be logged,
+                        and an empty list will be returned.
+            context (Dict[str, Any]): A dictionary containing context-specific information
+                                      for the processing node. This node does not
+                                      currently utilize any context parameters.
 
         Returns:
-            List[str]: A list of unique, cleaned URLs as strings. Returns an empty
-                       list if no URLs are found in the input data, or if the
-                       input data is not a string.
+            List[str]: A list of strings, where each string is an extracted URL.
+                       Returns an empty list if no URLs are found or if the input
+                       data is invalid or empty.
         """
         if not isinstance(data, str):
             logger.warning(
-                f"[{self.node_name}] Invalid input data type. Expected 'str', but received '{type(data).__name__}'. "
-                "Returning an empty list of URLs."
+                "[%s] Invalid input type. Expected 'str' but received '%s'. "
+                "Returning an empty list of URLs.", self.node_name, type(data).__name__
             )
             return []
 
-        # Regex pattern: Captures sequences of non-whitespace characters that start
-        # with common web URL prefixes (http(s):// or www.).
-        # This pattern is intentionally broad to ensure it catches most URLs embedded
-        # in natural language text, even if they are immediately followed by punctuation.
-        url_pattern = re.compile(r'(?:https?://|www\.)\S+')
-
-        raw_extracted_urls = url_pattern.findall(data)
-
-        if not raw_extracted_urls:
-            logger.debug(f"[{self.node_name}] No URLs found in the input data.")
-            return []
-        
-        cleaned_urls = set()
-        for url in raw_extracted_urls:
-            # Post-processing: URLs in natural text often have trailing punctuation
-            # (e.g., "Visit example.com."). This step removes common punctuation
-            # marks from the end of the extracted URL to provide a cleaner output.
-            #
-            # Note: This approach is pragmatic for text extraction. It might
-            # inadvertently remove legitimate trailing punctuation if a URL truly
-            # ends with one of these characters (e.g., 'example.com/path?param=hello!').
-            # For strictly RFC-compliant URL parsing, a dedicated URL parsing library
-            # (like `urllib.parse`) would be more suitable.
-            cleaned_url = url.rstrip('.,!?;')
-            
-            # After stripping, ensure the URL still looks valid (starts with http/www.).
-            # This helps filter out potential partial matches or very short invalid strings
-            # that might have been produced by an over-aggressive strip, though rare.
-            if cleaned_url and (cleaned_url.startswith("http") or cleaned_url.startswith("www.")):
-                cleaned_urls.add(cleaned_url)
-
-        if not cleaned_urls:
-            logger.debug(f"[{self.node_name}] No unique URLs remained after cleaning.")
+        if not data.strip():
+            logger.debug("[%s] Input data is an empty or whitespace-only string. Returning an empty list.", self.node_name)
             return []
 
-        logger.info(f"[{self.node_name}] Extracted {len(cleaned_urls)} unique URL(s).")
-        return list(cleaned_urls)
+        try:
+            urls = self._URL_REGEX.findall(data)
+            if urls:
+                logger.info("[%s] Successfully extracted %d URLs from input data.", self.node_name, len(urls))
+            else:
+                logger.debug("[%s] No URLs found in the provided input data.", self.node_name)
+            return urls
+        except Exception as e:
+            logger.error(
+                "[%s] An unexpected error occurred during URL extraction: %s",
+                self.node_name, e, exc_info=True
+            )
+            return []
