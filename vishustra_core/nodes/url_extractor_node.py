@@ -1,70 +1,89 @@
 import logging
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union, Set
 
+# Vishustra core base node for inheritance
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class URLExtractorNode(BaseNode):
     """
-    A Vishustra processing node that extracts URLs from text content.
+    A Vishustra processing node that extracts unique URLs from text content.
 
-    It identifies common URL patterns (http/https and www.) within the input string
-    and returns them as a list of unique strings.
+    This node identifies URLs conforming to standard HTTP/HTTPS schemes.
+    It can process a single string or a list of strings, returning a list of
+    all unique URLs found across the input.
     """
+
+    # Compiled regex pattern for robust URL extraction.
+    # This pattern is designed to capture common HTTP/HTTPS URLs including
+    # hostnames, IP addresses, ports, paths, query parameters, and fragments.
+    # It accounts for various URL-safe characters specified in RFC 3986.
+    _URL_REGEX = re.compile(
+        r'http[s]?://'  # Match http:// or https://
+        r'(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+        # Match one or more URL-safe characters including domain, path, query, fragment
+    )
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
-        return "URLExtractor"
+        """Returns the descriptive name of the node."""
+        return "URL Extractor"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
+    def process(self, data: Union[str, List[str]], context: Dict[str, Any]) -> List[str]:
         """
-        Processes the input data to extract URLs.
+        Extracts unique URLs from the input data.
+
+        The input `data` can be a single string or a list of strings.
+        - If `data` is a string, URLs are extracted directly from it.
+        - If `data` is a list of strings, URLs are extracted from each string
+          in the list. Non-string elements within the list are logged as
+          warnings and skipped to prevent processing errors.
+
+        All extracted URLs are collected, deduplicated, and returned in a
+        sorted list.
 
         Args:
-            data (Any): The input data, expected to be a string containing text.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                       for the processing. Not directly used by this
-                                       node but part of the signature.
+            data: The input data, expected to be a string or a list of strings.
+            context: A dictionary containing contextual information for processing.
+                     (This node does not utilize the context but adheres to the
+                     BaseNode interface by accepting it).
 
         Returns:
-            List[str]: A list of unique URLs found in the input data.
-                       Returns an empty list if data is not a string or no URLs are found.
+            A list of unique URLs found in the input data, sorted alphabetically.
 
         Raises:
-            TypeError: If the input data is not a string. (Handled gracefully with logging)
+            TypeError: If the input `data` is neither a string nor a list of strings,
+                       indicating an unsupported input type for this node.
         """
-        if not isinstance(data, str):
-            logger.warning(
-                f"[{self.node_name}] Invalid input type. Expected string, "
-                f"got {type(data).__name__}. Returning an empty list of URLs."
-            )
-            return []
+        extracted_urls: Set[str] = set()
 
-        # A robust regex pattern to capture URLs, including http(s):// and www.
-        # It attempts to match common domain structures and optional paths/queries.
-        url_pattern = (
-            r'(?:https?://|www\.)'  # http://, https://, or www.
-            r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+'  # Domain parts
-            r'[a-zA-Z]{2,6}'  # TLD (e.g., .com, .org, .net)
-            r'(?:/?|[/?]\S+)'  # Optional path, query, or fragment
-        )
-
-        extracted_urls: List[str] = []
-        try:
-            # Use re.findall to get all non-overlapping matches
-            matches = re.findall(url_pattern, data)
-            # Convert to a set to remove duplicates, then back to a list
-            extracted_urls = list(set(matches))
-            logger.debug(f"[{self.node_name}] Extracted {len(extracted_urls)} unique URLs.")
-        except Exception as e:
+        if isinstance(data, str):
+            logger.debug("URLExtractorNode received single string data for processing.")
+            found_urls = self._URL_REGEX.findall(data)
+            extracted_urls.update(found_urls)
+        elif isinstance(data, list):
+            logger.debug("URLExtractorNode received a list of items for processing.")
+            for i, item in enumerate(data):
+                if isinstance(item, str):
+                    found_urls = self._URL_REGEX.findall(item)
+                    extracted_urls.update(found_urls)
+                else:
+                    logger.warning(
+                        f"URLExtractorNode: Skipping non-string item at index {i} in input list. "
+                        f"Expected string, but received type '{type(item).__name__}'."
+                    )
+        else:
             logger.error(
-                f"[{self.node_name}] An unexpected error occurred during URL extraction: {e}",
-                exc_info=True
+                f"URLExtractorNode received invalid input data type. "
+                f"Expected 'str' or 'List[str]', but got '{type(data).__name__}'."
             )
-            # On unexpected error, return an empty list to avoid propagating issues
-            return []
+            raise TypeError(
+                f"URLExtractorNode expects 'data' to be a string or a list of strings, "
+                f"but received type '{type(data).__name__}'."
+            )
 
-        return extracted_urls
+        result_list = sorted(list(extracted_urls))
+        logger.info(f"URLExtractorNode successfully extracted {len(result_list)} unique URLs.")
+        return result_list
