@@ -1,82 +1,64 @@
 import logging
+import re
 from typing import Any, Dict
 
-# Assuming BaseNode is available at this path as per project context
+# Assuming this path within the Vishustra project structure
 from vishustra_core.nodes.base_node import BaseNode
-
-# External library for robust Markdown parsing.
-# This dependency would typically be listed in Vishustra's requirements.
-from markdown_it import MarkdownIt
 
 logger = logging.getLogger(__name__)
 
 class MarkdownParserNode(BaseNode):
     """
-    A Vishustra processing node that parses Markdown text into HTML.
-
-    This node leverages the 'markdown-it-py' library for robust and
-    spec-compliant Markdown parsing, converting the input Markdown string
-    into its corresponding HTML representation.
+    A processing node designed to parse markdown formatted text into basic HTML.
+    It provides a simple conversion for common markdown elements like bold and italic.
     """
-
-    def __init__(self):
-        """
-        Initializes the MarkdownParserNode and its internal markdown-it parser.
-        The parser is configured with default settings.
-        """
-        self._md = MarkdownIt()
-        logger.debug("MarkdownParserNode initialized.", extra={"node_name": self.node_name})
 
     @property
     def node_name(self) -> str:
         """
-        Returns the descriptive name of the node.
+        Returns the descriptive name of this processing node.
         """
-        return "MarkdownParserNode"
+        return "MarkdownParser"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, converting Markdown text to HTML.
+        Parses the input data, expecting a markdown string, and returns its HTML representation.
 
         Args:
-            data: The input data, expected to be a string containing Markdown.
-                  Non-string inputs will result in a ValueError.
-            context: A dictionary of contextual information. This node does
-                     not directly utilize the context but it is passed along
-                     the orchestration chain.
+            data: The input markdown string to be parsed.
+            context: A dictionary containing contextual information for the node's operation.
 
         Returns:
-            A string containing the HTML representation of the input Markdown.
+            A string representing the HTML equivalent of the input markdown.
 
         Raises:
-            ValueError: If the input 'data' is not a string.
-            Exception: For any unforeseen errors encountered during the
-                       Markdown parsing process.
+            ValueError: If the input `data` is not a string.
         """
+        logger.info(f"[{self.node_name}] Starting markdown parsing process.")
+
         if not isinstance(data, str):
-            error_msg = (
-                f"Invalid input type for MarkdownParserNode. Expected 'str', "
+            logger.error(
+                f"[{self.node_name}] Invalid input data type. Expected 'str', "
                 f"but received '{type(data).__name__}'."
             )
-            logger.error(
-                error_msg,
-                extra={"node_name": self.node_name, "input_type": type(data).__name__}
-            )
-            raise ValueError(error_msg)
+            raise ValueError(f"{self.node_name} expects string input for markdown parsing.")
 
-        logger.info("Starting Markdown parsing.", extra={"node_name": self.node_name})
+        markdown_text: str = data
+        parsed_html: str = markdown_text
+
         try:
-            html_output = self._md.render(data)
-            logger.info(
-                "Successfully parsed Markdown to HTML.",
-                extra={"node_name": self.node_name, "output_length": len(html_output)}
-            )
-            return html_output
+            # Simulate basic markdown to HTML conversion
+            # Convert **bold** to <strong>bold</strong>
+            parsed_html = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', parsed_html)
+
+            # Convert *italic* to <em>italic</em>
+            parsed_html = re.sub(r'\*(.*?)\*', r'<em>\1</em>', parsed_html)
+
+            # Add more parsing rules here as needed, e.g., for links, headers, etc.
+            # For this initial version, we keep it simple to demonstrate node functionality.
+
+            logger.info(f"[{self.node_name}] Successfully parsed markdown content into HTML.")
+            return parsed_html
         except Exception as e:
-            error_msg = f"Failed to parse Markdown due to an internal error: {e}"
-            logger.error(
-                error_msg,
-                exc_info=True, # Logs the full traceback
-                extra={"node_name": self.node_name, "error_type": type(e).__name__}
-            )
-            raise Exception(error_msg) from e
+            logger.exception(f"[{self.node_name}] An unexpected error occurred during markdown parsing.")
+            raise RuntimeError(f"Failed to parse markdown in {self.node_name}: {e}") from e
