@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Any, Dict
+from typing import Any, Dict, List, Union
 
 from vishustra_core.nodes.base_node import BaseNode
 
@@ -8,87 +8,88 @@ logger = logging.getLogger(__name__)
 
 class ProfanityFilterNode(BaseNode):
     """
-    A Vishustra processing node that filters out common profanities from text data.
-
-    This node identifies and replaces predefined profane words within an input
-    string with a series of asterisks, maintaining the original word length.
-    It operates case-insensitively and logs detections.
+    A processing node for Vishustra that filters out common profanity from text.
+    It replaces detected profanity with asterisks ('***').
+    
+    This node is designed to handle single strings or lists of strings,
+    providing a basic content moderation capability within the orchestration framework.
     """
 
-    # A curated list of regex patterns for common profanities.
-    # The '\b' ensures whole word matching.
-    # In a production system, this list would likely be externalized,
-    # dynamically loaded, or managed by a specialized library.
-    _profane_patterns = [
-        re.compile(r'\b(?:asshole|ass)\b', re.IGNORECASE),
-        re.compile(r'\b(?:bitch|bitches)\b', re.IGNORECASE),
-        re.compile(r'\b(?:cunt|cunts)\b', re.IGNORECASE),
-        re.compile(r'\b(?:damn|damnit)\b', re.IGNORECASE),
-        re.compile(r'\b(?:dick|dicks)\b', re.IGNORECASE),
-        re.compile(r'\b(?:fuck|fucker|fucking|fucked)\b', re.IGNORECASE),
-        re.compile(r'\b(?:hell)\b', re.IGNORECASE),
-        re.compile(r'\b(?:motherfucker)\b', re.IGNORECASE),
-        re.compile(r'\b(?:nigger|nigga)\b', re.IGNORECASE),
-        re.compile(r'\b(?:shit|shitty)\b', re.IGNORECASE),
-        re.compile(r'\b(?:slut|sluts)\b', re.IGNORECASE),
-        re.compile(r'\b(?:whore|whores)\b', re.IGNORECASE),
+    # This list can be expanded significantly, loaded from a configuration file,
+    # or an external service in a production environment.
+    _PROFANITY_WORDS = [
+        "ass", "bastard", "bitch", "cunt", "damn", "dick", "fag", "fuck",
+        "hell", "motherfucker", "nigga", "nigger", "piss", "pussy", "shit",
+        "slut", "whore", "bollocks", "arse"
     ]
 
     @property
     def node_name(self) -> str:
         """Returns the descriptive name of the node."""
-        return "ProfanityFilterNode"
+        return "ProfanityFilter"
+
+    def _filter_text(self, text: str) -> str:
+        """
+        Helper method to filter profanity from a single string.
+        Performs case-insensitive replacement of whole words using regular expressions.
+        """
+        filtered_text = text
+        for word in self._PROFANITY_WORDS:
+            # Construct a regex pattern for the profane word.
+            # \b ensures whole word matching (e.g., 'cat' won't match 'catamaran').
+            # re.escape handles words that might contain special regex characters (e.g., "f.u.c.k").
+            # re.IGNORECASE makes the matching case-insensitive.
+            pattern = r'\b' + re.escape(word) + r'\b'
+            
+            # Keep track of the text before substitution to check if a change occurred.
+            original_text_segment = filtered_text
+            
+            # Replace all occurrences of the profane word with '***'.
+            filtered_text = re.sub(pattern, '***', filtered_text, flags=re.IGNORECASE)
+            
+            # Log only if an actual replacement happened for this word.
+            if original_text_segment != filtered_text:
+                logger.debug(f"[{self.node_name}] Replaced occurrences of '{word}' in the text segment.")
+                
+        return filtered_text
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data to filter out profanities.
-
-        If the input 'data' is a string, it iterates through a predefined list
-        of profanity patterns. Any detected profane words are replaced with
-        asterisks ('*') of the same length as the original word.
-        If 'data' is not a string, a warning is logged, and the data is
-        returned unchanged.
-
+        Processes the input data to filter profanity.
+        
+        The method expects input data to be either a single string or a list of strings.
+        Each string is then passed through the profanity filter.
+        
         Args:
-            data: The input data to be processed. Expected to be a string.
-            context: A dictionary containing contextual information for the
-                     current orchestration run. This node does not explicitly
-                     use the context but adheres to the interface.
-
+            data (Any): The input data to be processed. Expected types are `str` or `List[str]`.
+            context (Dict[str, Any]): A dictionary containing contextual information 
+                                       relevant to the current execution flow.
+        
         Returns:
-            The processed data with profanities filtered, or the original data
-            if it was not a string.
+            Any: The processed data with profanity filtered. 
+                 Returns `str` if input was `str`, or `List[str]` if input was `List[str]`.
+        
+        Raises:
+            TypeError: If the input data is not a string or a list of strings, 
+                       an error is logged and a `TypeError` is raised.
         """
-        logger.debug(f"[{self.node_name}] Initiating profanity filtering process.")
+        logger.info(f"[{self.node_name}] Starting profanity filter process.")
+        logger.debug(f"[{self.node_name}] Input data type detected: {type(data).__name__}.")
 
-        if not isinstance(data, str):
-            logger.warning(
-                f"[{self.node_name}] Received non-string data (type: '{type(data).__name__}'). "
-                "Profanity filtering is applicable only to strings; data will be returned unchanged."
-            )
-            return data
-
-        processed_text = data
-        detected_profanities = set()
-
-        for pattern in self._profane_patterns:
-            matches = list(pattern.finditer(processed_text))
-            if matches:
-                for match in matches:
-                    original_word = match.group(0)
-                    detected_profanities.add(original_word.lower())
-                    # Replace with asterisks of the same length
-                    processed_text = processed_text[:match.start()] + \
-                                     '*' * len(original_word) + \
-                                     processed_text[match.end():]
-
-        if detected_profanities:
-            logger.info(
-                f"[{self.node_name}] Detected and filtered profanities: "
-                f"{', '.join(sorted(detected_profanities))}."
-            )
+        if isinstance(data, str):
+            filtered_data = self._filter_text(data)
+            logger.info(f"[{self.node_name}] Profanity filtering completed for a single string.")
+            return filtered_data
+        elif isinstance(data, list) and all(isinstance(item, str) for item in data):
+            # Process each string in the list
+            filtered_list = [self._filter_text(item) for item in data]
+            logger.info(f"[{self.node_name}] Profanity filtering completed for a list of strings.")
+            return filtered_list
         else:
-            logger.debug(f"[{self.node_name}] No profanities detected in the input text.")
-
-        logger.debug(f"[{self.node_name}] Profanity filtering process completed.")
-        return processed_text
+            # Handle unsupported data types gracefully by logging and raising an error
+            error_msg = (
+                f"[{self.node_name}] Invalid input data type. "
+                f"Expected 'str' or 'List[str]', but received '{type(data).__name__}'."
+            )
+            logger.error(error_msg)
+            raise TypeError(error_msg)
