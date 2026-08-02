@@ -1,8 +1,9 @@
-import logging
-import re
-from typing import Any, Dict, List, Union
 
-# Assuming BaseNode is located in vishustra_core.nodes.base_node as per instructions
+import re
+import logging
+from typing import Any, Dict, List
+
+# Assuming BaseNode is available at this path as defined in the project context.
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
@@ -11,101 +12,67 @@ class URLExtractorNode(BaseNode):
     """
     A Vishustra processing node that extracts URLs from text data.
 
-    This node identifies and extracts fully qualified URLs (http/https/ftp/ftps/mailto/news)
-    and common 'www.' prefixed URLs from input strings or lists of strings.
-    It uses a robust regular expression to cover a wide range of URL formats
-    while attempting to avoid common trailing punctuation.
+    This node uses regular expressions to identify and extract common URL patterns
+    (e.g., those starting with http(s):// or www.) from an input string.
     """
-
-    # A robust regular expression for common URL patterns.
-    # It covers:
-    # 1. URLs with standard schemes (http, https, ftp, ftps, mailto, news).
-    # 2. URLs starting with 'www.'.
-    # It accounts for domain names, TLDs (up to 63 characters for modern TLDs),
-    # and optional paths, queries, and fragments.
-    # A negative lookbehind `(?<![.,?!;])` is included to prevent capturing
-    # trailing punctuation commonly found at the end of sentences.
-    URL_REGEX = re.compile(
-        r'(?:'  # Start non-capturing group for OR logic
-            r'(?:https?|ftps?|mailto|news):' # Scheme-based URLs
-            r'[-a-zA-Z0-9@:%._\+~#=]{1,256}'  # Subdomain/domain characters
-            r'\.[a-zA-Z0-9()]{1,63}'          # TLD (1 to 63 chars)
-            r'\b'                             # Word boundary after TLD
-            r'(?:'                            # Optional path/query/fragment part
-                r'[-a-zA-Z0-9()@:%_\+.~#?&//=]*'
-                r'(?<![.,?!;])'               # Exclude trailing punctuation
-            r')?'
-        r')'
-        r'|'  # OR
-        r'(?:'  # Start non-capturing group for www. URLs
-            r'www\.'                          # www. prefix
-            r'[-a-zA-Z0-9@:%._\+~#=]{1,256}'  # Subdomain/domain characters
-            r'\.[a-zA-Z0-9()]{1,63}'          # TLD
-            r'\b'                             # Word boundary after TLD
-            r'(?:'                            # Optional path/query/fragment part
-                r'[-a-zA-Z0-9()@:%_\+.~#?&//=]*'
-                r'(?<![.,?!;])'               # Exclude trailing punctuation
-            r')?'
-        r')'
-    )
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
-        return "URLExtractor"
+        """
+        Returns the descriptive name of the node.
+        """
+        return "URL Extractor"
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Extracts URLs from the input data.
+        Processes the input data to extract URLs.
 
         Args:
-            data (Any): The input data. Expected to be a string or a list of strings.
-                        Non-string items within a list will be skipped with a warning.
-                        Other top-level data types will result in an empty list and a warning.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                       for the processing. This node does not directly
-                                       use the context for URL extraction, but it's
-                                       passed through as per the BaseNode API.
+            data: The input data, expected to be a string containing text.
+                  If `data` is not a string, a warning will be logged, and an
+                  empty list will be returned.
+            context: A dictionary of contextual information. This node does not
+                     currently utilize the context dictionary, but it is provided
+                     as part of the `BaseNode` interface.
 
         Returns:
-            List[str]: A list of unique URLs found in the input data.
-                       Returns an empty list if no URLs are found or
-                       if the input data type is not supported for extraction.
+            A list of strings, where each string is a URL found in the input data.
+            Returns an empty list if no URLs are found or if the input data is
+            not a string.
         """
-        extracted_urls: List[str] = []
-
-        if isinstance(data, str):
-            urls_in_text = self.URL_REGEX.findall(data)
-            extracted_urls.extend(urls_in_text)
-            if urls_in_text:
-                logger.debug(f"[{self.node_name}] Extracted {len(urls_in_text)} URLs from string input.")
-            else:
-                logger.debug(f"[{self.node_name}] No URLs found in string input.")
-
-        elif isinstance(data, list):
-            for i, item in enumerate(data):
-                if isinstance(item, str):
-                    urls_in_item = self.URL_REGEX.findall(item)
-                    extracted_urls.extend(urls_in_item)
-                    if urls_in_item:
-                        logger.debug(f"[{self.node_name}] Extracted {len(urls_in_item)} URLs from list item at index {i}.")
-                    else:
-                        logger.debug(f"[{self.node_name}] No URLs found in list item at index {i}.")
-                else:
-                    logger.warning(
-                        f"[{self.node_name}] Skipping non-string item at index {i} "
-                        f"in list input (type: {type(item).__name__}). Only strings are processed."
-                    )
-        else:
+        if not isinstance(data, str):
             logger.warning(
-                f"[{self.node_name}] Unsupported data type for URL extraction: "
-                f"{type(data).__name__}. Expected str or List[str]. Returning empty list."
+                "URLExtractorNode received non-string data (type: %s). Expected a string for URL extraction. "
+                "Returning an empty list.", type(data).__name__
             )
-            return [] # Return an empty list for unsupported types
+            return []
 
-        # Convert to a set to ensure uniqueness, then back to a list.
-        # Sorting for consistent output, though not strictly required by the contract.
-        unique_urls = sorted(list(set(extracted_urls)))
-        
-        logger.info(f"[{self.node_name}] Successfully extracted {len(unique_urls)} unique URLs.")
-        return unique_urls
+        # Regular expression to match URLs.
+        # It broadly covers 'http(s)://' or 'www.' followed by non-whitespace characters.
+        # This pattern aims for a balance between comprehensiveness and avoiding
+        # overly complex or potentially mis-matching patterns for general text.
+        url_pattern = re.compile(
+            r'(?:https?://|www\.)'  # Matches 'http://', 'https://', or 'www.'
+            r'\S+'                  # Matches one or more non-whitespace characters for the rest of the URL
+        )
+
+        try:
+            extracted_urls = url_pattern.findall(data)
+            if not extracted_urls:
+                logger.debug("No URLs found in the provided text data.")
+            else:
+                logger.debug("Successfully extracted %d URLs.", len(extracted_urls))
+            return extracted_urls
+        except re.error as e:
+            # This specific error indicates an issue with the regex pattern itself,
+            # which should ideally be caught during development/testing.
+            logger.error("Regular expression error encountered in URLExtractorNode: %s", e)
+            return []
+        except Exception as e:
+            # Catch any other unexpected errors during the findall operation.
+            logger.error(
+                "An unexpected error occurred during URL extraction in URLExtractorNode: %s",
+                e, exc_info=True
+            )
+            return []
+
