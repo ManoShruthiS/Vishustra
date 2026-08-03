@@ -1,116 +1,138 @@
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, MutableMapping
 
-# Assuming this path is correct based on the project context's BaseNode definition
+# Assume BaseNode is available in the specified path
+# In a real project, this would be a relative import if within the same package
+# or a full package import if BaseNode is part of an installed library.
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
+class CacheMiss:
+    """
+    A sentinel object to indicate a cache miss.
+    This allows distinguishing between a cached None value and a truly absent value.
+    """
+    def __repr__(self) -> str:
+        return "<CacheMiss>"
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, CacheMiss)
+
+    def __hash__(self) -> int:
+        return hash(self.__class__)
+
+# Singleton instance for convenience
+CACHE_MISS = CacheMiss()
+
 class CacheManagerNode(BaseNode):
     """
-    A Vishustra node designed to manage cache interactions within an orchestration flow.
+    A processing node responsible for interacting with a shared cache store.
 
-    This node facilitates common cache operations such as 'get', 'set', and 'invalidate'
-    by interacting with a cache client provided in the context.
+    This node can perform two primary operations:
+    1. 'get': Attempts to retrieve a value from the cache using the input `data` as the key.
+             Returns the cached value on hit, or a `CacheMiss` sentinel on miss.
+    2. 'set': Stores a value into the cache. The input `data` is expected to be a
+             dictionary `{'key': Any, 'value': Any}`. It returns the stored value.
 
-    The 'data' input for the 'process' method should be a dictionary specifying the
-    desired cache operation and its parameters. The 'context' dictionary must
-    contain the 'cache_client' instance, which should expose 'get', 'set', and
-    'delete' (or 'remove') methods.
+    The cache store itself is expected to be provided in the `context` dictionary
+    under the key 'cache_store', and must be a mutable mapping (e.g., a dict).
     """
+
+    def __init__(self, operation: str = 'get'):
+        """
+        Initializes the CacheManagerNode with a specified operation.
+
+        Args:
+            operation (str): The cache operation to perform. Must be 'get' or 'set'.
+        
+        Raises:
+            ValueError: If an unsupported operation is provided.
+        """
+        if operation not in ['get', 'set']:
+            raise ValueError(f"Invalid operation '{operation}'. Must be 'get' or 'set'.")
+        self._operation = operation
+        logger.debug(f"CacheManagerNode initialized with operation: '{self._operation}'")
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "CacheManager"
+        """Returns the name of the node, including its operation."""
+        return f"CacheManagerNode_{self._operation.capitalize()}"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Executes a cache operation based on the provided data and available context.
-
-        The expected structure for the 'data' argument is a dictionary:
-        - For 'get' operation: `{"operation": "get", "key": "my_cache_key"}`
-        - For 'set' operation: `{"operation": "set", "key": "my_cache_key", "value": "my_value"}`
-        - For 'invalidate' operation: `{"operation": "invalidate", "key": "my_cache_key"}`
-
-        The 'context' dictionary must contain:
-        - 'cache_client' (Any): An object representing the cache client (e.g., a Redis client,
-                                a simple dictionary, etc.) that implements `get`, `set`,
-                                and `delete` (or `remove`) methods.
+        Processes the input data based on the node's configured operation.
 
         Args:
-            data (Any): A dictionary containing 'operation', 'key', and optionally 'value'.
-            context (Dict[str, Any]): The execution context, including the 'cache_client'.
+            data (Any):
+                - If operation is 'get': The key to look up in the cache.
+                - If operation is 'set': A dictionary `{'key': Any, 'value': Any}`
+                                         containing the key and value to store.
+            context (Dict[str, Any]): The shared context dictionary, expected to
+                                      contain 'cache_store' (a mutable mapping).
 
         Returns:
             Any:
-                - For 'get': The value retrieved from the cache, or `None` if not found.
-                - For 'set': The value that was successfully set in the cache.
-                - For 'invalidate': The key that was invalidated.
+                - If operation is 'get' and cache hit: The cached value.
+                - If operation is 'get' and cache miss: `CACHE_MISS` sentinel.
+                - If operation is 'set': The value that was stored.
 
         Raises:
-            ValueError: If 'cache_client' is missing in context, or if 'operation'
-                        or 'key' are missing/invalid in data, or if an unsupported
-                        operation is requested.
-            TypeError: If the 'cache_client' does not implement the necessary method
-                       for the requested operation.
-            RuntimeError: For any other unexpected errors during cache interaction.
+            RuntimeError: If 'cache_store' is missing from context or not a mutable mapping.
+            TypeError: If input `data` does not conform to the expected type for the operation.
+            KeyError: If 'key' or 'value' are missing from `data` for 'set' operation.
         """
-        cache_client = context.get('cache_client')
-        if not cache_client:
-            logger.error("CacheManagerNode: Missing 'cache_client' in the context.")
-            raise ValueError("Required 'cache_client' not found in context.")
+        cache_store: Optional[MutableMapping[Any, Any]] = context.get('cache_store')
 
-        if not isinstance(data, dict):
-            logger.error(f"CacheManagerNode: Invalid data format. Expected dict, got {type(data)}.")
-            raise ValueError("Input data must be a dictionary specifying the cache operation.")
+        if not isinstance(cache_store, MutableMapping):
+            error_msg = f"Context missing 'cache_store' or it's not a mutable mapping. Found: {type(cache_store)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
 
-        operation: Optional[str] = data.get('operation')
-        key: Optional[str] = data.get('key')
-        value: Any = data.get('value') # 'value' might be None or missing for get/invalidate
+        if self._operation == 'get':
+            key_to_get = data
+            if not isinstance(key_to_get, (str, int, float, tuple)):
+                # Consider what types can be used as cache keys; often hashable types.
+                # For simplicity, restrict to common immutable types or allow Any if cache handles it.
+                logger.warning(f"Attempting to retrieve cache entry with non-primitive key type: {type(key_to_get)}. Key: {key_to_get}")
 
-        if not operation or not isinstance(operation, str):
-            logger.error(f"CacheManagerNode: Missing or invalid 'operation' in data: {data}")
-            raise ValueError("Cache operation 'operation' (str) is required in data.")
-        operation = operation.lower()
-
-        if not key or not isinstance(key, str):
-            logger.error(f"CacheManagerNode: Missing or invalid 'key' in data: {data}")
-            raise ValueError("Cache key 'key' (str) is required in data.")
-
-        try:
-            if operation == 'get':
-                if not hasattr(cache_client, 'get'):
-                    raise TypeError("Cache client does not implement a 'get' method.")
-                result = cache_client.get(key)
-                logger.debug(f"CacheManagerNode: 'get' operation for key '{key}'. Found: {result is not None}")
-                return result
-            elif operation == 'set':
-                # Check if 'value' key is present in data, allowing explicit None values
-                if 'value' not in data:
-                    logger.error(f"CacheManagerNode: 'value' is required for 'set' operation for key '{key}'. Data: {data}")
-                    raise ValueError("Value must be provided for 'set' operation.")
-                if not hasattr(cache_client, 'set'):
-                    raise TypeError("Cache client does not implement a 'set' method.")
-                cache_client.set(key, value)
-                logger.debug(f"CacheManagerNode: 'set' operation for key '{key}' with value of type {type(value)}")
-                return value
-            elif operation == 'invalidate':
-                if hasattr(cache_client, 'delete'):
-                    cache_client.delete(key)
-                elif hasattr(cache_client, 'remove'):
-                    # Some clients use 'remove' instead of 'delete'
-                    cache_client.remove(key)
+            try:
+                cached_value = cache_store.get(key_to_get, CACHE_MISS)
+                if cached_value is CACHE_MISS:
+                    logger.info(f"Cache MISS for key: {key_to_get}")
                 else:
-                    raise TypeError("Cache client does not implement 'delete' or 'remove' for invalidation.")
-                logger.debug(f"CacheManagerNode: 'invalidate' operation for key '{key}'")
-                return key
-            else:
-                logger.error(f"CacheManagerNode: Unsupported cache operation requested: '{operation}'")
-                raise ValueError(f"Unsupported cache operation: '{operation}'. Expected 'get', 'set', or 'invalidate'.")
-        except (AttributeError, TypeError) as ate:
-            logger.error(f"CacheManagerNode: Cache client interaction failed for operation '{operation}' on key '{key}': {ate}", exc_info=True)
-            raise TypeError(f"Cache client method error for operation '{operation}': {ate}") from ate
-        except Exception as e:
-            logger.error(f"CacheManagerNode: An unexpected error occurred during cache operation '{operation}' for key '{key}': {e}", exc_info=True)
-            raise RuntimeError(f"Cache operation failed for key '{key}': {e}") from e
+                    logger.info(f"Cache HIT for key: {key_to_get}")
+                return cached_value
+            except Exception as e:
+                logger.error(f"Error accessing cache for key '{key_to_get}': {e}", exc_info=True)
+                # Depending on policy, might re-raise, or treat as a miss
+                return CACHE_MISS
+
+        elif self._operation == 'set':
+            if not isinstance(data, dict):
+                error_msg = f"For 'set' operation, expected data to be a dict {{'key': ..., 'value': ...}}, but got {type(data)}."
+                logger.error(error_msg)
+                raise TypeError(error_msg)
+
+            try:
+                key_to_set = data['key']
+                value_to_set = data['value']
+            except KeyError as e:
+                error_msg = f"For 'set' operation, data dictionary must contain '{e.args[0]}' key. Got: {data.keys()}"
+                logger.error(error_msg)
+                raise KeyError(error_msg)
+
+            try:
+                cache_store[key_to_set] = value_to_set
+                logger.info(f"Cache SET: Stored value for key: {key_to_set}")
+                return value_to_set  # Return the value stored for potential further processing
+            except Exception as e:
+                logger.error(f"Error setting cache for key '{key_to_set}': {e}", exc_info=True)
+                raise RuntimeError(f"Failed to set cache entry for key '{key_to_set}': {e}") from e
+
+        # This part should theoretically be unreachable due to constructor validation
+        # but added for robustness.
+        else:
+            error_msg = f"Internal error: Unsupported operation '{self._operation}' in process method."
+            logger.critical(error_msg)
+            raise RuntimeError(error_msg)
