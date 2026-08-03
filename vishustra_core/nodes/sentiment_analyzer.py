@@ -1,132 +1,101 @@
 import logging
-from typing import Any, Dict, Union
+from typing import Any, Dict
 
-# Assuming BaseNode is available at this path as per project context
 from vishustra_core.nodes.base_node import BaseNode
 
-# Initialize logger for this module
 logger = logging.getLogger(__name__)
 
 class SentimentAnalyzer(BaseNode):
     """
-    A Vishustra processing node that performs sentiment analysis on input text.
-    It expects the input 'data' to be either a string or a dictionary
-    containing a 'text' key.
-    
-    This node simulates sentiment analysis using a keyword-based approach.
-    In a production environment, this would integrate with a robust NLP library
-    (e.g., NLTK, spaCy, or a cloud NLP service API).
+    A Vishustra node that performs a simulated sentiment analysis on text data.
+    This node categorizes input text as 'positive', 'negative', or 'neutral'
+    based on simple keyword matching. It's designed to illustrate data transformation
+    within the Vishustra framework.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """Returns the descriptive name of the node."""
         return "SentimentAnalyzer"
 
-    def _analyze_sentiment_keywords(self, text: str) -> Dict[str, Union[str, float]]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Simulates sentiment analysis using a simple keyword-based approach.
-        Assigns a sentiment ('positive', 'negative', 'neutral') and a score
-        (ranging approximately from -1.0 to 1.0).
-        """
-        text_lower = text.lower()
-        score = 0.0
+        Analyzes the sentiment of the input text data.
 
-        positive_keywords = {
-            "good": 0.5, "great": 0.7, "excellent": 0.9, "fantastic": 0.95,
-            "love": 0.8, "amazing": 0.85, "happy": 0.6, "wonderful": 0.75,
-            "superb": 0.8, "perfect": 0.9, "awesome": 0.7
-        }
-        negative_keywords = {
-            "bad": -0.5, "terrible": -0.7, "poor": -0.6, "disappointing": -0.75,
-            "hate": -0.8, "awful": -0.9, "unhappy": -0.65, "dreadful": -0.8,
-            "horrible": -0.85, "ugly": -0.5, "worst": -0.9
-        }
-
-        for keyword, val in positive_keywords.items():
-            if keyword in text_lower:
-                score += val
-        for keyword, val in negative_keywords.items():
-            if keyword in text_lower:
-                score += val
-
-        if score > 0.2:
-            sentiment = "positive"
-        elif score < -0.2:
-            sentiment = "negative"
-        else:
-            sentiment = "neutral"
-
-        # Scale the score to be within a more standard -1.0 to 1.0 range
-        # based on the arbitrary keyword weights. Max theoretical score: ~6.0, Min: ~-6.0
-        scaled_score = max(-1.0, min(1.0, score / 6.0)) 
-
-        return {"sentiment": sentiment, "score": scaled_score}
-
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
-        """
-        Processes the input data to determine its sentiment.
+        This method expects `data` to be a string containing the text to be analyzed.
+        It returns a dictionary with the categorized sentiment and a simulated score.
 
         Args:
-            data (Any): The input data. Expected to be a string or a dictionary
-                        with a 'text' key containing a string.
+            data (Any): The input data, expected to be a string.
             context (Dict[str, Any]): A dictionary containing contextual information
-                                       for the processing (currently unused by this node).
+                                       for the current processing flow. This can be
+                                       used for logging additional details or dynamic
+                                       configuration if needed.
 
         Returns:
-            Any: The original data enriched with sentiment information.
-                 If input was a string, returns a dictionary: 
-                 `{'text': original_string, 'sentiment': ..., 'sentiment_score': ...}`.
-                 If input was a dictionary, returns a *copy* of that dictionary 
-                 with `sentiment` and `sentiment_score` keys added.
+            Dict[str, Any]: A dictionary containing the analysis result, e.g.,
+                            `{'sentiment': 'positive', 'score': 0.85}`. The 'score'
+                            is a float between -1.0 (highly negative) and 1.0
+                            (highly positive).
 
         Raises:
-            ValueError: If the input data is not a string or a dictionary
-                        with a 'text' key containing a string.
-            RuntimeError: If an unexpected error occurs during sentiment analysis.
+            TypeError: If the input data is not a string.
+            ValueError: If an unexpected issue occurs during the sentiment analysis
+                        simulation.
         """
-        input_text = None
-        return_data: Dict[str, Any] = {} # Prepare a dictionary for consistent output structure
-
-        if isinstance(data, str):
-            input_text = data
-            return_data = {"text": data} # Wrap string input in a dict
-        elif isinstance(data, dict):
-            if "text" in data and isinstance(data["text"], str):
-                input_text = data["text"]
-                return_data = data.copy() # Work on a copy to avoid modifying original input reference
-            else:
-                error_msg = (
-                    "Input dictionary for SentimentAnalyzer missing 'text' key or 'text' is not a string. "
-                    f"Received data: {data!r}"
-                )
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-        else:
-            error_msg = (
-                f"Invalid input type for SentimentAnalyzer. Expected string or dict, got {type(data).__name__!r}. "
-                f"Received data: {data!r}"
+        if not isinstance(data, str):
+            error_message = (
+                f"[{self.node_name}] Input data must be a string for sentiment analysis, "
+                f"but received type: {type(data).__name__}. Data: {repr(data)[:100]}"
             )
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            logger.error(error_message, exc_info=True)
+            raise TypeError(error_message)
 
-        logger.info(
-            "Processing sentiment for text (first 75 chars): '%s%s'", 
-            input_text[:75], 
-            "..." if len(input_text) > 75 else ""
+        text_to_analyze = data.lower()
+        sentiment = "neutral"
+        score = 0.0
+
+        logger.debug(
+            f"[{self.node_name}] Starting sentiment analysis for text (truncated): "
+            f"'{text_to_analyze[:75]}{'...' if len(text_to_analyze) > 75 else ''}'"
         )
 
         try:
-            sentiment_result = self._analyze_sentiment_keywords(input_text)
-            return_data["sentiment"] = sentiment_result["sentiment"]
-            return_data["sentiment_score"] = sentiment_result["score"]
-            logger.debug(
-                "Sentiment analysis complete for text. Result: %s", sentiment_result
-            )
-            return return_data
+            # Simple keyword-based sentiment simulation for demonstration purposes.
+            # In a real-world scenario, this would involve a robust NLP model or API call.
+            positive_keywords = {"good", "great", "excellent", "happy", "love", "awesome", "fantastic", "amazing", "superb"}
+            negative_keywords = {"bad", "terrible", "poor", "sad", "hate", "awful", "horrible", "disappointing", "frustrating"}
+
+            is_positive = any(keyword in text_to_analyze for keyword in positive_keywords)
+            is_negative = any(keyword in text_to_analyze for keyword in negative_keywords)
+
+            if is_positive and not is_negative:
+                sentiment = "positive"
+                score = 0.7 + (text_to_analyze.count("!") * 0.05)  # Boost score for exclamation marks
+                score = min(score, 0.95)  # Cap positive score
+            elif is_negative and not is_positive:
+                sentiment = "negative"
+                score = -0.7 - (text_to_analyze.count("!") * 0.05) # Depress score for exclamation marks
+                score = max(score, -0.95) # Cap negative score
+            elif is_positive and is_negative:
+                # If both positive and negative keywords are present, it's ambiguous.
+                # A more sophisticated model would resolve this. For simulation, default to neutral
+                # or a very mild score based on presence.
+                sentiment = "neutral"
+                score = 0.0
+            else:
+                sentiment = "neutral"
+                score = 0.1 # A slight positive bias for general unknown text, or could be 0.0
+
+            # Format score to two decimal places for consistent output
+            result = {"sentiment": sentiment, "score": float(f"{score:.2f}")}
+
+            logger.info(f"[{self.node_name}] Analysis complete. Result: {result}")
+            return result
         except Exception as e:
-            logger.exception(
-                "An unexpected error occurred during sentiment analysis for data: %s, Context: %s", 
-                data, context
+            critical_error_message = (
+                f"[{self.node_name}] An unexpected error occurred during sentiment "
+                f"analysis simulation for data: '{text_to_analyze[:75]}...': {e}"
             )
-            raise RuntimeError(f"Failed to analyze sentiment: {e}") from e
+            logger.critical(critical_error_message, exc_info=True)
+            raise ValueError(critical_error_message) from e
