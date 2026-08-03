@@ -1,167 +1,461 @@
 import logging
-from typing import Any, Dict, List, Callable, Union
+from typing import Any, Dict, Union, get_origin, get_args
 
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-class ValidationError(Exception):
-    """Custom exception raised when data fails validation."""
+class NodeValidationError(ValueError):
+    """
+    Custom exception raised when data validation fails within a Node.
+    """
     pass
 
 class DataValidatorNode(BaseNode):
     """
-    A Vishustra node responsible for validating input data against a set of predefined rules.
+    A Vishustra processing node responsible for validating input data against
+    a predefined schema or set of rules provided in the context.
 
-    This node takes a list of validation rules during initialization. Each rule specifies
-    a `field_path` (dot-separated string for nested access), a `validator` function
-    (a callable that returns True for valid data, False otherwise), and an `error_message`
-    to be used if validation fails.
+    This node ensures data integrity and consistency before it proceeds
+    to subsequent processing stages, raising a NodeValidationError if rules are not met.
 
-    If any validation rule fails, a `ValidationError` is raised, stopping the processing
-    flow and providing detailed error messages.
-
-    Example validation rule structure:
-    [
-        {
-            "field_path": "request.user_id",
-            "validator": lambda x: isinstance(x, str) and len(x) > 0,
-            "error_message": "User ID must be a non-empty string."
+    Validation rules are expected to be provided in the `context` dictionary
+    under the key 'validation_config'.
+    Example `validation_config` structure:
+    {
+        "required_keys": ["id", "timestamp"],
+        "schema": {
+            "id": {"type": str, "min_length": 5},
+            "timestamp": {"type": int, "min_value": 0},
+            "payload": {"type": dict, "required_keys": ["action", "data"]},
+            "optional_field": {"type": Union[str, None], "default": None}
         },
-        {
-            "field_path": "payload.age",
-            "validator": lambda x: isinstance(x, int) and 0 < x < 120,
-            "error_message": "Age must be an integer between 1 and 119."
-        },
-        {
-            "field_path": "payload.email",
-            "validator": lambda x: "@" in x if isinstance(x, str) else False,
-            "error_message": "Invalid email format."
-        }
-    ]
+        "allow_extra_keys": False
+    }
     """
-
-    def __init__(self, validation_rules: List[Dict[str, Any]]):
-        """
-        Initializes the DataValidatorNode with a list of validation rules.
-
-        Args:
-            validation_rules: A list of dictionaries, where each dictionary
-                              represents a single validation rule.
-                              Each rule dict must contain:
-                              - "field_path" (str): A dot-separated string indicating
-                                                    the path to the value within the data.
-                              - "validator" (Callable[[Any], bool]): A function that takes
-                                                                     the field's value and
-                                                                     returns True if valid, False otherwise.
-                              - "error_message" (str): The message to include if validation fails.
-        """
-        if not isinstance(validation_rules, list):
-            raise TypeError("validation_rules must be a list of dictionaries.")
-        for i, rule in enumerate(validation_rules):
-            if not isinstance(rule, dict):
-                raise TypeError(f"Validation rule at index {i} must be a dictionary.")
-            if not all(k in rule for k in ["field_path", "validator", "error_message"]):
-                raise ValueError(
-                    f"Validation rule at index {i} is missing one of "
-                    "'field_path', 'validator', or 'error_message'."
-                )
-            if not isinstance(rule["field_path"], str) or not rule["field_path"]:
-                raise ValueError(f"Validation rule at index {i}: 'field_path' must be a non-empty string.")
-            if not callable(rule["validator"]):
-                raise TypeError(f"Validation rule at index {i}: 'validator' must be a callable function.")
-            if not isinstance(rule["error_message"], str) or not rule["error_message"]:
-                raise ValueError(f"Validation rule at index {i}: 'error_message' must be a non-empty string.")
-
-        self.validation_rules = validation_rules
-        logger.debug(f"DataValidatorNode initialized with {len(self.validation_rules)} rules.")
 
     @property
     def node_name(self) -> str:
         """Returns the name of the node."""
-        return "DataValidator"
-
-    def _get_nested_value(self, data: Any, path: str) -> Any:
-        """
-        Safely retrieves a nested value from a dictionary using a dot-separated path.
-        Returns None if any part of the path is not found.
-        """
-        parts = path.split('.')
-        current = data
-        for part in parts:
-            if isinstance(current, dict):
-                current = current.get(part)
-            else:
-                return None  # Path diverged from dict, cannot proceed
-            if current is None and part != parts[-1]:
-                # An intermediate part of the path was None, implies not found
-                return None
-        return current
+        return "DataValidatorNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data by validating it against configured rules.
+        Processes the input data by validating it against rules specified in the context.
 
         Args:
-            data: The input data to be validated. Expected to be a dictionary
-                  if validation rules are configured.
-            context: A dictionary holding context information for the current processing flow.
-                     Not directly used for validation logic in this node, but passed through.
+            data: The input data to be validated.
+            context: A dictionary containing operational context, including
+                     'validation_config' with rules for validation.
 
         Returns:
-            The original data if all validations pass.
+            The original data if validation passes.
 
         Raises:
-            TypeError: If `data` is not a dictionary when validation rules are present.
-            ValidationError: If any validation rule fails.
+            NodeValidationError: If the data fails any validation rule.
+            TypeError: If the 'validation_config' is malformed.
         """
-        if not self.validation_rules:
-            logger.debug("No validation rules configured for DataValidatorNode. Returning data as is.")
+        validation_config = context.get('validation_config')
+
+        if not validation_config:
+            logger.warning(
+                f"[{self.node_name}] No 'validation_config' found in context. Skipping validation for data."
+            )
             return data
 
+        if not isinstance(validation_config, dict):
+            raise TypeError(
+                f"[{self.node_name}] 'validation_config' in context must be a dictionary, "
+                f"but got {type(validation_config).__name__}."
+            )
+
+        logger.debug(
+            f"[{self.node_name}] Starting validation with config: {validation_config}"
+        )
+
+        try:
+            self._validate_data(data, validation_config)
+            logger.info(f"[{self.node_name}] Data successfully validated.")
+            return data
+        except NodeValidationError as e:
+            logger.error(
+                f"[{self.node_name}] Data validation failed: {e}. "
+                f"Input data (partial): {str(data)[:200]}..."
+            )
+            raise # Re-raise the validation error to stop processing
+
+    def _validate_data(self, data: Any, config: Dict[str, Any], path: str = 'root') -> None:
+        """
+        Internal method to perform recursive data validation.
+        """
         if not isinstance(data, dict):
-            error_msg = (
-                f"DataValidatorNode expects dictionary input when validation rules are present, "
-                f"but received type: {type(data).__name__}. Data: {data!r}"
+            raise NodeValidationError(
+                f"[{self.node_name}] Expected data at '{path}' to be a dictionary, "
+                f"but got {type(data).__name__}."
             )
-            logger.error(error_msg)
-            raise TypeError(error_msg)
 
-        validation_errors: List[str] = []
+        required_keys = set(config.get('required_keys', []))
+        schema = config.get('schema', {})
+        allow_extra_keys = config.get('allow_extra_keys', False)
 
-        for rule in self.validation_rules:
-            field_path = rule["field_path"]
-            validator = rule["validator"]
-            error_message = rule["error_message"]
+        # 1. Check for required keys
+        missing_keys = required_keys - set(data.keys())
+        if missing_keys:
+            raise NodeValidationError(
+                f"[{self.node_name}] Missing required keys at '{path}': {', '.join(missing_keys)}"
+            )
 
-            try:
-                field_value = self._get_nested_value(data, field_path)
-
-                if not validator(field_value):
-                    validation_errors.append(
-                        f"Validation failed for field '{field_path}': {error_message} "
-                        f"(Value: {field_value!r})"
-                    )
-                    logger.warning(
-                        f"Validation failed for '{field_path}'. Rule message: {error_message}. "
-                        f"Current value: {field_value!r}"
-                    )
-            except Exception as e:
-                # Catch exceptions during validator execution itself
-                validation_errors.append(
-                    f"An error occurred while validating field '{field_path}': {type(e).__name__} - {e}. "
-                    f"(Rule message: {error_message})"
-                )
-                logger.exception(
-                    f"Error executing validator for field '{field_path}'. Rule message: {error_message}."
+        # 2. Check for extra keys if not allowed
+        if not allow_extra_keys:
+            extra_keys = set(data.keys()) - (required_keys | set(schema.keys()))
+            if extra_keys:
+                raise NodeValidationError(
+                    f"[{self.node_name}] Unexpected extra keys at '{path}': {', '.join(extra_keys)}"
                 )
 
-        if validation_errors:
-            full_error_msg = "Data validation failed:\n" + "\n".join(
-                [f"- {err}" for err in validation_errors]
-            )
-            logger.error(full_error_msg)
-            raise ValidationError(full_error_msg)
+        # 3. Validate against schema for each field
+        for key, field_rules in schema.items():
+            field_path = f"{path}.{key}"
+            is_present = key in data
 
-        logger.debug("Data passed all validations successfully.")
-        return data
+            # Handle optional fields with default values if not present
+            if not is_present:
+                if field_rules.get('default') is not None:
+                    data[key] = field_rules['default']
+                    logger.debug(f"[{self.node_name}] Set default value for '{field_path}'.")
+                elif field_rules.get('required', False):
+                    raise NodeValidationError(
+                        f"[{self.node_name}] Required field '{field_path}' is missing."
+                    )
+                else:
+                    # Field is optional and not present, continue
+                    continue
+
+            value = data[key]
+            expected_type = field_rules.get('type')
+
+            # Type check
+            if expected_type:
+                # Handle Union types correctly (e.g., Union[str, None])
+                if get_origin(expected_type) is Union:
+                    valid_types = get_args(expected_type)
+                    if not isinstance(value, valid_types):
+                        raise NodeValidationError(
+                            f"[{self.node_name}] Field '{field_path}' expected type "
+                            f"{valid_types}, but got {type(value).__name__} with value '{value}'."
+                        )
+                elif not isinstance(value, expected_type):
+                    raise NodeValidationError(
+                        f"[{self.node_name}] Field '{field_path}' expected type "
+                        f"{expected_type.__name__}, but got {type(value).__name__} with value '{value}'."
+                    )
+
+            # Specific rules based on type
+            if isinstance(value, str):
+                min_length = field_rules.get('min_length')
+                max_length = field_rules.get('max_length')
+                if min_length is not None and len(value) < min_length:
+                    raise NodeValidationError(
+                        f"[{self.node_name}] Field '{field_path}' (string) length "
+                        f"{len(value)} is less than min_length {min_length}."
+                    )
+                if max_length is not None and len(value) > max_length:
+                    raise NodeValidationError(
+                        f"[{self.node_name}] Field '{field_path}' (string) length "
+                        f"{len(value)} is greater than max_length {max_length}."
+                    )
+            elif isinstance(value, (int, float)):
+                min_value = field_rules.get('min_value')
+                max_value = field_rules.get('max_value')
+                if min_value is not None and value < min_value:
+                    raise NodeValidationError(
+                        f"[{self.node_name}] Field '{field_path}' (numeric) value "
+                        f"{value} is less than min_value {min_value}."
+                    )
+                if max_value is not None and value > max_value:
+                    raise NodeValidationError(
+                        f"[{self.node_name}] Field '{field_path}' (numeric) value "
+                        f"{value} is greater than max_value {max_value}."
+                    )
+            elif isinstance(value, dict):
+                # Recursively validate nested dictionaries
+                nested_schema = field_rules.get('schema')
+                nested_required_keys = field_rules.get('required_keys', [])
+                nested_allow_extra_keys = field_rules.get('allow_extra_keys', allow_extra_keys) # Inherit or override
+
+                if nested_schema or nested_required_keys:
+                    nested_config = {
+                        "schema": nested_schema,
+                        "required_keys": nested_required_keys,
+                        "allow_extra_keys": nested_allow_extra_keys
+                    }
+                    self._validate_data(value, nested_config, field_path)
+            elif isinstance(value, list):
+                item_schema = field_rules.get('item_schema')
+                min_items = field_rules.get('min_items')
+                max_items = field_rules.get('max_items')
+
+                if min_items is not None and len(value) < min_items:
+                    raise NodeValidationError(
+                        f"[{self.node_name}] Field '{field_path}' (list) has {len(value)} items, "
+                        f"which is less than min_items {min_items}."
+                    )
+                if max_items is not None and len(value) > max_items:
+                    raise NodeValidationError(
+                        f"[{self.node_name}] Field '{field_path}' (list) has {len(value)} items, "
+                        f"which is greater than max_items {max_items}."
+                    )
+
+                if item_schema:
+                    for i, item in enumerate(value):
+                        if not isinstance(item, dict):
+                             raise NodeValidationError(
+                                f"[{self.node_name}] Item {i} in list '{field_path}' expected "
+                                f"to be a dictionary for item_schema validation, "
+                                f"but got {type(item).__name__}."
+                            )
+                        self._validate_data(item, {"schema": item_schema, "allow_extra_keys": nested_allow_extra_keys}, f"{field_path}[{i}]")
+                        
+# Example of how to use this node (for testing/demonstration, not part of actual submission):
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG, format='%(levelname)s - %(name)s - %(message)s')
+
+    validator = DataValidatorNode()
+
+    # --- Test Case 1: Valid data ---
+    valid_data = {
+        "id": "user123",
+        "timestamp": 1678886400,
+        "payload": {
+            "action": "purchase",
+            "data": {"item_id": "prodA", "quantity": 1},
+            "options": {"async": True}
+        },
+        "source": "web"
+    }
+    valid_context = {
+        "validation_config": {
+            "required_keys": ["id", "timestamp", "payload"],
+            "schema": {
+                "id": {"type": str, "min_length": 5, "max_length": 10},
+                "timestamp": {"type": int, "min_value": 0},
+                "payload": {
+                    "type": dict,
+                    "required_keys": ["action", "data"],
+                    "schema": {
+                        "action": {"type": str},
+                        "data": {"type": dict, "required_keys": ["item_id"]},
+                        "options": {"type": dict, "required": False}
+                    }
+                },
+                "source": {"type": str, "required": False, "default": "api"}
+            },
+            "allow_extra_keys": True
+        }
+    }
+    print("\n--- Test Case 1: Valid Data ---")
+    try:
+        result = validator.process(valid_data.copy(), valid_context)
+        print("Validation successful (expected). Result:", result)
+    except NodeValidationError as e:
+        print(f"Validation failed (unexpected): {e}")
+
+    # --- Test Case 2: Missing required key ---
+    invalid_data_missing_key = valid_data.copy()
+    del invalid_data_missing_key["id"]
+    print("\n--- Test Case 2: Missing Required Key ---")
+    try:
+        validator.process(invalid_data_missing_key, valid_context)
+        print("Validation successful (unexpected).")
+    except NodeValidationError as e:
+        print(f"Validation failed (expected): {e}")
+
+    # --- Test Case 3: Incorrect type ---
+    invalid_data_type = valid_data.copy()
+    invalid_data_type["timestamp"] = "not_an_int"
+    print("\n--- Test Case 3: Incorrect Type ---")
+    try:
+        validator.process(invalid_data_type, valid_context)
+        print("Validation successful (unexpected).")
+    except NodeValidationError as e:
+        print(f"Validation failed (expected): {e}")
+
+    # --- Test Case 4: Nested validation failure (missing required nested key) ---
+    invalid_data_nested = valid_data.copy()
+    del invalid_data_nested["payload"]["data"]["item_id"]
+    print("\n--- Test Case 4: Nested Validation Failure ---")
+    try:
+        validator.process(invalid_data_nested, valid_context)
+        print("Validation successful (unexpected).")
+    except NodeValidationError as e:
+        print(f"Validation failed (expected): {e}")
+
+    # --- Test Case 5: String length validation failure ---
+    invalid_data_str_len = valid_data.copy()
+    invalid_data_str_len["id"] = "short"
+    print("\n--- Test Case 5: String Length Failure ---")
+    try:
+        validator.process(invalid_data_str_len, valid_context)
+        print("Validation successful (unexpected).")
+    except NodeValidationError as e:
+        print(f"Validation failed (expected): {e}")
+
+    # --- Test Case 6: Numeric range validation failure ---
+    invalid_data_num_range = valid_data.copy()
+    invalid_data_num_range["timestamp"] = -100
+    print("\n--- Test Case 6: Numeric Range Failure ---")
+    try:
+        validator.process(invalid_data_num_range, valid_context)
+        print("Validation successful (unexpected).")
+    except NodeValidationError as e:
+        print(f"Validation failed (expected): {e}")
+
+    # --- Test Case 7: Allow extra keys = False ---
+    invalid_data_extra_keys = valid_data.copy()
+    invalid_data_extra_keys["unexpected_field"] = "value"
+    context_no_extra = valid_context.copy()
+    context_no_extra['validation_config']['allow_extra_keys'] = False
+    print("\n--- Test Case 7: Disallow Extra Keys ---")
+    try:
+        validator.process(invalid_data_extra_keys, context_no_extra)
+        print("Validation successful (unexpected).")
+    except NodeValidationError as e:
+        print(f"Validation failed (expected): {e}")
+        
+    # --- Test Case 8: No validation config in context ---
+    print("\n--- Test Case 8: No validation config ---")
+    try:
+        result = validator.process({"test": 123}, {})
+        print("Validation successful (expected, no config). Result:", result)
+    except NodeValidationError as e:
+        print(f"Validation failed (unexpected): {e}")
+
+    # --- Test Case 9: Union type validation ---
+    union_data = {"id": "test", "value": None}
+    union_context = {
+        "validation_config": {
+            "required_keys": ["id", "value"],
+            "schema": {
+                "id": {"type": str},
+                "value": {"type": Union[str, None]}
+            }
+        }
+    }
+    print("\n--- Test Case 9: Union Type Valid (None) ---")
+    try:
+        result = validator.process(union_data.copy(), union_context)
+        print("Validation successful (expected). Result:", result)
+    except NodeValidationError as e:
+        print(f"Validation failed (unexpected): {e}")
+
+    union_data_str = {"id": "test", "value": "some_string"}
+    print("\n--- Test Case 9: Union Type Valid (str) ---")
+    try:
+        result = validator.process(union_data_str.copy(), union_context)
+        print("Validation successful (expected). Result:", result)
+    except NodeValidationError as e:
+        print(f"Validation failed (unexpected): {e}")
+
+    union_data_invalid = {"id": "test", "value": 123}
+    print("\n--- Test Case 9: Union Type Invalid ---")
+    try:
+        result = validator.process(union_data_invalid.copy(), union_context)
+        print("Validation successful (unexpected).")
+    except NodeValidationError as e:
+        print(f"Validation failed (expected): {e}")
+
+    # --- Test Case 10: List validation ---
+    list_data = {
+        "items": [
+            {"name": "item1", "qty": 10},
+            {"name": "item2", "qty": 20}
+        ]
+    }
+    list_context = {
+        "validation_config": {
+            "schema": {
+                "items": {
+                    "type": list,
+                    "min_items": 1,
+                    "max_items": 3,
+                    "item_schema": {
+                        "name": {"type": str, "min_length": 4},
+                        "qty": {"type": int, "min_value": 1}
+                    }
+                }
+            }
+        }
+    }
+    print("\n--- Test Case 10: List Valid ---")
+    try:
+        result = validator.process(list_data.copy(), list_context)
+        print("Validation successful (expected). Result:", result)
+    except NodeValidationError as e:
+        print(f"Validation failed (unexpected): {e}")
+
+    invalid_list_data_item = {
+        "items": [
+            {"name": "it1", "qty": 10} # name too short
+        ]
+    }
+    print("\n--- Test Case 10: List Invalid Item ---")
+    try:
+        result = validator.process(invalid_list_data_item.copy(), list_context)
+        print("Validation successful (unexpected).")
+    except NodeValidationError as e:
+        print(f"Validation failed (expected): {e}")
+
+    invalid_list_data_count = {
+        "items": [] # too few items
+    }
+    print("\n--- Test Case 10: List Invalid Count ---")
+    try:
+        result = validator.process(invalid_list_data_count.copy(), list_context)
+        print("Validation successful (unexpected).")
+    except NodeValidationError as e:
+        print(f"Validation failed (expected): {e}")
+
+    # --- Test Case 11: Field with default ---
+    data_with_default = {"id": "test", "value": "custom"}
+    context_with_default = {
+        "validation_config": {
+            "required_keys": ["id"],
+            "schema": {
+                "id": {"type": str},
+                "value": {"type": str, "default": "default_value"}
+            }
+        }
+    }
+    print("\n--- Test Case 11: Field with default (value present) ---")
+    try:
+        result = validator.process(data_with_default.copy(), context_with_default)
+        print("Validation successful (expected). Result:", result)
+        assert result["value"] == "custom"
+    except NodeValidationError as e:
+        print(f"Validation failed (unexpected): {e}")
+
+    data_missing_default = {"id": "test"}
+    print("\n--- Test Case 11: Field with default (value missing) ---")
+    try:
+        result = validator.process(data_missing_default.copy(), context_with_default)
+        print("Validation successful (expected). Result:", result)
+        assert result["value"] == "default_value"
+    except NodeValidationError as e:
+        print(f"Validation failed (unexpected): {e}")
+
+    # --- Test Case 12: Field required but missing (no default) ---
+    context_required_no_default = {
+        "validation_config": {
+            "required_keys": ["id"],
+            "schema": {
+                "id": {"type": str},
+                "value": {"type": str, "required": True} # Missing 'value' and no default
+            }
+        }
+    }
+    print("\n--- Test Case 12: Required field missing (no default) ---")
+    try:
+        result = validator.process(data_missing_default.copy(), context_required_no_default)
+        print("Validation successful (unexpected).")
+    except NodeValidationError as e:
+        print(f"Validation failed (expected): {e}")
