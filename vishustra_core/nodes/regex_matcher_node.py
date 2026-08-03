@@ -1,101 +1,89 @@
-import logging
 import re
-from typing import Any, Dict, List
+import logging
+from typing import Any, Dict, List, Union
 
+# Assuming BaseNode is available via this import path as specified by project context
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-
 class RegexMatcherNode(BaseNode):
     """
-    A Vishustra processing node designed to perform regular expression matching
-    on input data.
+    A Vishustra processing node that performs regex matching on input data.
 
-    This node expects the input `data` to be a string and retrieves the
-    `regex_pattern` from the `context` dictionary. It uses `re.findall`
-    to find all non-overlapping matches of the pattern within the data.
-
-    Context Parameters:
-    - `regex_pattern` (str): The regular expression pattern to be matched. (Required)
-    - `regex_flags` (int, optional): Bitmask flags to modify regex behavior,
-                                     e.g., `re.IGNORECASE`, `re.MULTILINE`.
-                                     Defaults to 0 (no flags applied).
+    It extracts all non-overlapping occurrences of a specified regex pattern
+    from the input string data. The node is robust to invalid patterns and
+    non-string inputs, raising specific errors.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """Returns the descriptive name of the node."""
         return "RegexMatcher"
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
         Processes the input data by applying a regular expression pattern
-        and extracting all non-overlapping matches.
+        and returning all found matches.
+
+        The `context` dictionary is expected to contain:
+        - 'pattern' (str): The regular expression pattern string to match.
+
+        Optional `context` parameters:
+        - 'flags' (int): Bitmask of regex flags (e.g., re.IGNORECASE, re.MULTILINE).
+                         Defaults to 0 (no flags) if not provided.
 
         Args:
-            data (Any): The input data. Expected to be a string.
-            context (Dict[str, Any]): A dictionary containing parameters for processing.
-                                      Must include 'regex_pattern' (str).
-                                      Can optionally include 'regex_flags' (int).
+            data (Any): The input data. It will be converted to a string before
+                        regex application.
+            context (Dict[str, Any]): A dictionary containing node-specific
+                                       configuration, primarily the regex 'pattern'
+                                       and optional 'flags'.
 
         Returns:
-            List[str]: A list of strings, where each string is a match found
-                       by the regex pattern. Returns an empty list if no matches
-                       are found, or if input validation fails and an error
-                       is handled gracefully (e.g., specific errors raised).
+            List[str]: A list of all non-overlapping string matches found by
+                       `re.findall`. Returns an empty list if no matches are found.
 
         Raises:
-            TypeError: If `data` is not a string.
-            ValueError: If 'regex_pattern' is missing from `context` or is not a string.
-            re.error: If the provided 'regex_pattern' is syntactically invalid.
-            RuntimeError: For any other unexpected errors during regex matching.
+            ValueError: If 'pattern' is missing from the context or is not a string.
+            TypeError: If the input 'data' cannot be converted to a string.
+            re.error: If the provided regex 'pattern' is syntactically invalid.
+            Exception: For any other unexpected errors during processing.
         """
-        if not isinstance(data, str):
-            logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected 'str', "
-                f"but received '{type(data).__name__}'. Please provide string data."
-            )
-            raise TypeError(
-                f"Input 'data' must be a string for RegexMatcherNode, "
-                f"received {type(data).__name__}."
-            )
+        # Validate 'pattern' in context
+        if 'pattern' not in context or not isinstance(context['pattern'], str):
+            logger.error("RegexMatcherNode: Missing or invalid 'pattern' in context. Expected a string.")
+            raise ValueError("Context must contain a string 'pattern' for regex matching.")
 
-        regex_pattern = context.get("regex_pattern")
-        if not isinstance(regex_pattern, str):
-            logger.error(
-                f"[{self.node_name}] Missing or invalid 'regex_pattern' in context. "
-                f"Expected a string, but received '{type(regex_pattern).__name__}'."
-            )
-            raise ValueError(
-                "Context must contain a 'regex_pattern' string for RegexMatcherNode."
-            )
+        pattern_str: str = context['pattern']
+        flags: int = context.get('flags', 0)
 
-        regex_flags = context.get("regex_flags", 0)
-        if not isinstance(regex_flags, int):
-            logger.warning(
-                f"[{self.node_name}] Invalid 'regex_flags' in context. "
-                f"Expected an integer, but received '{type(regex_flags).__name__}'. "
-                f"Defaulting to no flags (0)."
-            )
-            regex_flags = 0
-
+        # Convert data to string
         try:
-            matches = re.findall(regex_pattern, data, flags=regex_flags)
-            logger.debug(
-                f"[{self.node_name}] Successfully found {len(matches)} matches "
-                f"for pattern '{regex_pattern}' (first 50 chars)."
+            input_string: str = str(data)
+        except Exception as e:
+            logger.error(
+                f"RegexMatcherNode: Failed to convert input data of type "
+                f"'{type(data).__name__}' to string. Error: {e}",
+                exc_info=True
             )
+            raise TypeError(f"Input data must be convertible to string. Got type {type(data).__name__}.") from e
+
+        # Perform regex matching
+        try:
+            compiled_pattern = re.compile(pattern_str, flags)
+            matches: List[str] = compiled_pattern.findall(input_string)
+            logger.debug(f"RegexMatcherNode: Successfully found {len(matches)} matches for pattern '{pattern_str}'.")
             return matches
         except re.error as e:
             logger.error(
-                f"[{self.node_name}] Invalid regex pattern '{regex_pattern}'. Error: {e}"
+                f"RegexMatcherNode: Invalid regex pattern '{pattern_str}' provided. Error: {e}",
+                exc_info=True
             )
-            raise re.error(f"Invalid regex pattern provided to RegexMatcherNode: {e}") from e
+            raise re.error(f"Invalid regex pattern provided: {e}") from e
         except Exception as e:
-            logger.exception(
-                f"[{self.node_name}] An unexpected error occurred during regex matching."
+            logger.error(
+                f"RegexMatcherNode: An unexpected error occurred during regex matching with pattern '{pattern_str}'. Error: {e}",
+                exc_info=True
             )
-            raise RuntimeError(
-                f"An unexpected error occurred in RegexMatcherNode: {e}"
-            ) from e
+            raise # Re-raise unexpected exceptions for upstream handling
