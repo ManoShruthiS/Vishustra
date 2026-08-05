@@ -1,218 +1,95 @@
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-# Assuming BaseNode is defined as per project context and available at this path.
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class ToneConverterNode(BaseNode):
     """
-    A processing node designed to convert the tone of input text data.
+    A Vishustra processing node that simulates converting the tone of a given text.
 
-    This node takes a string as input data and, based on a specified
-    'target_tone' in the context, simulates a transformation of the
-    text's style. This is a foundational step for dynamic content generation
-    and audience-specific communication within Vishustra.
+    This node expects the input 'data' to be a string and the 'context'
+    to contain a 'target_tone' string, which dictates the desired
+    output tone. For simulation purposes, it prefixes the input text
+    based on the specified tone.
+
+    Supported tones include: 'formal', 'informal', 'sarcastic', 'friendly', 'professional'.
+    If an unsupported tone is provided, the original data is returned with a warning.
     """
 
     @property
     def node_name(self) -> str:
+        """Returns the descriptive name of the node."""
+        return "ToneConverter"
+
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Returns the descriptive name of this node.
-        """
-        return "ToneConverterNode"
-
-    def _apply_tone_transformation(self, text: str, target_tone: str) -> str:
-        """
-        Applies a simulated tone transformation to the given text.
-
-        This is a placeholder for actual LLM-driven tone conversion.
-        For demonstration, it uses simple string replacements based on common
-        characteristics of different tones.
-        """
-        transformed_text = text
-
-        if target_tone.lower() == "professional":
-            transformed_text = transformed_text.replace("hey", "Dear Sir/Madam,")
-            transformed_text = transformed_text.replace("hi", "Greetings,")
-            transformed_text = transformed_text.replace("lol", "with regards,")
-            transformed_text = transformed_text.replace("?", ".")
-            if not transformed_text.strip().endswith(('.', '!', '?')):
-                transformed_text += "."
-            # Simulate more formal phrasing
-            transformed_text = transformed_text.replace("gonna", "going to")
-            transformed_text = transformed_text.replace("wanna", "want to")
-            transformed_text = transformed_text.replace("can't", "cannot")
-            transformed_text = transformed_text.replace("it's", "it is")
-            transformed_text = transformed_text.replace("i'm", "I am")
-            transformed_text = transformed_text.replace("you're", "you are")
-            transformed_text = transformed_text.replace("we're", "we are")
-
-        elif target_tone.lower() == "casual":
-            transformed_text = transformed_text.replace("Dear Sir/Madam,", "Hey there!")
-            transformed_text = transformed_text.replace("Greetings,", "Hi!")
-            transformed_text = transformed_text.replace("with regards,", "lol")
-            transformed_text = transformed_text.replace(".", "...")
-            if not transformed_text.strip().endswith(('.', '!', '?')):
-                transformed_text += " :)"
-            # Simulate informal phrasing
-            transformed_text = transformed_text.replace("going to", "gonna")
-            transformed_text = transformed_text.replace("want to", "wanna")
-            transformed_text = transformed_text.replace("cannot", "can't")
-            transformed_text = transformed_text.replace("it is", "it's")
-            transformed_text = transformed_text.replace("I am", "i'm")
-            transformed_text = transformed_text.replace("you are", "you're")
-            transformed_text = transformed_text.replace("we are", "we're")
-
-
-        elif target_tone.lower() == "friendly":
-            # A lighter, more approachable version of professional
-            transformed_text = transformed_text.replace("Dear Sir/Madam,", "Hello!")
-            transformed_text = transformed_text.replace("Greetings,", "Hi there!")
-            transformed_text = transformed_text.replace("with regards,", "Best regards,")
-            # Ensure a positive ending if not already present
-            if not transformed_text.strip().endswith(('.', '!', '?')):
-                transformed_text += "!"
-
-        elif target_tone.lower() == "concise":
-            # Simulate removing filler words or shortening phrases
-            transformed_text = transformed_text.replace("in order to", "to")
-            transformed_text = transformed_text.replace("due to the fact that", "because")
-            transformed_text = transformed_text.replace("at this point in time", "now")
-            transformed_text = transformed_text.replace("it is important to note that", "")
-            # Remove redundant punctuation
-            transformed_text = transformed_text.replace("...", ".")
-            transformed_text = transformed_text.replace("  ", " ").strip() # Clean up extra spaces
-
-        # Fallback for unsupported tones, return original or default
-        else:
-            logger.warning(
-                f"Unsupported target tone '{target_tone}' provided. "
-                "Returning original data without transformation."
-            )
-
-        return transformed_text
-
-    def process(self, data: Any, context: Dict[str, Any]) -> str:
-        """
-        Processes the input data to convert its tone based on the 'target_tone'
-        specified in the context.
+        Processes the input text to simulate converting its tone based on the
+        'target_tone' specified in the context.
 
         Args:
-            data (Any): The input data, expected to be a string (e.g., a message, paragraph).
-            context (Dict[str, Any]): A dictionary containing contextual information.
-                                       Must include 'target_tone' (str).
+            data (Any): The input data, which is expected to be a string
+                        (the text whose tone needs to be converted).
+            context (Dict[str, Any]): A dictionary containing processing context.
+                                      It MUST include a 'target_tone' key
+                                      whose value is a string.
 
         Returns:
-            str: The processed text with the converted tone.
+            Any: The tone-converted text as a string. If the 'target_tone'
+                 is unsupported or an error occurs during simulated conversion,
+                 the original data or a generically modified version is returned.
 
         Raises:
             TypeError: If the input 'data' is not a string.
-            ValueError: If 'target_tone' is missing or not a string in the context.
+            ValueError: If 'target_tone' is missing from the 'context' or is not a string.
         """
+        logger.debug(f"[{self.node_name}] Initiating processing for input data.")
+
         if not isinstance(data, str):
-            logger.error(
+            error_msg = (
                 f"[{self.node_name}] Invalid input data type. Expected 'str', "
-                f"but received '{type(data).__name__}'."
+                f"but received '{type(data).__name__}'. Data: {data!r}"
             )
-            raise TypeError(
-                f"Input data for '{self.node_name}' must be a string, "
-                f"but got {type(data).__name__}."
+            logger.error(error_msg)
+            raise TypeError(error_msg)
+
+        if 'target_tone' not in context or not isinstance(context['target_tone'], str):
+            error_msg = (
+                f"[{self.node_name}] Missing or invalid 'target_tone' in context. "
+                f"Context must contain a string value for 'target_tone'. Context: {context}"
             )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
-        target_tone: Optional[str] = context.get("target_tone")
+        target_tone = context['target_tone'].lower()
+        processed_text = data
 
-        if not isinstance(target_tone, str) or not target_tone:
-            logger.error(
-                f"[{self.node_name}] 'target_tone' not found or invalid in context. "
-                "Expected a non-empty string."
+        # In a real LLM scenario, this would involve a call to an LLM
+        # with a prompt structured for tone conversion.
+        # For this simulation, we use simple string prefixing.
+        tone_modifiers = {
+            "formal": "The following statement conveys a formal message: ",
+            "informal": "Yo, check this out: ",
+            "sarcastic": "Oh, how *utterly* fascinating, truly: ",
+            "friendly": "Hey there! Just wanted to share: ",
+            "professional": "From a strictly professional standpoint, one might say: ",
+        }
+
+        if target_tone in tone_modifiers:
+            processed_text = tone_modifiers[target_tone] + data
+            logger.info(
+                f"[{self.node_name}] Successfully simulated tone conversion to "
+                f"'{target_tone}' for data snippet: '{data[:75]}...'"
             )
-            raise ValueError(
-                f"'target_tone' must be provided as a non-empty string in the context "
-                f"for '{self.node_name}'."
+        else:
+            logger.warning(
+                f"[{self.node_name}] Unsupported 'target_tone' '{target_tone}'. "
+                f"Returning original data. Supported tones are: {', '.join(tone_modifiers.keys())}"
             )
+            # When an unsupported tone is requested, we opt to return the original text
+            # to prevent pipeline failure and allow downstream nodes to potentially handle.
+            processed_text = data
 
-        logger.info(
-            f"[{self.node_name}] Converting tone of input data to '{target_tone}'."
-        )
-
-        converted_data = self._apply_tone_transformation(data, target_tone)
-
-        logger.info(
-            f"[{self.node_name}] Tone conversion complete for target tone '{target_tone}'."
-        )
-        return converted_data
-
-# Example Usage (for testing purposes, not part of the delivered file content)
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    node = ToneConverterNode()
-
-    # Test cases
-    test_data_1 = "Hey, I'm gonna be late. Can't wait to see you lol."
-    test_data_2 = "It is important to note that we need to proceed in order to achieve the goal."
-    test_data_3 = "Greetings, we're currently reviewing the proposal. It's a great initiative."
-
-    # Test professional tone
-    try:
-        context_pro = {"target_tone": "professional"}
-        result_pro = node.process(test_data_1, context_pro)
-        logger.info(f"\nOriginal (1): {test_data_1}\nProfessional: {result_pro}")
-        # Expected: Dear Sir/Madam, I am going to be late. Cannot wait to see you with regards.
-    except Exception as e:
-        logger.error(f"Error in professional conversion: {e}")
-
-    # Test casual tone
-    try:
-        context_casual = {"target_tone": "casual"}
-        result_casual = node.process(test_data_1, context_casual)
-        logger.info(f"\nOriginal (1): {test_data_1}\nCasual: {result_casual}")
-        # Expected: Hey there! i'm gonna be late... can't wait to see you lol :)
-    except Exception as e:
-        logger.error(f"Error in casual conversion: {e}")
-
-    # Test friendly tone
-    try:
-        context_friendly = {"target_tone": "friendly"}
-        result_friendly = node.process(test_data_3, context_friendly)
-        logger.info(f"\nOriginal (3): {test_data_3}\nFriendly: {result_friendly}")
-        # Expected: Hi there! we're currently reviewing the proposal. It's a great initiative!
-    except Exception as e:
-        logger.error(f"Error in friendly conversion: {e}")
-
-    # Test concise tone
-    try:
-        context_concise = {"target_tone": "concise"}
-        result_concise = node.process(test_data_2, context_concise)
-        logger.info(f"\nOriginal (2): {test_data_2}\nConcise: {result_concise}")
-        # Expected: we need to proceed to achieve the goal.
-    except Exception as e:
-        logger.error(f"Error in concise conversion: {e}")
-
-    # Test unsupported tone
-    try:
-        context_unsupported = {"target_tone": "sarcastic"}
-        result_unsupported = node.process(test_data_1, context_unsupported)
-        logger.info(f"\nOriginal (1): {test_data_1}\nUnsupported: {result_unsupported}")
-        # Expected: Warning logged, original data returned
-    except Exception as e:
-        logger.error(f"Error in unsupported tone conversion: {e}")
-
-    # Test error handling: invalid data type
-    try:
-        node.process(123, {"target_tone": "professional"})
-    except TypeError as e:
-        logger.info(f"\nCaught expected error: {e}")
-
-    # Test error handling: missing target_tone
-    try:
-        node.process("Hello world.", {})
-    except ValueError as e:
-        logger.info(f"\nCaught expected error: {e}")
-
-    # Test error handling: invalid target_tone type
-    try:
-        node.process("Hello world.", {"target_tone": 123})
-    except ValueError as e:
-        logger.info(f"\nCaught expected error: {e}")<ctrl63>
+        logger.debug(f"[{self.node_name}] Finished processing. Returning modified text.")
+        return processed_text
