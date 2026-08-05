@@ -1,92 +1,91 @@
 import logging
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict
 
-# Assuming BaseNode is located in this path relative to the project root
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-class TextSummarizer(BaseNode):
+class TextSummarizerNode(BaseNode):
     """
-    A processing node that simulates text summarization by truncating
-    the input text to a specified number of words.
+    A processing node that simulates text summarization.
 
-    It expects a string as input data and can take an optional 'summary_length'
-    parameter from the context dictionary to control the output length.
+    This node takes a string as input and returns a summarized version.
+    The summarization logic is a simple extraction of the first N sentences,
+    where N can be configured via the 'summary_length' key in the context.
+    This serves as a placeholder for more sophisticated NLP-based summarization
+    models in a full orchestration.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of this processing node."""
+        """Returns the name of the node."""
         return "TextSummarizer"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
+    def process(self, data: Any, context: Dict[str, Any]) -> str:
         """
-        Processes the input text to produce a simulated summary.
+        Summarizes the input text data.
 
-        The summary length can be controlled via the 'summary_length' key
-        in the context dictionary. If not provided or invalid, a default
-        length of 50 words will be used.
+        This method extracts the first `summary_length` sentences from the input text.
+        The `summary_length` can be specified in the `context` dictionary;
+        otherwise, it defaults to 3 sentences.
 
         Args:
             data (Any): The input data, expected to be a string containing the text to summarize.
-            context (Dict[str, Any]): A dictionary containing additional runtime information.
-                                       Expected to optionally contain 'summary_length' (int).
+            context (Dict[str, Any]): A dictionary containing contextual information.
+                                      Can include 'summary_length' (int) to specify
+                                      the maximum number of sentences for the summary.
 
         Returns:
-            Any: A string representing the summarized text.
+            str: The summarized text.
 
         Raises:
-            TypeError: If the input 'data' is not a string.
-            ValueError: If an unexpected error occurs during summarization.
+            ValueError: If the input 'data' is not a string.
         """
-        logger.debug(f"[{self.node_name}] Starting text summarization process.")
-
         if not isinstance(data, str):
-            error_msg = (
-                f"[{self.node_name}] Invalid input data type. "
-                f"Expected 'str', but received '{type(data).__name__}'."
+            logger.error(
+                f"[{self.node_name}] Invalid input data type. Expected 'str', "
+                f"got '{type(data).__name__}'. Data: {data!r}"
             )
-            logger.error(error_msg)
-            raise TypeError(error_msg)
+            raise ValueError(f"Input data for {self.node_name} must be a string.")
 
-        original_text: str = data
-        words = original_text.split()
-        original_word_count = len(words)
+        if not data.strip():
+            logger.warning(f"[{self.node_name}] Received empty or whitespace-only text for summarization.")
+            return ""
 
-        # Retrieve summary_length from context, defaulting to 50 words if not provided
-        summary_length: int = context.get("summary_length", 50)
-
+        summary_length = context.get("summary_length", 3)
         if not isinstance(summary_length, int) or summary_length <= 0:
             logger.warning(
-                f"[{self.node_name}] Invalid or non-positive 'summary_length' "
-                f"({summary_length}) found in context. Falling back to default of 50 words."
+                f"[{self.node_name}] Invalid 'summary_length' value '{summary_length}' in context. "
+                "Expected a positive integer. Defaulting to 3 sentences for summarization."
             )
-            summary_length = 50
+            summary_length = 3
+
+        # A basic sentence tokenization using regex. This pattern splits by common
+        # sentence-ending punctuation (. ! ?) followed by any whitespace.
+        # The positive lookbehind `(?<=[.!?])` ensures the punctuation is included
+        # in the preceding sentence part.
+        sentences = re.split(r'(?<=[.!?])\s*', data)
+        
+        # Filter out any empty strings that might result from the split (e.g., if text ends with two periods)
+        # and strip leading/trailing whitespace from each sentence.
+        sentences = [s.strip() for s in sentences if s.strip()]
+
+        if not sentences:
+            logger.warning(f"[{self.node_name}] Could not extract any discernible sentences from the input text.")
+            return ""
+
+        # Take the first N sentences as the summary.
+        summarized_sentences = sentences[:summary_length]
+        
+        # Rejoin the selected sentences with a space.
+        summary = " ".join(summarized_sentences)
+        
+        # Ensure the summary ends with appropriate punctuation for readability, if not already present.
+        if summary and not re.search(r'[.!?]$', summary):
+            summary += '.'
 
         logger.info(
-            f"[{self.node_name}] Attempting to summarize text (original words: {original_word_count}) "
-            f"to approximately {summary_length} words."
+            f"[{self.node_name}] Successfully summarized text to {len(summarized_sentences)} sentence(s)."
         )
-
-        if original_word_count <= summary_length:
-            logger.info(
-                f"[{self.node_name}] Original text is shorter than or equal to "
-                f"the requested summary length. Returning original text."
-            )
-            return original_text
-
-        try:
-            # Simulate summarization by taking the first 'summary_length' words
-            summarized_words = words[:summary_length]
-            summarized_text = " ".join(summarized_words) + "..."
-            
-            logger.debug(
-                f"[{self.node_name}] Summarization complete. "
-                f"Output word count: {len(summarized_words)}."
-            )
-            return summarized_text
-        except Exception as e:
-            error_msg = f"[{self.node_name}] An unexpected error occurred during summarization: {e}"
-            logger.exception(error_msg)
-            raise ValueError(error_msg) from e
+        return summary
