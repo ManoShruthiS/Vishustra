@@ -1,31 +1,31 @@
-
 import logging
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 
-# Assuming vishustra_core is a package where BaseNode is defined
+# Assuming vishustra_core.nodes.base_node is available in the Python path
+# For local development/testing, you might need to adjust this import,
+# but for the framework context, this is the correct relative path.
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class URLExtractorNode(BaseNode):
     """
-    A Vishustra processing node that extracts URLs from text content.
+    A Vishustra processing node that extracts URLs from text data.
 
-    It uses a regular expression to identify and return a list of URLs
-    found within the input data.
+    This node uses regular expressions to find common URL patterns
+    (e.g., http(s)://, www.) within the input string data.
     """
 
-    # A robust regular expression pattern for matching URLs.
-    # This pattern attempts to capture various valid URL formats, including
-    # those with and without protocols (http/https) and subdomains.
-    # It also handles different TLDs and common path characters.
-    _URL_PATTERN = re.compile(
-        r'(?:https?://|www\.)'  # Protocol (http/https:// or www.)
-        r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+' # Domain name part
-        r'(?:[a-zA-Z]{2,6}\.?)' # TLD (e.g., com, org, net, co.uk)
-        r'(?:/?|[/?]\S+)',      # Optional path (including query params, fragments)
-        re.IGNORECASE           # Case-insensitive matching for domain/protocol
+    # A robust regex for common URL patterns, including http(s):// and www.
+    # It accounts for various characters allowed in URLs, including path, query,
+    # and fragment components.
+    _URL_REGEX = re.compile(
+        r'\b(?:https?://|www\.)'  # Scheme or www. prefix
+        r'(?:[a-zA-Z0-9][-a-zA-Z0-9]*\.)+'  # Domain name (e.g., example.com)
+        r'[a-zA-Z]{2,63}'  # Top-level domain (e.g., com, org)
+        r'(?::\d{1,5})?'  # Optional port number
+        r'(?:[/](?:[a-zA-Z0-9\-._~!$&\'()*+,;=:@/?#%]*))*\b'  # Path, query, fragment
     )
 
     @property
@@ -35,53 +35,40 @@ class URLExtractorNode(BaseNode):
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Extracts URLs from the input data.
+        Processes the input data to extract URLs.
 
         Args:
-            data: The input data, expected to be a string containing text
-                  from which URLs should be extracted. If not a string,
-                  a warning is logged, and an empty list is returned.
-            context: A dictionary containing contextual information
-                     for the processing flow. Not directly used by this node,
-                     but passed along.
+            data: The input data, expected to be a string or something
+                  that can be converted to a string.
+            context: A dictionary containing contextual information for the process.
 
         Returns:
-            A list of unique URLs found in the input data. Returns an empty
-            list if no URLs are found or if the input data is invalid.
+            A list of unique URLs found in the data. Returns an empty list
+            if no URLs are found or if the input data is not a string.
         """
         if not isinstance(data, str):
             logger.warning(
-                f"[{self.node_name}] Invalid input data type. Expected 'str', "
-                f"got '{type(data).__name__}'. Returning empty list."
+                f"[{self.node_name}] Received non-string data of type '{type(data).__name__}'. "
+                "Expected a string for URL extraction. Returning an empty list."
             )
             return []
 
         try:
-            # Find all matches of the URL pattern in the input string
-            found_urls = self._URL_PATTERN.findall(data)
-
-            # Post-process: Add 'https://' to URLs starting with 'www.' if missing
-            # and ensure uniqueness.
-            processed_urls = []
-            for url in found_urls:
-                if url.startswith('www.') and not url.startswith(('http://', 'https://')):
-                    processed_urls.append(f"https://{url}")
-                else:
-                    processed_urls.append(url)
+            # Find all unique URLs matching the regex pattern
+            extracted_urls = list(set(self._URL_REGEX.findall(data)))
             
-            # Use a set to maintain uniqueness and then convert back to a list
-            unique_urls = sorted(list(set(processed_urls)))
-
-            if unique_urls:
-                logger.debug(f"[{self.node_name}] Successfully extracted {len(unique_urls)} unique URLs.")
+            if not extracted_urls:
+                logger.debug(f"[{self.node_name}] No URLs found in the provided data.")
             else:
-                logger.info(f"[{self.node_name}] No URLs found in the provided data.")
-
-            return unique_urls
+                logger.info(f"[{self.node_name}] Successfully extracted {len(extracted_urls)} unique URLs.")
+            
+            return extracted_urls
         except Exception as e:
             logger.error(
                 f"[{self.node_name}] An unexpected error occurred during URL extraction: {e}",
                 exc_info=True
             )
+            # Depending on desired error handling, might re-raise or return empty list.
+            # Returning empty list is generally safer in a pipeline for an extractor.
             return []
 
