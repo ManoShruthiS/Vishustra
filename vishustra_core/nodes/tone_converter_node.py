@@ -7,99 +7,88 @@ logger = logging.getLogger(__name__)
 
 class ToneConverterNode(BaseNode):
     """
-    A Vishustra node designed to convert the tone of an input text.
-    It accepts a string of text and a 'target_tone' specified within the context
-    dictionary, then simulates a transformation to produce text in the desired tone.
+    A processing node designed to simulate the conversion of text tone
+    based on a specified target tone provided in the context.
+
+    Expected input:
+    - data (str): The text string to be converted.
+    - context (Dict[str, Any]): Must contain 'target_tone' (str) specifying
+      the desired tone (e.g., "formal", "informal", "playful").
     """
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of this processing node.
-        """
+        """Returns the name of the node."""
         return "ToneConverter"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, applying a tone conversion based on the
-        'target_tone' specified in the context dictionary.
+        Processes the input data, simulating a tone conversion based on the
+        'target_tone' in the provided context.
 
         Args:
-            data (Any): The input data to be processed. Expected to be a string
-                        representing the text whose tone needs to be converted.
-            context (Dict[str, Any]): A dictionary containing parameters and
-                                       additional information for processing.
-                                       Must include 'target_tone' (str) indicating
-                                       the desired output tone.
+            data (Any): The input data, expected to be a string.
+            context (Dict[str, Any]): A dictionary containing additional
+                                      parameters, must include 'target_tone'.
 
         Returns:
-            Any: The tone-converted string.
+            Any: The processed data (string with simulated tone).
 
         Raises:
-            TypeError: If the input 'data' is not a string, or if 'target_tone'
-                       in context is not a string.
-            ValueError: If 'target_tone' is missing from the context, or if the
-                        specified 'target_tone' is not supported by this node.
-            RuntimeError: If an unexpected error occurs during the tone
-                          conversion process.
+            TypeError: If the input 'data' is not a string.
+            ValueError: If 'target_tone' is missing or invalid in the context.
         """
-        logger.info(f"[{self.node_name}] Starting tone conversion process for input data.")
+        logger.debug("ToneConverterNode received data for processing.")
 
         if not isinstance(data, str):
-            logger.error(f"[{self.node_name}] Invalid input data type. Expected 'str', but received '{type(data).__name__}'.")
+            logger.error(
+                f"ToneConverterNode: Invalid data type. Expected 'str', "
+                f"but received '{type(data).__name__}'."
+            )
             raise TypeError(
-                f"Input 'data' for {self.node_name} must be a string. Received type: {type(data).__name__}."
+                f"ToneConverterNode requires string data. "
+                f"Received '{type(data).__name__}'."
             )
 
-        target_tone = context.get('target_tone')
-        if target_tone is None:
-            logger.error(f"[{self.node_name}] 'target_tone' parameter is missing from the context.")
+        target_tone = context.get("target_tone")
+
+        if not isinstance(target_tone, str) or not target_tone:
+            logger.error(
+                "ToneConverterNode: 'target_tone' (str) is missing or invalid "
+                "in the processing context."
+            )
             raise ValueError(
-                f"'target_tone' must be provided in the context for {self.node_name}."
-            )
-        if not isinstance(target_tone, str):
-            logger.error(f"[{self.node_name}] 'target_tone' in context must be a string. Received type: '{type(target_tone).__name__}'.")
-            raise TypeError(
-                f"'target_tone' in context for {self.node_name} must be a string. Received type: {type(target_tone).__name__}."
+                "Context must contain a valid 'target_tone' string "
+                "for ToneConverterNode."
             )
 
-        normalized_tone = target_tone.lower().strip()
-        converted_text: str = ""
+        target_tone_lower = target_tone.lower()
+        processed_data = data
 
-        try:
-            logger.debug(f"[{self.node_name}] Attempting to convert text to '{normalized_tone}' tone.")
-
-            # Simulate tone conversion by prepending a descriptive phrase
-            if normalized_tone == 'formal':
-                converted_text = f"It is formally conveyed that: \"{data}\""
-            elif normalized_tone == 'casual':
-                converted_text = f"Yo, check out this casual take: \"{data}\""
-            elif normalized_tone == 'professional':
-                converted_text = f"From a professional perspective, the content is presented as: \"{data}\""
-            elif normalized_tone == 'friendly':
-                converted_text = f"Hey there! Here's a friendly version: \"{data}\""
-            elif normalized_tone == 'sarcastic':
-                converted_text = f"Oh, how absolutely *thrilling*: \"{data}\" (said with utmost sincerity, obviously)."
-            else:
-                logger.warning(
-                    f"[{self.node_name}] Unrecognized target tone: '{target_tone}'. "
-                    "Please provide a supported tone."
-                )
-                raise ValueError(
-                    f"Unsupported 'target_tone': '{target_tone}'. "
-                    "Supported tones are: 'formal', 'casual', 'professional', 'friendly', 'sarcastic'."
-                )
-
-            logger.info(f"[{self.node_name}] Successfully converted text to '{normalized_tone}' tone.")
-            return converted_text
-        except ValueError:
-            # Re-raise ValueErrors related to unsupported tones
-            raise
-        except Exception as e:
-            logger.critical(
-                f"[{self.node_name}] An unexpected error occurred during tone conversion: {e}",
-                exc_info=True
+        # Simulate tone transformation. In a real scenario, this would
+        # involve an LLM call or more sophisticated NLP.
+        if target_tone_lower == "formal":
+            processed_data = f"Please be advised: {data}. We appreciate your understanding."
+            logger.info("Data transformed to a formal tone.")
+        elif target_tone_lower == "informal":
+            processed_data = f"Hey there! Just wanted to share: {data}. Cheers!"
+            logger.info("Data transformed to an informal tone.")
+        elif target_tone_lower == "playful":
+            processed_data = f"Ooh la la! Guess what? {data} - isn't that just peachy?!"
+            logger.info("Data transformed to a playful tone.")
+        elif target_tone_lower == "neutral":
+            # For neutral, we might just pass through or make minimal adjustments
+            logger.info("Data maintained a neutral tone (no specific transformation applied).")
+            processed_data = data
+        else:
+            logger.warning(
+                f"ToneConverterNode: Unknown target tone '{target_tone}'. "
+                "Returning original data without transformation."
             )
-            raise RuntimeError(
-                f"Failed to process tone conversion in {self.node_name} due to an unexpected internal error."
-            ) from e
+            processed_data = data # Fallback to original if tone is not recognized
+
+        logger.debug(
+            f"ToneConverterNode finished processing with target tone "
+            f"'{target_tone}'. Result length: {len(processed_data)}."
+        )
+        return processed_data
