@@ -1,73 +1,78 @@
 import logging
 from typing import Any, Dict
 
-# Assuming vishustra_core.nodes.base_node exists as per project context
+# Assuming BaseNode is located here as per project context
+# For actual import, it would be from 'vishustra_core.nodes.base_node'
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class ToneConverterNode(BaseNode):
     """
-    A Vishustra processing node that simulates converting the tone of input text.
+    A Vishustra processing node responsible for simulating the conversion
+    of input text data to a specified tone.
 
-    This node expects a string as input data and a 'target_tone' string
-    within the context dictionary. It appends a tone tag to the input text
-    to simulate the tone conversion, providing a foundational step for
-    LLM-based tone adjustments.
+    This node expects a string as input `data` and a `target_tone` string
+    in the `context` dictionary.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """Returns the name of the node."""
         return "ToneConverter"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data to simulate tone conversion.
-
-        This method expects `data` to be a string and looks for a `target_tone`
-        string in the `context` dictionary. It simulates the tone conversion
-        by appending a standardized tone tag to the input text.
+        Processes the input data by simulating a tone conversion.
 
         Args:
-            data: The input data, expected to be a string containing text
-                  that needs its tone converted.
-            context: A dictionary containing contextual information relevant
-                     to the processing. This must include a 'target_tone' key
-                     whose value is a string specifying the desired tone (e.g., "formal", "casual").
+            data (Any): The input data to be processed. Expected to be a string.
+            context (Dict[str, Any]): A dictionary containing contextual information,
+                                       expected to include 'target_tone'.
 
         Returns:
-            A string representing the transformed data with the simulated tone tag.
-            If the input `data` is not a string, or if `target_tone` is missing
-            or invalid in the `context`, the original `data` is returned,
-            and an appropriate warning or error is logged.
+            Any: The simulated tone-converted string.
+
+        Raises:
+            TypeError: If the input `data` is not a string.
+            ValueError: If 'target_tone' is missing from `context` or is not a string.
         """
-        logger.debug(f"[{self.node_name}] Starting process. Data type: {type(data)}, Context keys: {list(context.keys()) if context else 'None'}")
-
         if not isinstance(data, str):
-            logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected 'str', but received '{type(data).__name__}'. "
-                "Returning original data without modification."
-            )
-            return data
+            logger.error(f"[{self.node_name}] Invalid input data type. Expected string, got {type(data)}.")
+            raise TypeError(f"Input data for '{self.node_name}' must be a string, but got {type(data)}.")
 
+        original_text = data
         target_tone = context.get("target_tone")
 
-        if not isinstance(target_tone, str) or not target_tone.strip():
-            logger.warning(
-                f"[{self.node_name}] 'target_tone' not found or is not a valid non-empty string in the context. "
-                "Returning original data without tone conversion."
+        if not isinstance(target_tone, str) or not target_tone:
+            logger.error(
+                f"[{self.node_name}] Missing or invalid 'target_tone' in context. "
+                f"Expected a non-empty string, got {type(target_tone).__name__}."
             )
-            return data
+            raise ValueError(f"'target_tone' must be a non-empty string in the context for '{self.node_name}'.")
 
-        # Simulate tone conversion by appending a tag.
-        # In a real scenario, this would involve an LLM call or a sophisticated NLP module.
-        cleaned_data = data.strip()
-        cleaned_target_tone = target_tone.strip()
-        converted_data = f"{cleaned_data} [TONE: {cleaned_target_tone.capitalize()}]"
+        # Simulate tone conversion based on common tones
+        # In a real scenario, this would involve an LLM call or a sophisticated NLP library
+        tone_simulations = {
+            "formal": f"FORMAL TONE: {original_text}",
+            "informal": f"INFORMAL CHAT: {original_text}",
+            "sarcastic": f"SARCASTIC NOTE: {original_text} (obviously)",
+            "empathetic": f"EMPATHETIC VIEW: {original_text}",
+            "neutral": original_text, # No prefix for neutral
+            # Add more simulation tones as needed
+        }
 
-        logger.info(
-            f"[{self.node_name}] Successfully simulated tone conversion to '{cleaned_target_tone}'. "
-            f"Original text length: {len(data)}, Transformed text length: {len(converted_data)}"
-        )
-        return converted_data
+        converted_text = original_text
+        tone_key = target_tone.lower()
+
+        if tone_key in tone_simulations:
+            converted_text = tone_simulations[tone_key]
+            logger.info(f"[{self.node_name}] Successfully simulated tone conversion to '{target_tone}'.")
+        else:
+            logger.warning(
+                f"[{self.node_name}] Unsupported target tone '{target_tone}'. "
+                "Returning original text with a generic 'converted' prefix."
+            )
+            converted_text = f"CONVERTED [{target_tone.upper()}]: {original_text}"
+
+        return converted_text
