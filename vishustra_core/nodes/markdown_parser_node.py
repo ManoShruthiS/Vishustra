@@ -2,63 +2,95 @@ import logging
 import re
 from typing import Any, Dict
 
-# Assuming this path within the Vishustra project structure
+# Assuming 'vishustra_core' is an installed package or part of the project's PYTHONPATH
+# and BaseNode is defined within 'nodes/base_node.py' relative to vishustra_core.
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class MarkdownParserNode(BaseNode):
     """
-    A processing node designed to parse markdown formatted text into basic HTML.
-    It provides a simple conversion for common markdown elements like bold and italic.
+    A Vishustra node that parses Markdown formatted text into a simpler,
+    potentially HTML-like, representation.
+
+    This node simulates parsing common Markdown elements like headers,
+    bold, and italics using regular expressions. In a production scenario,
+    a dedicated Markdown parsing library would be used.
     """
+
+    def __init__(self):
+        """
+        Initializes the MarkdownParserNode.
+        No special configuration is needed for this simulated parser.
+        """
+        logger.debug("MarkdownParserNode initialized.")
 
     @property
     def node_name(self) -> str:
         """
-        Returns the descriptive name of this processing node.
+        Returns the descriptive name of this node.
         """
-        return "MarkdownParser"
+        return "Markdown Parser"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Parses the input data, expecting a markdown string, and returns its HTML representation.
+        Processes the input data, expecting a Markdown string, and returns
+        a transformed string with basic Markdown elements converted.
 
         Args:
-            data: The input markdown string to be parsed.
-            context: A dictionary containing contextual information for the node's operation.
+            data: The input data, expected to be a string containing Markdown.
+            context: A dictionary containing contextual information for processing.
 
         Returns:
-            A string representing the HTML equivalent of the input markdown.
+            A string with simulated Markdown parsing applied.
 
         Raises:
-            ValueError: If the input `data` is not a string.
+            TypeError: If the input 'data' is not a string.
+            RuntimeError: If an unexpected error occurs during the parsing process.
         """
         logger.info(f"[{self.node_name}] Starting markdown parsing process.")
 
         if not isinstance(data, str):
             logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected 'str', "
-                f"but received '{type(data).__name__}'."
+                f"[{self.node_name}] Invalid input data type. "
+                f"Expected string, got {type(data).__name__}."
             )
-            raise ValueError(f"{self.node_name} expects string input for markdown parsing.")
+            raise TypeError(
+                f"[{self.node_name}] Input 'data' must be a string for Markdown parsing."
+            )
 
-        markdown_text: str = data
-        parsed_html: str = markdown_text
+        # Start with a mutable copy of the input string for transformation
+        processed_data = str(data)
 
         try:
-            # Simulate basic markdown to HTML conversion
-            # Convert **bold** to <strong>bold</strong>
-            parsed_html = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', parsed_html)
+            # --- Simulate Markdown Parsing ---
+            # This is a simplified simulation using regex.
+            # A real-world implementation would leverage a robust Markdown library
+            # like 'markdown', 'mistune', or 'commonmark-py'.
 
-            # Convert *italic* to <em>italic</em>
-            parsed_html = re.sub(r'\*(.*?)\*', r'<em>\1</em>', parsed_html)
+            # Convert Headers (e.g., # Heading -> <h1>Heading</h1>)
+            # Matches one or more '#' at the start of a line, followed by space and text.
+            processed_data = re.sub(
+                r'^(#+)\s*(.*)$',
+                lambda m: f'<h{len(m.group(1))}>{m.group(2).strip()}</h{len(m.group(1))}>',
+                processed_data,
+                flags=re.MULTILINE
+            )
 
-            # Add more parsing rules here as needed, e.g., for links, headers, etc.
-            # For this initial version, we keep it simple to demonstrate node functionality.
+            # Convert Bold text (e.g., **text** -> <b>text</b>)
+            processed_data = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', processed_data)
 
-            logger.info(f"[{self.node_name}] Successfully parsed markdown content into HTML.")
-            return parsed_html
+            # Convert Italic text (e.g., *text* -> <i>text</i>)
+            # This regex is simple and might catch other asterisks; a full parser is more context-aware.
+            processed_data = re.sub(r'\*(.*?)\*', r'<i>\1</i>', processed_data)
+
+            # Further parsing logic could be added here for lists, links, code blocks, etc.
+
+            logger.info(f"[{self.node_name}] Successfully parsed markdown data.")
+            return processed_data
+
         except Exception as e:
-            logger.exception(f"[{self.node_name}] An unexpected error occurred during markdown parsing.")
-            raise RuntimeError(f"Failed to parse markdown in {self.node_name}: {e}") from e
+            logger.exception(
+                f"[{self.node_name}] An unexpected error occurred during markdown parsing."
+            )
+            raise RuntimeError(f"[{self.node_name}] Failed to parse markdown data.") from e
