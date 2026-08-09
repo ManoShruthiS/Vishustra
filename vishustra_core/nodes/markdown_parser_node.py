@@ -1,134 +1,99 @@
 import logging
-import re
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from vishustra_core.nodes.base_node import BaseNode
 
+# Initialize logger for this module
 logger = logging.getLogger(__name__)
+
+# Try to import the 'markdown' library.
+# This check is performed once when the module is loaded, optimizing performance
+# and allowing early detection of missing critical dependencies.
+try:
+    import markdown
+    _MARKDOWN_LIB_AVAILABLE = True
+    logger.debug("Successfully imported 'markdown' library for MarkdownParserNode.")
+except ImportError:
+    _MARKDOWN_LIB_AVAILABLE = False
+    logger.critical(
+        "The 'markdown' library is not installed. MarkdownParserNode will "
+        "raise a RuntimeError if used without this critical dependency. "
+        "Please install it with 'pip install markdown'."
+    )
 
 class MarkdownParserNode(BaseNode):
     """
-    A processing node that parses Markdown text and transforms it into
-    a simplified HTML representation.
-    
-    This node expects a string containing Markdown as input and outputs
-    a string with basic Markdown elements converted to HTML tags.
-    It handles headers, bold, italics, links, and unordered lists.
+    A Vishustra processing node designed to convert Markdown text into HTML.
+
+    This node expects a string containing valid Markdown as its primary input
+    and produces an HTML string as its output. It integrates with the
+    'markdown' Python library to provide robust and feature-rich parsing.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
-        return "MarkdownParser"
+        """
+        Returns the descriptive name of the node.
+        """
+        return "MarkdownParserNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, converting Markdown text to a simplified HTML string.
+        Parses Markdown input data and returns the resulting HTML string.
 
         Args:
-            data (Any): The input data, expected to be a string containing Markdown.
-            context (Dict[str, Any]): A dictionary containing execution context information.
-                                      Currently not used by this node but available for future
-                                      configuration or shared state.
+            data: The input data, which is expected to be a string containing
+                  Markdown content.
+            context: A dictionary containing contextual information relevant
+                     to the processing flow. This node currently does not
+                     utilize the context dictionary but adheres to the interface.
 
         Returns:
-            Any: A string representing the HTML output of the parsed Markdown.
+            A string containing the HTML representation of the input Markdown.
 
         Raises:
-            TypeError: If the input `data` is not a string.
-            ValueError: If there's an unexpected error during markdown parsing.
+            TypeError: If the input `data` is not a string, indicating an
+                       incorrect data type for Markdown parsing.
+            RuntimeError: If the 'markdown' library is not installed, which
+                          is a critical dependency for this node's core
+                          functionality.
+            Exception: Propagates any other exceptions that may occur during
+                       the Markdown parsing process after logging them,
+                       allowing upstream error handling.
         """
+        logger.debug(f"[{self.node_name}] Starting process. Input data type: {type(data).__name__}.")
+
+        # Validate input data type to ensure it's a string
         if not isinstance(data, str):
             logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected string, got {type(data).__name__}."
-            )
+                f"[{self.node_name}] Invalid input data type. Expected 'str', "
+                f"received '{type(data).__name__}'.")
             raise TypeError(
-                f"MarkdownParserNode expects string input, but received {type(data).__name__}"
-            )
+                f"MarkdownParserNode expects input data to be a string, "
+                f"but received '{type(data).__name__}'.")
 
-        logger.info(f"[{self.node_name}] Starting Markdown parsing for input data.")
+        # Check for the availability of the 'markdown' library
+        if not _MARKDOWN_LIB_AVAILABLE:
+            # If the library is missing, log a critical error and raise an exception
+            # as the node cannot fulfill its primary function.
+            logger.critical(
+                f"[{self.node_name}] Critical dependency 'markdown' is not installed. "
+                f"Cannot perform Markdown parsing. Please install with 'pip install markdown'.")
+            raise RuntimeError(
+                f"MarkdownParserNode requires the 'markdown' library, which is not installed. "
+                f"Please install it with 'pip install markdown'.")
 
         try:
-            html_output_lines: List[str] = []
-            in_list: bool = False
-            current_paragraph_lines: List[str] = []
-
-            # Helper to flush any pending paragraph content
-            def flush_paragraph():
-                nonlocal current_paragraph_lines
-                nonlocal html_output_lines
-                if current_paragraph_lines:
-                    # Join with space for multi-line paragraphs, then apply inline transforms
-                    paragraph_text = " ".join(current_paragraph_lines)
-                    html_output_lines.append(f"<p>{self._apply_inline_transforms(paragraph_text)}</p>")
-                    current_paragraph_lines = []
-
-            lines = data.strip().split('\n')
-
-            for line in lines:
-                stripped_line = line.strip()
-
-                if not stripped_line:
-                    # An empty line acts as a paragraph break or list terminator
-                    if in_list:
-                        html_output_lines.append("</ul>")
-                        in_list = False
-                    flush_paragraph()
-                    continue
-
-                # Headers (e.g., # Heading, ## Subheading)
-                header_match = re.match(r'^(#+)\s*(.*)', stripped_line)
-                if header_match:
-                    if in_list: html_output_lines.append("</ul>"); in_list = False
-                    flush_paragraph() # Close any pending paragraph before a new block element
-                    level = len(header_match.group(1))
-                    text = header_match.group(2).strip()
-                    html_output_lines.append(f"<h{level}>{self._apply_inline_transforms(text)}</h{level}>")
-                    continue
-
-                # Unordered list items (e.g., - Item, * Item)
-                list_item_match = re.match(r'^\s*[-*+]\s*(.*)', stripped_line)
-                if list_item_match:
-                    flush_paragraph() # Close any pending paragraph before a new block element
-                    if not in_list:
-                        html_output_lines.append("<ul>")
-                        in_list = True
-                    item_text = list_item_match.group(1).strip()
-                    html_output_lines.append(f"<li>{self._apply_inline_transforms(item_text)}</li>")
-                    continue
-                
-                # If we reach here, the line is regular text
-                if in_list: # If a list was open but the current line is not a list item, close the list
-                    html_output_lines.append("</ul>")
-                    in_list = False
-                
-                current_paragraph_lines.append(stripped_line)
-
-            # After the loop, flush any remaining open blocks (list or paragraph)
-            if in_list:
-                html_output_lines.append("</ul>")
-            flush_paragraph()
-
-            final_output = "\n".join(html_output_lines)
-            logger.info(f"[{self.node_name}] Markdown parsing completed successfully.")
-            return final_output
-
+            # Perform the Markdown to HTML conversion using the imported library
+            html_output = markdown.markdown(data)
+            logger.info(f"[{self.node_name}] Successfully parsed Markdown data to HTML.")
+            return html_output
         except Exception as e:
+            # Catch and log any unexpected errors during the parsing process
             logger.error(
                 f"[{self.node_name}] An unexpected error occurred during Markdown parsing: {e}",
-                exc_info=True
+                exc_info=True  # Include traceback for detailed debugging
             )
-            raise ValueError(f"Failed to parse Markdown due to an internal error: {e}") from e
-
-    def _apply_inline_transforms(self, text: str) -> str:
-        """
-        Applies inline Markdown transformations (bold, italic, links) to a given text.
-        """
-        # Bold: **text** -> <strong>text</strong>
-        text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
-        # Italic: *text* -> <em>text</em>
-        text = re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)
-        # Basic links: [text](url) -> <a href="url">text</a>
-        text = re.sub(r'\[(.+?)\]\((.+?)\)', r'<a href="\2">\1</a>', text)
-        
-        return text
+            # Re-raise the exception to allow upstream nodes or the orchestration
+            # framework to handle the failure appropriately.
+            raise
