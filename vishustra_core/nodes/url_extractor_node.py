@@ -2,19 +2,16 @@ import logging
 import re
 from typing import Any, Dict, List
 
-# Assuming vishustra_core.nodes.base_node exists in the same conceptual project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class URLExtractorNode(BaseNode):
     """
-    A Vishustra processing node that extracts URLs from input text data.
+    A Vishustra processing node designed to extract URLs from text data.
 
-    This node expects the input 'data' to be a string. It utilizes a robust
-    regular expression to identify and extract common URL patterns (HTTP/HTTPS)
-    from the provided text. If the input data is not a string, or if no URLs
-    are found, it gracefully returns an empty list.
+    This node identifies common URL patterns within the input string, including
+    those starting with 'http://', 'https://', or 'www.'.
     """
 
     @property
@@ -24,59 +21,44 @@ class URLExtractorNode(BaseNode):
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Extracts URLs from the input data string.
+        Processes the input data to extract all identifiable URLs.
 
         Args:
-            data (Any): The input data, expected to be a string containing text
-                        from which URLs should be extracted.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                       relevant to the processing flow. This node
-                                       does not directly utilize the context
-                                       but adheres to the standard signature.
+            data: The input data, expected to be a string containing text.
+                  If `data` is not a string, a warning is logged, and an empty list is returned.
+            context: A dictionary of contextual information, which is not directly
+                     used by this node but is part of the `BaseNode` interface.
 
         Returns:
-            List[str]: A list of strings, where each string is an extracted URL.
-                       Returns an empty list if no URLs are found, or if the
-                       input 'data' is not a string.
+            A list of strings, where each string is a URL found in the input data.
+            Returns an empty list if no URLs are found or if the input data is
+            not a string.
         """
         if not isinstance(data, str):
             logger.warning(
-                "URLExtractorNode received non-string data for processing. "
-                "Expected a string for URL extraction. Returning an empty list. "
-                f"Received data type: {type(data).__name__}."
+                "URLExtractorNode received non-string data. Expected a string for URL extraction. "
+                "Type received: %s. Returning an empty list.",
+                type(data)
             )
             return []
 
-        # Regular expression to identify common URL patterns.
-        # This pattern captures HTTP and HTTPS schemes, followed by a domain
-        # and optional path/query/fragment components, accommodating various
-        # valid URL characters including encoded characters.
-        url_pattern = re.compile(
-            r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
-        )
+        # Regular expression to broadly match URLs starting with http(s):// or www.
+        # and continuing with non-whitespace characters. This pattern is a good
+        # balance for general URL extraction without being overly complex for
+        # initial implementation.
+        url_pattern = r'https?://\S+|www\.\S+'
 
-        extracted_urls: List[str] = []
         try:
-            extracted_urls = url_pattern.findall(data)
+            extracted_urls = re.findall(url_pattern, data)
             if extracted_urls:
-                logger.debug(
-                    f"URLExtractorNode successfully extracted {len(extracted_urls)} URLs "
-                    f"from the input data."
-                )
+                logger.debug("Successfully extracted %d URLs from data.", len(extracted_urls))
             else:
-                logger.debug("URLExtractorNode found no URLs in the provided data.")
-        except re.error as e:
-            logger.error(
-                f"URLExtractorNode encountered a regular expression error during processing: {e}",
-                exc_info=True
-            )
-            # In case of a regex compilation or matching error, return an empty list
-            # to maintain operational stability.
+                logger.debug("No URLs found in the provided data.")
+            return extracted_urls
         except Exception as e:
             logger.error(
-                f"URLExtractorNode encountered an unexpected error during URL extraction: {e}",
+                "An unexpected error occurred during URL extraction in URLExtractorNode: %s",
+                e,
                 exc_info=True
             )
-            # Catch any other unforeseen exceptions to prevent node failure.
-
-        return extracted_urls
+            return []
