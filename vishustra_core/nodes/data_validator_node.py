@@ -1,139 +1,156 @@
-import logging
-from typing import Any, Dict, List, Type
-
-# The BaseNode abstract class for all Vishustra processing nodes.
 from vishustra_core.nodes.base_node import BaseNode
+from typing import Any, Dict, List, Type, Callable
+import logging
 
 logger = logging.getLogger(__name__)
 
+class DataValidationError(ValueError):
+    """Custom exception for data validation failures within the Vishustra framework."""
+    pass
+
 class DataValidatorNode(BaseNode):
     """
-    A Vishustra processing node responsible for validating input data
-    against a set of configurable rules provided in the context.
+    A processing node designed to validate input data against a defined schema
+    or a set of rules provided through the execution context.
 
-    This node ensures data integrity and adherence to expected schemas
-    before data proceeds to downstream processing stages. Validation rules
-    can specify the overall data type, required keys for dictionaries,
-    and expected data types for specific keys within dictionaries.
+    This node plays a crucial role in ensuring data integrity and consistency,
+    preventing malformed or invalid data from propagating to subsequent processing
+    stages in an orchestration flow.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of this node."""
-        return "DataValidator"
+        """Returns the programmatic name of this data validator node."""
+        return "DataValidatorNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Validates the input data based on rules specified in the context.
+        Validates the input `data` based on a `validation_config` retrieved from the `context`.
 
-        The 'context' dictionary can contain a 'validation_rules' key,
-        which is itself a dictionary defining the validation criteria.
-        Supported rules within 'validation_rules' include:
-        - 'data_type': Type - The expected overall type of the data itself (e.g., str, dict, int).
-        - 'required_keys': List[str] - Keys that must be present if 'data' is a dictionary.
-        - 'key_types': Dict[str, Type] - Expected types for specific keys if 'data' is a dictionary.
+        The `validation_config` in the context dictionary defines the rules,
+        which can include required keys, type checks, value constraints, and custom
+        validation functions.
 
-        If validation fails due to the input data not meeting the criteria,
-        a `ValueError` is raised. If the validation rules themselves are malformed,
-        a `TypeError` is raised.
+        Expected structure of `context["validation_config"]`:
+        ```python
+        {
+            "requires_dict_input": bool,  # If True, `data` must be a dictionary. Defaults to False.
+            "required_keys": List[str],   # List of keys that must be present if `data` is a dict.
+            "type_checks": Dict[str, Type], # Mapping of key to expected Python type if `data` is a dict.
+            "value_constraints": Dict[str, Dict[str, Any]], # Mapping of key to min/max/length constraints.
+                                                             # Example: {"age": {"min": 18, "max": 100},
+                                                             #           "text": {"min_length": 1, "max_length": 500}}
+            "custom_validators": List[Callable[[Any], None]], # List of callables, each taking the entire `data` object
+                                                               # and raising a DataValidationError on failure.
+        }
+        ```
+
+        If no `validation_config` is found in the context, a warning is logged, and
+        the data is passed through without modification or validation.
+        If validation fails according to the specified rules, a `DataValidationError`
+        is raised.
 
         Args:
-            data: The input data to be validated.
-            context: A dictionary containing operational context,
-                     including optional 'validation_rules'.
+            data: The input data payload to be validated. This can be any Python type.
+            context: A dictionary containing operational context, crucially including
+                     the `validation_config` under the key "validation_config".
 
         Returns:
-            The original data if validation is successful.
+            The original `data` payload if all validation checks pass.
 
         Raises:
-            ValueError: If the data fails any of the specified validation rules.
-            TypeError: If the 'validation_rules' dictionary or its sub-rules are malformed.
+            DataValidationError: If the `data` does not conform to the rules
+                                 defined in the `validation_config`.
         """
-        validation_rules = context.get("validation_rules")
+        validation_config: Dict[str, Any] = context.get("validation_config", {})
 
-        if not validation_rules:
-            logger.debug(
-                "No 'validation_rules' found in context for DataValidatorNode. "
-                "Data passed through DataValidatorNode without specific validation."
+        if not validation_config:
+            logger.warning(
+                "DataValidatorNode received no 'validation_config' in context. "
+                "Data will pass through without validation. Consider configuring validation rules."
             )
             return data
 
-        if not isinstance(validation_rules, dict):
+        logger.debug(f"Initiating data validation for '{self.node_name}' with config: {validation_config}")
+
+        try:
+            # Check for dictionary input requirement
+            if validation_config.get("requires_dict_input", False) and not isinstance(data, Dict):
+                raise DataValidationError(f"Input data must be a dictionary, but received type: {type(data).__name__}.")
+
+            # Apply dictionary-specific validations only if data is a dictionary
+            if isinstance(data, Dict):
+                # 1. Required Keys Check
+                required_keys: List[str] = validation_config.get("required_keys", [])
+                if required_keys:
+                    missing_keys = [key for key in required_keys if key not in data]
+                    if missing_keys:
+                        raise DataValidationError(f"Missing required keys: {', '.join(missing_keys)}.")
+                    logger.debug(f"Required keys check passed.")
+
+                # 2. Type Checks
+                type_checks: Dict[str, Type] = validation_config.get("type_checks", {})
+                if type_checks:
+                    for key, expected_type in type_checks.items():
+                        if key in data and not isinstance(data[key], expected_type):
+                            raise DataValidationError(
+                                f"Key '{key}' has incorrect type. Expected {expected_type.__name__}, "
+                                f"but got {type(data[key]).__name__} (value: {data[key]!r})."
+                            )
+                    logger.debug(f"Type checks passed.")
+
+                # 3. Value Constraints
+                value_constraints: Dict[str, Dict[str, Any]] = validation_config.get("value_constraints", {})
+                if value_constraints:
+                    for key, constraints in value_constraints.items():
+                        if key in data:
+                            value = data[key]
+                            # Numeric constraints
+                            if isinstance(value, (int, float)):
+                                if "min" in constraints and value < constraints["min"]:
+                                    raise DataValidationError(
+                                        f"Value for '{key}' ({value}) is less than minimum allowed ({constraints['min']})."
+                                    )
+                                if "max" in constraints and value > constraints["max"]:
+                                    raise DataValidationError(
+                                        f"Value for '{key}' ({value}) is greater than maximum allowed ({constraints['max']})."
+                                    )
+                            # Length constraints (for strings, lists, dicts)
+                            if isinstance(value, (str, list, dict)):
+                                if "min_length" in constraints and len(value) < constraints["min_length"]:
+                                    raise DataValidationError(
+                                        f"Length of '{key}' ({len(value)}) is less than minimum allowed ({constraints['min_length']})."
+                                    )
+                                if "max_length" in constraints and len(value) > constraints["max_length"]:
+                                    raise DataValidationError(
+                                        f"Length of '{key}' ({len(value)}) is greater than maximum allowed ({constraints['max_length']})."
+                                    )
+                    logger.debug(f"Value constraints checks passed.")
+
+            # 4. Custom Validators (apply to the entire data object, regardless of type)
+            custom_validators: List[Callable[[Any], None]] = validation_config.get("custom_validators", [])
+            if custom_validators:
+                for idx, validator in enumerate(custom_validators):
+                    logger.debug(f"Applying custom validator {idx+1} for data type {type(data).__name__}.")
+                    if not callable(validator):
+                         raise TypeError(f"Custom validator at index {idx} is not a callable object.")
+                    validator(data) # Assumes validator raises DataValidationError on failure
+                logger.debug(f"Custom validators passed.")
+
+            logger.info(f"Data successfully validated by '{self.node_name}'.")
+            return data
+
+        except DataValidationError as e:
             logger.error(
-                f"Malformed 'validation_rules' in context: expected dict, "
-                f"got {type(validation_rules).__name__}."
+                f"Data validation failed for '{self.node_name}'. Reason: {e}. "
+                f"Input data sample: {str(data)[:500]}{'...' if len(str(data)) > 500 else ''}"
             )
-            raise TypeError("Validation rules must be a dictionary.")
-
-        logger.debug(f"Starting validation for data using rules: {validation_rules}")
-
-        # 1. Validate overall data type if specified
-        expected_data_type: Type = validation_rules.get("data_type")
-        if expected_data_type:
-            if not isinstance(data, expected_data_type):
-                error_msg = (
-                    f"Data validation failed: Expected overall data type "
-                    f"'{getattr(expected_data_type, '__name__', str(expected_data_type))}', "
-                    f"but received type '{type(data).__name__}'."
-                )
-                logger.warning(error_msg)
-                raise ValueError(error_msg)
-            logger.debug(f"Overall data type '{getattr(expected_data_type, '__name__', str(expected_data_type))}' validated successfully.")
-
-        # 2. Apply dictionary-specific validations if data is a dictionary
-        if isinstance(data, dict):
-            # 2a. Validate required keys
-            required_keys: List[str] = validation_rules.get("required_keys", [])
-            if not isinstance(required_keys, list):
-                logger.error(
-                    f"Malformed 'required_keys' in validation_rules: expected list, "
-                    f"got {type(required_keys).__name__}."
-                )
-                raise TypeError("Validation rule 'required_keys' must be a list of strings.")
-
-            missing_keys = [key for key in required_keys if key not in data]
-            if missing_keys:
-                error_msg = (
-                    f"Data validation failed: Missing required keys in dictionary: "
-                    f"{', '.join(missing_keys)}."
-                )
-                logger.warning(error_msg)
-                raise ValueError(error_msg)
-            if required_keys:
-                logger.debug(f"All required keys {required_keys} are present.")
-
-            # 2b. Validate key types
-            key_types: Dict[str, Type] = validation_rules.get("key_types", {})
-            if not isinstance(key_types, dict):
-                logger.error(
-                    f"Malformed 'key_types' in validation_rules: expected dict, "
-                    f"got {type(key_types).__name__}."
-                )
-                raise TypeError("Validation rule 'key_types' must be a dictionary.")
-
-            for key, expected_type in key_types.items():
-                if key in data:
-                    if not isinstance(data[key], expected_type):
-                        error_msg = (
-                            f"Data validation failed: Key '{key}' expected type "
-                            f"'{getattr(expected_type, '__name__', str(expected_type))}', "
-                            f"but received type '{type(data[key]).__name__}' "
-                            f"with value '{data[key]}'."
-                        )
-                        logger.warning(error_msg)
-                        raise ValueError(error_msg)
-            if key_types:
-                logger.debug(f"Key types for {list(key_types.keys())} validated successfully.")
-        
-        # 3. Handle cases where dict-specific rules are provided but data is not a dict
-        elif validation_rules.get("required_keys") or validation_rules.get("key_types"):
-            error_msg = (
-                "Data validation failed: Dictionary-specific rules ('required_keys' "
-                "or 'key_types') are specified, but the input data is not a dictionary. "
-                f"Received type: {type(data).__name__}."
+            raise  # Re-raise the specific validation error for upstream handling
+        except Exception as e:
+            logger.critical(
+                f"An unexpected internal error occurred during validation in '{self.node_name}'. "
+                f"Error: {type(e).__name__}: {e}",
+                exc_info=True # Log stack trace for unexpected errors
             )
-            logger.warning(error_msg)
-            raise ValueError(error_msg)
-
-        logger.info("Data validated successfully against specified rules.")
-        return data
+            # Wrap unexpected errors in a DataValidationError for consistency in error propagation
+            raise DataValidationError(f"Unexpected internal validation error: {e}") from e
