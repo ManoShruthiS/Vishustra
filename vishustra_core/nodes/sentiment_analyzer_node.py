@@ -1,112 +1,116 @@
 import logging
-from typing import Any, Dict, Union
+from typing import Any, Dict
 
-# Assuming BaseNode is accessible via this absolute import path within the Vishustra framework
+# Assuming vishustra_core.nodes.base_node exists at this path
+# In a real project, this would likely be an absolute import
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class SentimentAnalyzerNode(BaseNode):
     """
-    A processing node designed to perform sentiment analysis on input text data.
+    A processing node designed to analyze the sentiment of input text data.
 
-    This implementation uses a heuristic keyword-based approach for demonstration purposes.
-    In a production environment, this would integrate with a robust NLP library or a
-    pre-trained machine learning model to provide more accurate sentiment scores.
+    This node simulates sentiment analysis by identifying positive and negative
+    keywords within the input text and computing a sentiment score and label.
+    In a production environment, this would integrate with a robust
+    natural language processing (NLP) library or a dedicated sentiment model.
     """
 
     def __init__(self):
         """
-        Initializes the SentimentAnalyzerNode with predefined keyword lists for
-        simulated sentiment detection. These keywords are case-insensitive
-        during processing.
+        Initializes the SentimentAnalyzerNode.
+        Sets up predefined keyword lists for simulated sentiment detection.
         """
+        # In a real scenario, a pre-trained sentiment model or an external
+        # NLP service client would be initialized here.
         self._positive_keywords = {
-            "good", "great", "excellent", "awesome", "happy", "love", "positive",
-            "superb", "fantastic", "amazing", "wonderful", "brilliant", "joy"
+            "good", "great", "excellent", "love", "happy", "awesome",
+            "fantastic", "amazing", "wonderful", "brilliant", "joy", "success"
         }
         self._negative_keywords = {
-            "bad", "terrible", "horrible", "awful", "unhappy", "hate", "negative",
-            "poor", "frustrating", "disappointing", "sad", "angry"
+            "bad", "terrible", "awful", "hate", "unhappy", "poor",
+            "frustrating", "disappointing", "horrible", "ugly", "failure", "stress"
         }
-        # Neutral keywords are not explicitly used for scoring but can be part of
-        # text processing or stop word removal in more advanced scenarios.
+        logger.debug(f"[{self.node_name}] Initialized with {len(self._positive_keywords)} positive and {len(self._negative_keywords)} negative keywords.")
 
     @property
     def node_name(self) -> str:
         """
-        Returns the descriptive name of this processing node.
+        Returns the descriptive name of the node.
         """
-        return "SentimentAnalyzerNode"
+        return "SentimentAnalyzer"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Union[str, float]]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Analyzes the sentiment of the input `data`.
+        Analyzes the sentiment of the input text data.
 
-        Expects `data` to be a string of text. It tokenizes the text and
-        counts occurrences of predefined positive and negative keywords
-        to assign a sentiment label and a score.
+        This method expects a string as input. It counts occurrences of
+        predefined positive and negative keywords to determine a sentiment
+        (positive, negative, or neutral) and a normalized score.
 
         Args:
-            data: The input text data to be analyzed. Must be a string.
-            context: A dictionary containing contextual information relevant
-                     to the current processing pipeline. (Not directly used
-                     in this specific node's logic but part of the standard API).
+            data (Any): The input data, expected to be a string (text) for analysis.
+            context (Dict[str, Any]): A dictionary containing contextual information
+                                       relevant to the current processing flow (e.g., flow_id).
 
         Returns:
-            A dictionary containing the sentiment analysis result.
-            Example successful output: `{"sentiment": "positive", "score": 0.85}`.
-            Example error output: `{"error": "Invalid input data type..."}`.
+            Dict[str, Any]: A dictionary containing:
+                            - "original_text": The input text.
+                            - "sentiment": The detected sentiment ('positive', 'negative', 'neutral').
+                            - "score": A numeric score ranging from -1.0 (most negative) to 1.0 (most positive).
+
+        Raises:
+            TypeError: If the input `data` is not a string.
         """
+        flow_id = context.get('flow_id', 'N/A')
+        logger.info(f"[{self.node_name}] Starting sentiment analysis for flow_id: {flow_id}.")
+
         if not isinstance(data, str):
             error_msg = (
-                f"[{self.node_name}] Invalid input data type. "
+                f"[{self.node_name}] Invalid input data type for flow_id '{flow_id}'. "
                 f"Expected 'str', but received '{type(data).__name__}'."
             )
             logger.error(error_msg)
-            return {"error": error_msg}
+            raise TypeError(error_msg)
 
-        text = data.lower()
-        if not text.strip():
-            logger.warning(
-                f"[{self.node_name}] Received empty or whitespace-only text for "
-                f"sentiment analysis. Returning neutral sentiment."
-            )
-            return {"sentiment": "neutral", "score": 0.0}
-
-        positive_count = 0
-        negative_count = 0
+        text_lower = data.lower()
         
-        # Simple word tokenization. For real-world, use NLP tokenizers.
-        words = text.split() 
+        positive_count = sum(1 for keyword in self._positive_keywords if keyword in text_lower)
+        negative_count = sum(1 for keyword in self._negative_keywords if keyword in text_lower)
 
-        for word in words:
-            if word in self._positive_keywords:
-                positive_count += 1
-            elif word in self._negative_keywords:
-                negative_count += 1
+        sentiment = "neutral"
+        score = 0.0
 
-        sentiment: str
-        score: float
+        total_keyword_mentions = positive_count + negative_count
 
-        total_meaningful_words = positive_count + negative_count
+        if total_keyword_mentions > 0:
+            # Calculate a normalized score between -1.0 and 1.0
+            score = (positive_count - negative_count) / total_keyword_mentions
+            
+            # Determine sentiment label based on score thresholds
+            if score > 0.1:  # Threshold for positive sentiment
+                sentiment = "positive"
+            elif score < -0.1:  # Threshold for negative sentiment
+                sentiment = "negative"
+            else:
+                sentiment = "neutral"  # Score close to zero
+        else:
+            # If no sentiment keywords are found, default to neutral sentiment.
+            logger.debug(
+                f"[{self.node_name}] No relevant keywords found in text for flow_id '{flow_id}'. "
+                "Defaulting to neutral sentiment."
+            )
 
-        if total_meaningful_words == 0:
-            sentiment = "neutral"
-            score = 0.0
-            logger.info(f"[{self.node_name}] No sentiment-bearing keywords found. Result: {sentiment}, Score: {score:.2f}")
-        elif positive_count > negative_count:
-            sentiment = "positive"
-            # Score reflects the intensity relative to overall sentiment-bearing words
-            score = round((positive_count - negative_count) / total_meaningful_words, 2)
-            logger.info(f"[{self.node_name}] Detected positive sentiment. Result: {sentiment}, Score: {score:.2f}")
-        elif negative_count > positive_count:
-            sentiment = "negative"
-            score = round((negative_count - positive_count) / total_meaningful_words, 2)
-            logger.info(f"[{self.node_name}] Detected negative sentiment. Result: {sentiment}, Score: {score:.2f}")
-        else:  # positive_count == negative_count and total_meaningful_words > 0
-            sentiment = "neutral"
-            score = 0.0 # Equal positive and negative cancels out
-            logger.info(f"[{self.node_name}] Balanced sentiment keywords. Result: {sentiment}, Score: {score:.2f}")
+        result = {
+            "original_text": data,
+            "sentiment": sentiment,
+            "score": round(score, 4)  # Round score for cleaner output
+        }
 
-        return {"sentiment": sentiment, "score": score}
+        logger.debug(
+            f"[{self.node_name}] Analysis complete for flow_id '{flow_id}'. "
+            f"Text snippet: '{data[:75]}{'...' if len(data) > 75 else ''}'. "
+            f"Sentiment: '{sentiment}', Score: {result['score']}"
+        )
+        return result
