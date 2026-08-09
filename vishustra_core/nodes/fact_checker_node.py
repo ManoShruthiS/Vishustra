@@ -1,134 +1,144 @@
 import logging
-from typing import Any, Dict, Union
+from typing import Any, Dict
 
+# Ensure BaseNode is imported from the specified project path
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class FactCheckerNode(BaseNode):
     """
-    A processing node designed to simulate fact-checking of input statements.
-    It verifies statements against an internal, predefined knowledge base,
-    which can be extended or overridden via the processing context.
+    A processing node designed to simulate fact-checking of textual statements.
 
-    This node provides a foundational mechanism for validating textual claims
-    within the Vishustra framework, returning a structured result indicating
-    the statement's factual status and confidence.
+    This node accepts a statement (typically embedded within a dictionary) and
+    attempts to ascertain its truthfulness by consulting a simulated internal
+    knowledge base. In a production environment, this would integrate with
+    external fact-checking services, proprietary databases, or advanced
+    NLP-driven verification mechanisms.
     """
 
-    # A simple, internal mock knowledge base for demonstration purposes.
-    # In a real-world scenario, this would interface with a sophisticated
-    # external fact-checking service or a robust knowledge graph.
-    _internal_fact_db: Dict[str, bool] = {
-        "earth is round": True,
-        "sun orbits earth": False,
-        "water boils at 100 degrees celsius": True,
-        "birds are mammals": False,
-        "pi is exactly 3": False,
-        "elephants can fly": False,
-        "humans breathe oxygen": True,
-        "internet was invented in the 1990s": False, # Actual origins trace back to ARPANET in 1960s
+    # A simple, static knowledge base for simulation purposes.
+    # This data structure would be dynamically loaded, configured, or replaced
+    # by external service calls in a real-world implementation.
+    _mock_knowledge_base = {
+        "The sun is a star": {"truth_value": True, "confidence": 1.0, "evidence": ["Astrophysical observation", "Scientific consensus"]},
+        "The Earth is flat": {"truth_value": False, "confidence": 1.0, "evidence": ["Satellite imaging", "Global navigation systems"]},
+        "Water boils at 100 degrees Celsius at sea level": {"truth_value": True, "confidence": 0.98, "evidence": ["Basic thermodynamics", "Laboratory experiments"]},
+        "Birds can breathe underwater indefinitely": {"truth_value": False, "confidence": 1.0, "evidence": ["Avian biology", "Respiratory system limitations"]},
+        "Humanity has landed on Mars": {"truth_value": False, "confidence": 0.85, "evidence": ["NASA mission records (crewed missions still in planning)"]},
+        "Python is a programming language": {"truth_value": True, "confidence": 1.0, "evidence": ["Computer science history", "Industry adoption"]},
     }
-
-    def __init__(self):
-        """
-        Initializes the FactCheckerNode.
-        Logs the node's initialization for operational monitoring.
-        """
-        logger.info(f"'{self.node_name}' node initialized.")
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of this node.
-        """
+        """Returns the descriptive name of the node."""
         return "FactCheckerNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input data to perform a simulated fact-check.
+        Processes the input data to perform a simulated fact-check on a statement.
 
-        The method expects `data` to be either a string representing the
-        statement to check or a dictionary containing a 'statement' key
-        with a string value.
+        The expected `data` input is a dictionary that must contain a 'statement'
+        key whose value is the string text to be fact-checked.
 
-        The `context` dictionary can optionally contain a 'fact_db' key.
-        If present, this 'fact_db' (expected to be a dictionary mapping
-        statement fragments to boolean truth values) will augment or
-        override the node's internal knowledge base for the current processing
-        cycle.
+        The `context` dictionary can optionally provide a custom 'knowledge_base'
+        to override the default mock one, facilitating dynamic testing or specific
+        workflow configurations.
 
-        Returns a dictionary with the following keys:
-        - 'original_statement': The exact statement that was provided for checking.
-        - 'is_factual': A boolean (True/False) indicating the factual status.
-                        None if the statement could not be verified.
-        - 'confidence': A float between 0.0 and 1.0, representing the confidence
-                        in the fact-check result.
-        - 'explanation': A string detailing the outcome of the fact-check.
+        Args:
+            data: The input payload, expected to be a dictionary with a 'statement' key.
+            context: A dictionary containing operational context, which may include
+                     a 'knowledge_base' for fact-lookup customization.
+
+        Returns:
+            A dictionary encapsulating the original statement, its fact-check result,
+            an associated confidence score, and any supporting evidence found.
+            Example structure:
+            {
+                "original_statement": "The sun is a star",
+                "fact_check_result": "TRUE",  # or "FALSE", "UNVERIFIABLE"
+                "confidence": 1.0,
+                "evidence": ["Astrophysical observation", "Scientific consensus"]
+            }
+
+        Raises:
+            ValueError: If the input `data` does not conform to the expected
+                        dictionary structure or lacks a valid 'statement' key.
+            RuntimeError: If an unforeseen error impedes the fact-checking process.
         """
-        statement_to_check: str = ""
-        result: Dict[str, Any] = {
-            "original_statement": None,
-            "is_factual": None,
+        logger.info(f"[{self.node_name}] Initiating fact-check process.")
+
+        if not isinstance(data, dict):
+            logger.error(
+                f"[{self.node_name}] Invalid input data type. Expected 'dict', "
+                f"received '{type(data).__name__}'."
+            )
+            raise ValueError(
+                f"FactCheckerNode requires input 'data' to be a dictionary, "
+                f"got '{type(data).__name__}'."
+            )
+
+        statement = data.get("statement")
+        if not isinstance(statement, str) or not statement.strip():
+            logger.error(
+                f"[{self.node_name}] 'statement' key is missing, empty, or "
+                f"not a string in the input data."
+            )
+            raise ValueError(
+                "Input 'data' dictionary must contain a non-empty 'statement' "
+                "string key for fact-checking."
+            )
+
+        # Utilize a custom knowledge base if provided in context, otherwise default.
+        current_knowledge_base = context.get("knowledge_base", self._mock_knowledge_base)
+
+        logger.debug(f"[{self.node_name}] Fact-checking statement: '{statement}'")
+        result = {
+            "original_statement": statement,
+            "fact_check_result": "UNVERIFIABLE",
             "confidence": 0.0,
-            "explanation": "Input data format invalid or missing statement."
+            "evidence": []
         }
 
-        # Validate input data format
-        if isinstance(data, str):
-            statement_to_check = data
-        elif isinstance(data, dict) and 'statement' in data and isinstance(data['statement'], str):
-            statement_to_check = data['statement']
-        else:
-            logger.warning(
-                f"[{self.node_name}] Received unexpected data format: {type(data)}. "
-                "Expected 'str' or 'dict' with a 'statement' key. Skipping fact-check."
-            )
-            return result
+        try:
+            # Perform a case-insensitive lookup for enhanced matching robustness.
+            matched_fact_info = None
+            for known_statement, fact_info in current_knowledge_base.items():
+                if statement.lower() == known_statement.lower():
+                    matched_fact_info = fact_info
+                    break
 
-        result["original_statement"] = statement_to_check
-        statement_lower = statement_to_check.lower()
-
-        # Compile the current knowledge base, prioritizing context-provided facts
-        current_fact_db = self._internal_fact_db.copy()
-        if 'fact_db' in context and isinstance(context['fact_db'], dict):
-            # Ensure context facts are also lowercased for consistent matching
-            context_facts_lower = {k.lower(): v for k, v in context['fact_db'].items()}
-            current_fact_db.update(context_facts_lower)
-            logger.debug(
-                f"[{self.node_name}] Context-provided 'fact_db' augmented internal knowledge base. "
-                f"Total active facts: {len(current_fact_db)}"
-            )
-        else:
-            logger.debug(f"[{self.node_name}] Using only internal knowledge base.")
-
-        found_match = False
-        # Iterate through the fact database to find a matching phrase
-        for fact_phrase, truth_value in current_fact_db.items():
-            if fact_phrase in statement_lower:
-                result['is_factual'] = truth_value
-                result['confidence'] = 1.0
-                result['explanation'] = (
-                    f"Statement contains known fact: '{fact_phrase}', which is "
-                    f"{'True' if truth_value else 'False'}."
+            if matched_fact_info:
+                truth_value = matched_fact_info["truth_value"]
+                result["fact_check_result"] = "TRUE" if truth_value else "FALSE"
+                # Default confidence if not explicitly provided in the mock data
+                result["confidence"] = matched_fact_info.get("confidence", 0.9)
+                result["evidence"] = matched_fact_info.get(
+                    "evidence", ["Reference to simulated internal knowledge base"]
                 )
-                found_match = True
                 logger.info(
-                    f"[{self.node_name}] Fact-checked '{statement_to_check[:50]}...': "
-                    f"Result: {result['is_factual']}"
+                    f"[{self.node_name}] Statement '{statement}' fact-checked as "
+                    f"{result['fact_check_result']} (Confidence: {result['confidence']:.2f})."
                 )
-                break  # For this simulation, the first direct match is considered decisive
+            else:
+                logger.warning(
+                    f"[{self.node_name}] Statement '{statement}' not found in the "
+                    f"current knowledge base. Result marked as UNVERIFIABLE."
+                )
 
-        if not found_match:
-            # If no direct match is found, the statement is considered unverifiable
-            result['is_factual'] = None
-            result['confidence'] = 0.5  # Neutral confidence for unverifiable statements
-            result['explanation'] = (
-                "No direct match found in the available knowledge base. "
-                "The statement's factual status is currently unverifiable."
+        except Exception as e:
+            logger.exception(
+                f"[{self.node_name}] An unexpected error occurred during "
+                f"fact-checking for statement '{statement}'."
             )
-            logger.warning(
-                f"[{self.node_name}] Fact-check for '{statement_to_check[:50]}...': Unverifiable."
-            )
+            # Re-raise the exception, potentially wrapped, to propagate critical
+            # operational failures up to the orchestrator layer.
+            raise RuntimeError(
+                f"Processing error in FactCheckerNode for statement "
+                f"'{statement}': {e}"
+            ) from e
 
+        logger.debug(
+            f"[{self.node_name}] Completed fact-check for '{statement}'. Result: {result}"
+        )
         return result
