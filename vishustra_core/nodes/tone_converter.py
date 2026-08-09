@@ -1,112 +1,108 @@
 import logging
 from typing import Any, Dict
 
-# Assuming BaseNode is available at this path in the Vishustra project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class ToneConverter(BaseNode):
     """
-    A processing node that converts the tone of a given text.
-    It simulates tone transformation based on a specified target tone in the context.
-    This node serves as an example for text manipulation tasks within Vishustra.
+    A processing node designed to simulate converting the tone of input text.
+
+    This node takes a string as input data and a 'target_tone' from the context,
+    then applies simple transformations to produce text in the desired tone.
+    Supported tones for simulation include 'formal', 'casual', 'sarcastic', and 'empathetic'.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """Returns the programmatic name of this node."""
         return "ToneConverter"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, converting its tone based on the 'target_tone'
-        specified in the context.
+        Processes the input data (expected to be a string) and attempts to convert its tone
+        based on the 'target_tone' parameter provided in the context dictionary.
 
         Args:
-            data: The input text to be converted. Expected to be a string.
-            context: A dictionary containing operational context, including
-                     'target_tone' (str) which dictates the desired output tone.
-                     Supported tones include: 'formal', 'casual', 'empathetic', 'concise'.
+            data: The input text string that requires tone conversion.
+            context: A dictionary containing processing parameters.
+                     It MUST include a 'target_tone' key with a string value
+                     (e.g., 'formal', 'casual', 'sarcastic', 'empathetic').
 
         Returns:
-            The tone-converted string. If the target tone is unsupported or an error
-            occurs during conversion, the original data is returned after logging.
+            str: The transformed text with the simulated converted tone.
 
         Raises:
-            ValueError: If 'data' is not a string, or if 'target_tone' is missing
-                        from context or is not a string.
+            TypeError: If `context` is not a dictionary.
+            ValueError: If `data` is not a string, or if `target_tone` is missing,
+                        not a string, or an unsupported value in the context.
+            RuntimeError: For unexpected internal errors during the conversion process.
         """
+        if not isinstance(context, dict):
+            logger.error("Context provided to ToneConverter is not a dictionary. Type: %s", type(context))
+            raise TypeError("Context must be a dictionary.")
+
         if not isinstance(data, str):
             logger.error(
-                "ToneConverter received non-string data. Expected 'str', got '%s'.",
-                type(data)
+                "ToneConverter received non-string data. Expected 'str', got '%s'. Data: %s",
+                type(data).__name__, data
             )
-            raise ValueError(f"ToneConverter requires string data, but received {type(data)}.")
+            raise ValueError(f"Input data for ToneConverter must be a string, but received {type(data).__name__}.")
 
-        if 'target_tone' not in context:
-            logger.error("ToneConverter context is missing 'target_tone'.")
-            raise ValueError("Context must contain 'target_tone' for ToneConverter.")
-
-        target_tone = context['target_tone']
-        if not isinstance(target_tone, str):
+        target_tone = context.get("target_tone")
+        if not target_tone or not isinstance(target_tone, str):
             logger.error(
-                "ToneConverter 'target_tone' in context is not a string. Expected 'str', got '%s'.",
-                type(target_tone)
+                "Missing or invalid 'target_tone' in context for ToneConverter. Context: %s", context
             )
-            raise ValueError(f"ToneConverter 'target_tone' must be a string, got {type(target_tone)}.")
-
-        # Normalize target tone for case-insensitive matching and stripping whitespace
-        normalized_tone = target_tone.lower().strip()
-        converted_data = data # Initialize with original data
-
-        try:
-            if normalized_tone == 'formal':
-                # Basic formal conversion: Capitalize first letter, ensure ends with period
-                temp_data = data.strip()
-                if temp_data:
-                    converted_data = temp_data[0].upper() + temp_data[1:]
-                    if not converted_data.endswith(('.', '!', '?')):
-                        converted_data += '.'
-                logger.debug("Converted data to formal tone.")
-            elif normalized_tone == 'casual':
-                # Basic casual conversion: Lowercase, remove trailing punctuation, add a friendly suffix
-                temp_data = data.lower().strip()
-                if temp_data and temp_data[-1] in ('.', '!', '?'):
-                    temp_data = temp_data[:-1] # Remove trailing punctuation
-                converted_data = temp_data + ' :)'
-                logger.debug("Converted data to casual tone.")
-            elif normalized_tone == 'empathetic':
-                # Basic empathetic conversion: Prepend an empathetic phrase
-                converted_data = "I understand that " + data.strip()
-                logger.debug("Converted data to empathetic tone.")
-            elif normalized_tone == 'concise':
-                # Basic concise conversion: Remove common filler words and extra spaces
-                filler_words = ['just', 'very', 'really', 'actually', 'in order to', 'you know', 'a lot of']
-                temp_data = data.lower()
-                for word in filler_words:
-                    temp_data = temp_data.replace(word, '')
-                # Reconstruct by splitting and joining to handle multiple spaces from replacements
-                converted_data = ' '.join(temp_data.split()).strip()
-                # Capitalize first letter of the concise output for better readability
-                if converted_data:
-                    converted_data = converted_data[0].upper() + converted_data[1:]
-                logger.debug("Converted data to concise tone.")
-            else:
-                logger.warning(
-                    "Unsupported target tone '%s' for ToneConverter. Returning original data.",
-                    target_tone
-                )
-                return data # Return original data if tone is unsupported
-
-        except Exception as e:
-            # Catch any unexpected errors during the string manipulation
-            logger.exception("An unexpected error occurred during tone conversion for tone '%s': %s", target_tone, e)
-            # In case of an error, it's often safer to return the original data to avoid breaking the pipeline
-            return data
+            raise ValueError("Context must contain a 'target_tone' string (e.g., 'formal', 'casual').")
 
         logger.info(
-            "Successfully processed data (first 50 chars: '%s...') into '%s' tone.",
-            data[:50].replace('\n', ' '), normalized_tone
+            "Starting tone conversion for data (first 75 chars): '%s...' to tone: '%s'",
+            data[:75], target_tone
         )
-        return converted_data
+
+        converted_text = data
+        try:
+            if target_tone == "formal":
+                converted_text = data.capitalize()
+                converted_text = converted_text.replace("hello", "Greetings").replace("hi", "Greetings")
+                converted_text = converted_text.replace("it's", "it is").replace("i'm", "I am")
+                if not converted_text.strip().lower().startswith("greetings") and converted_text.strip():
+                    converted_text = "Regarding this matter: " + converted_text
+            elif target_tone == "casual":
+                converted_text = data.lower()
+                converted_text = converted_text.replace("it is", "it's").replace("i am", "i'm")
+                if not converted_text.strip().lower().startswith("hey there") and converted_text.strip():
+                    converted_text = "Hey there, " + converted_text
+                converted_text += " just sayin'." if converted_text.strip() else "just sayin'."
+            elif target_tone == "sarcastic":
+                converted_text = f"Oh, how truly fascinating: {data}. Clearly, this is groundbreaking work."
+            elif target_tone == "empathetic":
+                converted_text = f"I truly understand your perspective. It seems that: {data}. Please know I'm here to listen."
+            else:
+                logger.error(
+                    "Unsupported target_tone '%s' for ToneConverter. Context: %s",
+                    target_tone, context
+                )
+                raise ValueError(
+                    f"Unsupported 'target_tone': '{target_tone}'. "
+                    "Supported tones are 'formal', 'casual', 'sarcastic', 'empathetic'."
+                )
+
+        except ValueError as ve:
+            # Re-raise specific ValueErrors for unsupported tones or other known input issues
+            raise ve
+        except Exception as e:
+            logger.error(
+                "An unexpected error occurred during tone conversion for tone '%s': %s",
+                target_tone, e, exc_info=True
+            )
+            raise RuntimeError(f"Failed to convert tone due to an internal error: {e}") from e
+
+        logger.info(
+            "Tone conversion completed successfully for tone: '%s'. Result (first 75 chars): '%s...'",
+            target_tone, converted_text[:75]
+        )
+
+        return converted_text
