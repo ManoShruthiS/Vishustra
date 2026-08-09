@@ -1,98 +1,99 @@
 import logging
 from typing import Any, Dict
 
-# Assuming BaseNode is located at this path within the Vishustra project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class TextSummarizerNode(BaseNode):
     """
-    A processing node designed to simulate text summarization.
+    A processing node designed to generate a simulated summary of input text.
 
-    This node takes a string as input and attempts to produce a shorter
-    summary based on parameters provided in the context. It offers basic
-    sentence-level summarization.
-
-    Configuration via 'context' dictionary:
-    - 'summary_length':
-        - If an `int` (e.g., 5), the node will attempt to return
-          that many sentences from the beginning of the text.
-        - If a `float` between 0.0 and 1.0 (e.g., 0.3), the node
-          will attempt to return that percentage of the original sentences.
-        - Defaults to 3 sentences if not provided or invalid.
+    This node truncates the input text based on a specified maximum word count,
+    which can be configured via the processing context. It's intended to
+    simulate a basic summarization operation within a larger workflow.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "TextSummarizerNode"
+        """
+        Returns the descriptive name of this processing node.
+        """
+        return "TextSummarizer"
 
     def process(self, data: Any, context: Dict[str, Any]) -> str:
         """
-        Processes the input data by performing a simulated summarization.
+        Processes the input data, attempting to summarize it by truncation.
+
+        The `data` input is expected to be a string. If it's not, a TypeError
+        is raised. If the string is empty or only whitespace, an empty string
+        is returned.
+
+        Summarization length is controlled by `context['summary_max_words']`.
+        If present and a positive integer, the text will be truncated to this
+        word count. Otherwise, a default of 50 words is used. If the original
+        text is shorter than the target `summary_max_words`, the full text
+        is returned.
 
         Args:
-            data: The input content to be summarized. Expected to be a string.
-            context: A dictionary that may contain 'summary_length' to configure
-                     the summarization behavior.
+            data: The input text (str) that needs to be summarized.
+            context: A dictionary potentially containing configuration for
+                     summarization, e.g., 'summary_max_words' (int).
 
         Returns:
-            A string representing the summarized text. Returns an empty string
-            if the input data is empty or consists only of whitespace.
+            A string representing the simulated summary of the input text.
+            An ellipsis "..." is appended if the text was truncated.
 
         Raises:
-            TypeError: If the input `data` is not a string.
+            TypeError: If `data` is not a string.
+            ValueError: If `summary_max_words` in context is not a positive integer.
         """
         if not isinstance(data, str):
-            error_msg = (
-                f"Invalid input type for TextSummarizerNode. Expected 'str', "
-                f"but received '{type(data).__name__}'."
+            logger.error(
+                "TextSummarizerNode received non-string data. Expected 'str', got '%s'.",
+                type(data).__name__
             )
-            logger.error(error_msg)
-            raise TypeError(error_msg)
+            raise TypeError(
+                f"Input data for TextSummarizerNode must be a string, "
+                f"but received {type(data).__name__}."
+            )
 
         if not data.strip():
-            logger.warning("Received empty or whitespace-only string for summarization. Returning empty string.")
+            logger.info(
+                "TextSummarizerNode received an empty or whitespace-only string. Returning empty string."
+            )
             return ""
 
-        # Basic sentence splitting (can be enhanced with proper NLP libraries like NLTK or spaCy
-        # for more robust sentence boundary detection in a production environment).
-        sentences = [s.strip() for s in data.split('.') if s.strip()]
+        summary_max_words: Any = context.get("summary_max_words", 50)
 
-        if not sentences:
-            logger.info("No sentences detected in the input text after splitting. Returning empty string.")
-            return ""
-
-        target_sentence_count = 3  # Default summary length
-
-        summary_length_param = context.get("summary_length")
-
-        if isinstance(summary_length_param, int) and summary_length_param > 0:
-            target_sentence_count = summary_length_param
-            logger.debug(f"Context specifies summarization to {target_sentence_count} sentences.")
-        elif isinstance(summary_length_param, float) and 0.0 < summary_length_param <= 1.0:
-            target_sentence_count = max(1, int(len(sentences) * summary_length_param))
-            logger.debug(f"Context specifies summarization to {summary_length_param*100:.0f}% of sentences, resulting in {target_sentence_count} sentences.")
-        elif summary_length_param is not None:
-            logger.warning(
-                f"Invalid 'summary_length' value in context: '{summary_length_param}'. "
-                "Expected a positive integer or a float between 0.0 and 1.0. "
-                f"Defaulting to {target_sentence_count} sentences."
+        if not isinstance(summary_max_words, int) or summary_max_words <= 0:
+            logger.error(
+                "Invalid 'summary_max_words' value in context: '%s'. Must be a positive integer.",
+                summary_max_words
+            )
+            raise ValueError(
+                f"'summary_max_words' in context must be a positive integer, "
+                f"but received {summary_max_words}."
             )
 
-        # Cap the target count to the actual number of available sentences
-        num_sentences_to_summarize = min(target_sentence_count, len(sentences))
-
-        summarized_sentences = sentences[:num_sentences_to_summarize]
-        summary_text = ". ".join(summarized_sentences)
-
-        # Ensure the summary ends with a period for grammatical completeness, if not already present
-        if summary_text and not summary_text.endswith('.'):
-            summary_text += '.'
-
-        logger.info(
-            f"Text summarized. Original sentences: {len(sentences)}, "
-            f"Summary sentences: {len(summarized_sentences)}."
+        logger.debug(
+            "TextSummarizerNode initiated processing with 'summary_max_words': %d.",
+            summary_max_words
         )
-        return summary_text
+
+        words = data.split()
+
+        if len(words) <= summary_max_words:
+            logger.debug(
+                "Original text word count (%d) is less than or equal to 'summary_max_words' (%d). "
+                "Returning full text.",
+                len(words), summary_max_words
+            )
+            return data
+        else:
+            summary = " ".join(words[:summary_max_words])
+            logger.info(
+                "Text summarized by truncating to %d words (original %d words).",
+                summary_max_words, len(words)
+            )
+            return summary + "..."
