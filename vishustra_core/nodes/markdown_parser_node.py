@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Any, Dict
 
 from vishustra_core.nodes.base_node import BaseNode
@@ -6,94 +7,97 @@ from vishustra_core.nodes.base_node import BaseNode
 # Initialize logger for this module
 logger = logging.getLogger(__name__)
 
-# Try to import the 'markdown' library.
-# This check is performed once when the module is loaded, optimizing performance
-# and allowing early detection of missing critical dependencies.
-try:
-    import markdown
-    _MARKDOWN_LIB_AVAILABLE = True
-    logger.debug("Successfully imported 'markdown' library for MarkdownParserNode.")
-except ImportError:
-    _MARKDOWN_LIB_AVAILABLE = False
-    logger.critical(
-        "The 'markdown' library is not installed. MarkdownParserNode will "
-        "raise a RuntimeError if used without this critical dependency. "
-        "Please install it with 'pip install markdown'."
-    )
 
 class MarkdownParserNode(BaseNode):
     """
-    A Vishustra processing node designed to convert Markdown text into HTML.
+    A Vishustra processing node designed to parse Markdown text and transform
+    it into a simplified HTML string.
 
-    This node expects a string containing valid Markdown as its primary input
-    and produces an HTML string as its output. It integrates with the
-    'markdown' Python library to provide robust and feature-rich parsing.
+    This node demonstrates text transformation by converting common Markdown
+    elements such as headers, bold text, and italic text into their
+    corresponding HTML tags. It's suitable for scenarios where raw Markdown
+    input needs to be presented in a web-friendly or otherwise structured
+    HTML format.
     """
 
     @property
     def node_name(self) -> str:
         """
-        Returns the descriptive name of the node.
+        Returns the descriptive name of this node.
         """
-        return "MarkdownParserNode"
+        return "markdown_parser"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Parses Markdown input data and returns the resulting HTML string.
+        Processes the input data, expecting a Markdown string, and converts
+        it into a simplified HTML string.
+
+        The transformation includes:
+        - Markdown headers (`#`, `##`, `###`) to `<h1>`, `<h2>`, `<h3>`.
+        - Bold text (`**text**`) to `<strong>text</strong>`.
+        - Italic text (`*text*`) to `<em>text</em>`.
+        - Simple newlines to `<br>` tags for basic line breaks (not full paragraph handling).
 
         Args:
-            data: The input data, which is expected to be a string containing
-                  Markdown content.
-            context: A dictionary containing contextual information relevant
-                     to the processing flow. This node currently does not
-                     utilize the context dictionary but adheres to the interface.
+            data: The input data, which must be a string containing Markdown content.
+            context: A dictionary containing contextual information relevant to the
+                     current orchestration run (not directly used by this parser
+                     but available for future enhancements).
 
         Returns:
-            A string containing the HTML representation of the input Markdown.
+            A string representing the transformed Markdown content in a simplified HTML format.
 
         Raises:
-            TypeError: If the input `data` is not a string, indicating an
-                       incorrect data type for Markdown parsing.
-            RuntimeError: If the 'markdown' library is not installed, which
-                          is a critical dependency for this node's core
-                          functionality.
-            Exception: Propagates any other exceptions that may occur during
-                       the Markdown parsing process after logging them,
-                       allowing upstream error handling.
+            TypeError: If the input `data` is not a string.
+            ValueError: If an unexpected error occurs during the parsing process.
         """
-        logger.debug(f"[{self.node_name}] Starting process. Input data type: {type(data).__name__}.")
-
-        # Validate input data type to ensure it's a string
         if not isinstance(data, str):
             logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected 'str', "
-                f"received '{type(data).__name__}'.")
+                f"[{self.node_name}] Invalid input type. Expected string, "
+                f"got {type(data).__name__}. Input data was: {data!r}"
+            )
             raise TypeError(
-                f"MarkdownParserNode expects input data to be a string, "
-                f"but received '{type(data).__name__}'.")
+                f"Input data for '{self.node_name}' must be a string (Markdown content)."
+            )
 
-        # Check for the availability of the 'markdown' library
-        if not _MARKDOWN_LIB_AVAILABLE:
-            # If the library is missing, log a critical error and raise an exception
-            # as the node cannot fulfill its primary function.
-            logger.critical(
-                f"[{self.node_name}] Critical dependency 'markdown' is not installed. "
-                f"Cannot perform Markdown parsing. Please install with 'pip install markdown'.")
-            raise RuntimeError(
-                f"MarkdownParserNode requires the 'markdown' library, which is not installed. "
-                f"Please install it with 'pip install markdown'.")
+        if not data.strip():
+            logger.warning(
+                f"[{self.node_name}] Received empty or whitespace-only Markdown content. "
+                "Returning an empty string as output."
+            )
+            return ""
 
         try:
-            # Perform the Markdown to HTML conversion using the imported library
-            html_output = markdown.markdown(data)
-            logger.info(f"[{self.node_name}] Successfully parsed Markdown data to HTML.")
-            return html_output
-        except Exception as e:
-            # Catch and log any unexpected errors during the parsing process
-            logger.error(
-                f"[{self.node_name}] An unexpected error occurred during Markdown parsing: {e}",
-                exc_info=True  # Include traceback for detailed debugging
+            processed_html = data
+
+            # Convert Markdown headers (order matters: H3 before H2 before H1)
+            processed_html = re.sub(r'###\s*(.*)', r'<h3>\1</h3>', processed_html)
+            processed_html = re.sub(r'##\s*(.*)', r'<h2>\1</h2>', processed_html)
+            processed_html = re.sub(r'#\s*(.*)', r'<h1>\1</h1>', processed_html)
+
+            # Convert bold text (**text**)
+            processed_html = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', processed_html)
+
+            # Convert italic text (*text*)
+            processed_html = re.sub(r'\*(.*?)\*', r'<em>\1</em>', processed_html)
+
+            # Replace newlines with <br> tags. This is a very simplistic approach
+            # and does not implement proper Markdown paragraph handling.
+            # It avoids adding <br> immediately after block-level tags.
+            processed_html = re.sub(
+                r'\n(?!\s*</?(h[1-6]|ul|ol|li|p|div|pre|blockquote|table|tr|td|th)>|\s*\n)',
+                r'<br>\n', processed_html
             )
-            # Re-raise the exception to allow upstream nodes or the orchestration
-            # framework to handle the failure appropriately.
-            raise
+
+
+            logger.info(
+                f"[{self.node_name}] Successfully parsed Markdown content."
+            )
+            return processed_html
+        except Exception as e:
+            logger.exception(
+                f"[{self.node_name}] An unexpected error occurred during Markdown parsing."
+            )
+            # Re-raise as a ValueError to indicate a processing failure that
+            # upstream nodes might need to handle.
+            raise ValueError(f"Failed to parse Markdown content in '{self.node_name}': {e}")
