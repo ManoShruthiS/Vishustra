@@ -1,121 +1,90 @@
 import logging
-import re
 from typing import Any, Dict
 
-# Assuming BaseNode is available at this path as per project context
+# External dependency for Markdown parsing
+import markdown
+
+# Assuming BaseNode is available at this path as per project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class MarkdownParserNode(BaseNode):
     """
-    A Vishustra processing node that parses Markdown formatted text into a simplified
-    HTML string. This node provides basic Markdown-to-HTML conversion capabilities,
-    handling common elements such as headings, bold, italic, and links.
+    A Vishustra processing node designed to parse Markdown formatted text
+    into its corresponding HTML representation.
 
-    It's designed for simple markdown structures and simulates a lightweight parsing
-    process, rather than implementing a full-fledged Markdown specification.
+    This node is useful for converting user-provided or dynamically generated
+    Markdown content into a displayable HTML format, often as an intermediary
+    step before rendering or further HTML processing.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "MarkdownParserNode"
-
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Parses the input data, expecting a Markdown-formatted string, and converts
-        it into a simplified HTML string.
+        Returns the descriptive name of the node.
+        """
+        return "MarkdownParser"
+
+    def process(self, data: Any, context: Dict[str, Any]) -> str:
+        """
+        Processes the input data, parsing Markdown text into HTML.
+
+        The node expects the 'data' parameter to be a string containing
+        Markdown formatted content. It uses the `markdown` library to perform
+        the conversion.
 
         Args:
-            data (Any): The input data, expected to be a string containing Markdown.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                       for the processing. Not directly used for parsing
-                                       logic in this node, but available for future
-                                       enhancements (e.g., configuration for parsing rules).
+            data: The input data, expected to be a string containing Markdown.
+                  Non-string input will raise a TypeError.
+            context: A dictionary containing contextual information for processing.
+                     Currently not directly used by this node but available for
+                     future extensions.
 
         Returns:
-            Any: A string containing the simplified HTML representation of the input Markdown.
+            A string containing the HTML representation of the input Markdown.
 
         Raises:
-            TypeError: If the input data is not a string.
-            ValueError: If an unexpected issue occurs during the simulated parsing process.
+            TypeError: If the input 'data' is not a string.
+            RuntimeError: If an unexpected error occurs during the Markdown
+                          parsing process.
         """
-        logger.debug(f"[{self.node_name}] Starting process for data type: {type(data)}")
-
         if not isinstance(data, str):
             error_msg = (
-                f"[{self.node_name}] Invalid input data type. Expected 'str', "
-                f"got '{type(data).__name__}'."
+                f"{self.node_name}: Received invalid data type. "
+                f"Expected 'str', but got '{type(data).__name__}'."
             )
-            logger.error(error_msg)
+            logger.error(
+                error_msg,
+                extra={
+                    "node_name": self.node_name,
+                    "input_type": type(data).__name__,
+                    "data_sample": str(data)[:100]  # Log a small sample for context
+                }
+            )
             raise TypeError(error_msg)
 
-        markdown_text = data
-        html_output = []
-        paragraph_buffer = []
-
         try:
-            # Split the markdown text into lines for block-level processing
-            lines = markdown_text.split('\n')
+            # Perform the Markdown to HTML conversion
+            html_output = markdown.markdown(data)
 
-            for line in lines:
-                line = line.strip()
-
-                # Detect and process block-level elements
-                header_match = re.match(r'^(#+)\s*(.*)$', line)
-
-                if header_match:
-                    # Flush any accumulated paragraph text before a new block element
-                    if paragraph_buffer:
-                        processed_para = self._process_inline_markdown(' '.join(paragraph_buffer))
-                        html_output.append(f"<p>{processed_para}</p>")
-                        paragraph_buffer = []
-                    
-                    level = min(len(header_match.group(1)), 6) # Max H6
-                    content = header_match.group(2).strip()
-                    html_output.append(f"<h{level}>{content}</h{level}>")
-                    continue
-                
-                if not line:
-                    # An empty line often signifies the end of a paragraph
-                    if paragraph_buffer:
-                        processed_para = self._process_inline_markdown(' '.join(paragraph_buffer))
-                        html_output.append(f"<p>{processed_para}</p>")
-                        paragraph_buffer = []
-                    continue # Skip adding empty lines to buffer
-
-                # Accumulate lines for a paragraph
-                paragraph_buffer.append(line)
-
-            # After iterating through all lines, flush any remaining paragraph content
-            if paragraph_buffer:
-                processed_para = self._process_inline_markdown(' '.join(paragraph_buffer))
-                html_output.append(f"<p>{processed_para}</p>")
-
-            result = '\n'.join(html_output)
-            logger.debug(f"[{self.node_name}] Successfully parsed Markdown content into HTML.")
-            return result
-
+            logger.info(
+                f"{self.node_name}: Successfully parsed Markdown text to HTML. "
+                f"Input length: {len(data)} characters, Output length: {len(html_output)} characters."
+            )
+            return html_output
         except Exception as e:
-            error_msg = f"[{self.node_name}] An unexpected error occurred during Markdown parsing: {e}"
-            logger.exception(error_msg) # Log full traceback for debugging
-            raise ValueError(error_msg) from e
-
-    def _process_inline_markdown(self, text: str) -> str:
-        """
-        Helper method to process inline Markdown elements within a given text block,
-        such as bold, italic, and links.
-        """
-        # Process links: [link text](url) -> <a href="url">link text</a>
-        text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', text)
-        
-        # Process bold: **text** -> <strong>text</strong>
-        # Using non-greedy match (.*?) to prevent over-matching across multiple bold segments
-        text = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', text)
-        
-        # Process italic: *text* -> <em>text</em>
-        # This regex should be applied after bold to avoid conflicts.
-        text = re.sub(r'\*(.*?)\*', r'<em>\1</em>', text)
-        
-        return text
+            # Catch any exceptions from the markdown library or other unexpected issues
+            error_msg = (
+                f"{self.node_name}: An unexpected error occurred during Markdown parsing: {e}"
+            )
+            logger.exception(
+                error_msg,
+                extra={
+                    "node_name": self.node_name,
+                    "error_type": type(e).__name__,
+                    "error_detail": str(e),
+                    "input_length": len(data)
+                }
+            )
+            raise RuntimeError(error_msg) from e
