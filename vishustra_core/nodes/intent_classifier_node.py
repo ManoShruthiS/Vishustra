@@ -1,141 +1,100 @@
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
-# Assuming this import path exists in the Vishustra framework
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
+
 class IntentClassifierNode(BaseNode):
     """
-    A Vishustra processing node designed to classify the intent of a given text input.
+    A Vishustra processing node that classifies the intent of a given text input.
 
-    This node simulates intent classification based on predefined keywords
-    or patterns within the input data. It's built to identify a primary
-    user intent from a natural language utterance, which is crucial for
-    orchestrating subsequent LLM operations or routing requests.
+    This node simulates intent classification based on keyword matching.
+    In a real-world scenario, this would typically integrate with a machine
+    learning model or a more sophisticated natural language processing service.
     """
-
-    def __init__(self, intent_rules: Optional[Dict[str, List[str]]] = None):
-        """
-        Initializes the IntentClassifierNode with optional, customizable intent rules.
-
-        Args:
-            intent_rules: A dictionary where keys are intent names (str) and
-                          values are lists of keywords (str) associated with that intent.
-                          These keywords are used to detect the intent within the input text.
-                          If `None`, a robust set of default rules will be applied.
-        """
-        self._intent_rules = intent_rules if intent_rules is not None else self._get_default_intent_rules()
-        logger.debug(f"[{self.node_name}] Initialized with intent rules: {self._intent_rules}")
-
-    def _get_default_intent_rules(self) -> Dict[str, List[str]]:
-        """
-        Provides a default set of intent classification rules.
-
-        This method centralizes the default intent definitions, making them
-        easy to review and extend.
-        """
-        return {
-            "greeting": ["hello", "hi", "hey", "good morning", "good evening"],
-            "place_order": ["order", "buy", "purchase", "add to cart", "get me"],
-            "check_status": ["status", "track", "where is", "update"],
-            "cancel_order": ["cancel", "revoke", "undo", "stop order"],
-            "customer_support": ["help", "support", "assist", "contact", "agent"],
-            "goodbye": ["bye", "goodbye", "see you", "farewell"],
-            "inquire_product": ["product info", "details about", "tell me about"],
-            "schedule_appointment": ["schedule", "book appointment", "set up meeting"]
-        }
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the unique and descriptive name of this processing node.
-        """
+        """Returns the descriptive name of the node."""
         return "IntentClassifierNode"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data to classify its underlying intent.
+        Processes the input data to determine its intent based on keyword matching.
 
-        The `data` input is expected to be a string representing a user query
-        or natural language utterance. The method attempts to match keywords
-        within the data against the node's configured intent rules.
+        Expected `data` format:
+        A dictionary containing at least a "text" key with the user's query string.
+        Example: `{"text": "What is my account balance?", "user_id": "123"}`
+
+        The method extracts the "text" field, performs a basic keyword-based
+        classification, and augments the input `data` with an "intent" key.
 
         Args:
-            data: The input text (str) that needs its intent classified.
-                  This is typically a user's prompt to an LLM.
+            data: The input data, expected to be a dictionary containing a "text" key.
+                  Other keys in `data` will be preserved in the output.
             context: A dictionary containing contextual information relevant to
-                     the current processing flow (e.g., `user_id`, `session_id`,
-                     `transaction_id`). While not directly used for classification
-                     in this simplified version, it's a vital part of the Vishustra
-                     framework for context propagation.
+                     the current orchestration run (e.g., configuration, session state).
+                     This node does not currently use the `context` for classification logic
+                     but relies on it for potential future extensibility.
 
         Returns:
-            A dictionary containing the classification results:
-            - 'intent': The identified intent as a string (e.g., "place_order").
-                        Returns "unknown" if no intent is matched.
-            - 'confidence': A numerical confidence score (float). Currently 1.0 for
-                            a direct keyword match, 0.0 otherwise, but extensible
-                            for more sophisticated models.
-            - 'original_query': The verbatim input data received for classification.
-            - 'context_passthrough': The original `context` dictionary, facilitating
-                                     contextual flow to subsequent nodes.
+            A dictionary that is a copy of the input `data` but augmented with an
+            "intent" key, indicating the classified intent (e.g., "check_balance",
+            "transfer_funds", "unknown").
 
         Raises:
-            TypeError: If the input `data` is not a string, violating the expected
-                       input contract for this node.
-            ValueError: If `data` is an empty string after stripping whitespace,
-                        indicating no meaningful input to classify.
+            TypeError: If the input `data` is not a dictionary, or if the value
+                       associated with the "text" key is not a string.
+            ValueError: If the "text" key is missing from the input `data`.
         """
-        if not isinstance(data, str):
-            logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected 'str', "
-                f"but received '{type(data).__name__}'. Unable to classify intent."
-            )
-            raise TypeError(
-                f"Input data for {self.node_name} must be a string. "
-                f"Received type: {type(data).__name__}."
-            )
+        logger.debug(f"[{self.node_name}] Starting intent classification process. Input data keys: {list(data.keys()) if isinstance(data, dict) else 'N/A'}")
 
-        # Normalize the query for case-insensitive and whitespace-robust matching
-        query = data.strip().lower()
+        if not isinstance(data, dict):
+            error_msg = f"[{self.node_name}] Invalid input data type. Expected dict, but received {type(data)}. Cannot classify intent."
+            logger.error(error_msg)
+            raise TypeError(error_msg)
 
-        if not query:
-            logger.warning(
-                f"[{self.node_name}] Received an empty query after stripping. "
-                f"No intent can be classified from an empty input."
-            )
-            raise ValueError(f"Input query for {self.node_name} cannot be empty.")
+        text_to_classify = data.get("text")
 
-        detected_intent: str = "unknown"
-        confidence: float = 0.0
+        if text_to_classify is None:
+            error_msg = f"[{self.node_name}] 'text' key missing in input data. A text field is required for intent classification. Data received: {data.keys()}"
+            logger.warning(error_msg)
+            raise ValueError(error_msg)
 
-        # Iterate through defined intents and their keywords to find a match
-        for intent_name, keywords in self._intent_rules.items():
-            for keyword in keywords:
-                if keyword in query:
-                    detected_intent = intent_name
-                    confidence = 1.0  # Assign full confidence for a direct keyword match
-                    logger.debug(
-                        f"[{self.node_name}] Successfully identified intent '{detected_intent}' "
-                        f"for query: '{data}' using keyword '{keyword}'."
-                    )
-                    break  # Found a keyword for this intent, move to the next intent
-            if detected_intent != "unknown":
-                break  # An intent has been found, no need to check further
+        if not isinstance(text_to_classify, str):
+            error_msg = f"[{self.node_name}] Invalid type for 'text' field. Expected str, but received {type(text_to_classify)}. Cannot classify intent."
+            logger.error(error_msg)
+            raise TypeError(error_msg)
 
-        if detected_intent == "unknown":
-            logger.info(
-                f"[{self.node_name}] No specific intent identified for query: '{data}'. "
-                f"Defaulting to 'unknown'."
-            )
+        # --- Simulate intent classification using basic keyword matching ---
+        # In a production environment, this logic would typically involve:
+        # 1. Loading a pre-trained machine learning model (e.g., transformer-based).
+        # 2. Sending the text to an external NLP service or API.
+        # 3. Using a more sophisticated rule-based engine.
+        lower_text = text_to_classify.lower()
+        classified_intent = "unknown"
 
-        # Construct the result payload for downstream nodes
-        result = {
-            "intent": detected_intent,
-            "confidence": confidence,
-            "original_query": data,
-            "context_passthrough": context  # Ensure context is preserved and passed along
-        }
-        return result
+        if any(keyword in lower_text for keyword in ["balance", "account status", "my money"]):
+            classified_intent = "check_balance"
+        elif any(keyword in lower_text for keyword in ["transfer", "send money", "move funds"]):
+            classified_intent = "transfer_funds"
+        elif any(keyword in lower_text for keyword in ["pay bill", "utility payment", "invoice"]):
+            classified_intent = "pay_bill"
+        elif any(keyword in lower_text for keyword in ["help", "support", "contact us", "assistance"]):
+            classified_intent = "get_support"
+        elif "order" in lower_text and any(keyword in lower_text for keyword in ["status", "track", "where is"]):
+            classified_intent = "check_order_status"
+        elif any(keyword in lower_text for keyword in ["cancel", "unsubscribe", "stop service"]):
+            classified_intent = "cancel_service"
+        elif any(keyword in lower_text for keyword in ["settings", "preferences", "update profile"]):
+            classified_intent = "manage_settings"
+        elif any(keyword in lower_text for keyword in ["hello", "hi", "hey"]):
+            classified_intent = "greeting"
+
+        # Create a new dictionary to avoid modifying the input `data` directly
+        # for immutability, though deep copying might be overkill here.
+        result_data = {**data, "intent": classified_intent}
+        logger.info(f"[{self.node_name}] Classified intent for text '{text_to_classify[:70]}{'...' if len(text_to_classify) > 70 else ''}' as: '{classified_intent}'")
+        return result_data
