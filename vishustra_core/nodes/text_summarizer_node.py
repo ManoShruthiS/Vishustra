@@ -1,165 +1,96 @@
 import logging
+import re
 from typing import Any, Dict
+
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class TextSummarizerNode(BaseNode):
     """
-    A processing node that simulates text summarization.
+    A Vishustra processing node responsible for generating a concise summary
+    of input text data.
 
-    This node takes a string as input data and returns a summarized version.
-    The summarization logic is simulated and configurable via the 'context' dictionary,
-    allowing control over the length and percentage of the original text.
-
-    Configuration parameters in 'context':
-    - 'summary_percentage' (float): The desired percentage of the original text's
-      word count for the summary (e.g., 0.3 for 30%). Must be between 0.0 and 1.0.
-      Defaults to 0.3.
-    - 'min_words' (int): The minimum number of words the summary should contain.
-      Defaults to 50.
-    - 'max_words' (int): The maximum number of words the summary should contain.
-      Defaults to 200.
+    This node simulates summarization by extracting a configurable number of
+    leading sentences from the input, providing a basic but effective
+    text condensation mechanism. Future enhancements could integrate
+    actual LLM-based summarization models.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "TextSummarizer"
-
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data by simulating text summarization.
+        Returns the unique name of this summarizer node.
+        """
+        return "TextSummarizerNode"
 
-        This simulation extracts a portion of the original text based on
-        configured parameters.
+    def process(self, data: Any, context: Dict[str, Any]) -> str:
+        """
+        Processes the input data, extracting a summary based on the provided
+        configuration in the context.
 
         Args:
-            data (Any): The input data, expected to be a string containing the text
-                        to be summarized.
+            data (Any): The input text to be summarized. Expected to be a string.
             context (Dict[str, Any]): A dictionary containing node-specific
-                                      configuration and runtime context.
-                                      Expected keys:
-                                      - 'summary_percentage' (float, optional): Percentage of original
-                                        word count for summary. Defaults to 0.3. Must be > 0 and <= 1.
-                                      - 'min_words' (int, optional): Minimum words in summary. Defaults to 50.
-                                        Must be a non-negative integer.
-                                      - 'max_words' (int, optional): Maximum words in summary. Defaults to 200.
-                                        Must be a positive integer.
-
-        Returns:
-            Any: A string representing the summarized text. An ellipsis "..." is
-                 appended if the text was actually truncated.
+                                       configuration and shared workflow state.
+                                       Expected keys:
+                                       - 'max_sentences' (int, optional): The maximum
+                                         number of leading sentences to include in the summary.
+                                         Defaults to 3 if not provided or invalid.
 
         Raises:
-            TypeError: If the input data is not a string.
-            ValueError: If context parameters for 'min_words' and 'max_words' are
-                        invalid (e.g., max_words < min_words).
+            ValueError: If the input `data` is not a string.
+
+        Returns:
+            str: The summarized text, potentially truncated and appended with
+                 an ellipsis if the original text was longer.
         """
         if not isinstance(data, str):
             logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected 'str', "
-                f"but received '{type(data).__name__}'. Aborting process."
+                f"[{self.node_name}] Invalid input type. Expected 'str', "
+                f"received '{type(data).__name__}'."
             )
-            raise TypeError(
-                f"Input data for '{self.node_name}' must be a string, "
-                f"but received {type(data).__name__}."
-            )
+            raise ValueError(f"Input data for {self.node_name} must be a string.")
 
-        stripped_data = data.strip()
-        if not stripped_data:
-            logger.warning(
-                f"[{self.node_name}] Received empty or whitespace-only text for summarization. "
-                f"Returning an empty string."
-            )
+        original_text = data.strip()
+        if not original_text:
+            logger.warning(f"[{self.node_name}] Received empty or whitespace-only text for summarization. Returning empty string.")
             return ""
 
-        # --- Retrieve and validate context parameters with robust defaults ---
-        summary_percentage = context.get('summary_percentage', 0.3)
-        min_words = context.get('min_words', 50)
-        max_words = context.get('max_words', 200)
+        original_length = len(original_text)
+        logger.debug(f"[{self.node_name}] Initiating summarization for text of length {original_length} characters.")
 
-        if not (isinstance(summary_percentage, (float, int)) and 0.0 < summary_percentage <= 1.0):
+        # Determine the maximum number of sentences for the summary
+        max_sentences = context.get('max_sentences', 3)
+        if not isinstance(max_sentences, int) or max_sentences <= 0:
             logger.warning(
-                f"[{self.node_name}] Invalid 'summary_percentage' in context. "
-                f"Expected a float between (0.0, 1.0], received {summary_percentage}. "
-                f"Defaulting to 0.3."
+                f"[{self.node_name}] Invalid 'max_sentences' value in context: '{max_sentences}'. "
+                "Defaulting to 3 sentences."
             )
-            summary_percentage = 0.3
+            max_sentences = 3
 
-        if not (isinstance(min_words, int) and min_words >= 0):
-            logger.warning(
-                f"[{self.node_name}] Invalid 'min_words' in context. "
-                f"Expected a non-negative integer, received {min_words}. "
-                f"Defaulting to 50."
-            )
-            min_words = 50
+        # A simple regex for sentence tokenization.
+        # This works by splitting at common sentence-ending punctuation
+        # followed by whitespace, but is not robust for all linguistic nuances.
+        sentences = re.split(r'(?<=[.!?])\s+', original_text)
 
-        if not (isinstance(max_words, int) and max_words > 0):
-            logger.warning(
-                f"[{self.node_name}] Invalid 'max_words' in context. "
-                f"Expected a positive integer, received {max_words}. "
-                f"Defaulting to 200."
-            )
-            max_words = 200
+        if not sentences:
+            logger.warning(f"[{self.node_name}] No distinct sentences identified in the input text. Returning original text.")
+            return original_text # If no sentences, return the original text
 
-        if min_words > max_words:
-            logger.error(
-                f"[{self.node_name}] Configuration error: 'min_words' ({min_words}) "
-                f"cannot be greater than 'max_words' ({max_words}). Aborting process."
-            )
-            raise ValueError(
-                f"Invalid context for '{self.node_name}': 'min_words' ({min_words}) "
-                f"must be less than or equal to 'max_words' ({max_words})."
-            )
+        # Select the specified number of leading sentences
+        summary_parts = sentences[:max_sentences]
+        summarized_text = " ".join(summary_parts)
 
-        # --- Simulate summarization by word count truncation ---
-        words = stripped_data.split()
-        original_word_count = len(words)
-
-        if original_word_count == 0:
-            logger.info(f"[{self.node_name}] Input text contained no words after stripping. Returning empty string.")
-            return ""
-
-        # If the original text is already shorter than the minimum, return it as-is.
-        if original_word_count < min_words:
-            logger.info(
-                f"[{self.node_name}] Input text ({original_word_count} words) is shorter "
-                f"than configured 'min_words' ({min_words}). Returning original text."
-            )
-            return stripped_data
-
-        # Calculate target word count based on percentage
-        target_word_count = int(original_word_count * summary_percentage)
-
-        # Clamp the target word count within the defined min_words and max_words
-        effective_word_count = max(min_words, min(max_words, target_word_count))
-
-        # Ensure we don't return more words than originally available unless explicitly required
-        # (though min_words logic already handles returning original if too short).
-        effective_word_count = min(effective_word_count, original_word_count)
-
-        if effective_word_count >= original_word_count:
-            logger.info(
-                f"[{self.node_name}] Calculated summary length ({effective_word_count} words) "
-                f"is longer than or equal to original text ({original_word_count} words). "
-                f"Returning original text without truncation."
-            )
-            return stripped_data
-
-        summarized_words = words[:effective_word_count]
-        summarized_text = " ".join(summarized_words)
-
-        # Append ellipsis if the text was genuinely truncated
-        if effective_word_count < original_word_count:
+        # Append an ellipsis if the text was actually truncated
+        if len(sentences) > max_sentences:
             summarized_text += "..."
-            logger.debug(
-                f"[{self.node_name}] Successfully summarized text from {original_word_count} words "
-                f"to {effective_word_count} words."
-            )
-        else:
-            logger.debug(
-                f"[{self.node_name}] Summarized text has {effective_word_count} words (no actual truncation performed)."
-            )
 
-        return summarized_text.strip()
+        summarized_length = len(summarized_text)
+        logger.info(
+            f"[{self.node_name}] Summarization complete. Original length: {original_length} "
+            f"chars, Summarized length: {summarized_length} chars. "
+            f"Used {min(len(sentences), max_sentences)} of {len(sentences)} sentences."
+        )
+
+        return summarized_text
