@@ -1,19 +1,19 @@
-import re
 import logging
-from typing import Any, Dict, List, Union, Iterable
+import re
+from typing import Any, Dict, List, Optional, Union
 
-# Assuming 'vishustra_core.nodes.base_node' is available in the Python path
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class RegexMatcherNode(BaseNode):
     """
-    A Vishustra node that performs regex matching on input data.
+    A Vishustra processing node that performs regular expression matching
+    on input data.
 
-    This node can process a single string or an iterable of strings,
-    applying a regex pattern provided in the context and returning all
-    non-overlapping matches.
+    This node provides functionality to extract patterns, find the first match,
+    or verify a match at the beginning of the string, configurable through
+    the context dictionary. It supports standard regex flags.
     """
 
     @property
@@ -21,62 +21,106 @@ class RegexMatcherNode(BaseNode):
         """Returns the descriptive name of the node."""
         return "RegexMatcher"
 
-    def process(self, data: Union[str, Iterable[str]], context: Dict[str, Any]) -> Union[List[str], Dict[str, List[str]]]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Union[List[str], Optional[str]]:
         """
-        Processes the input data using a regex pattern from the context.
+        Processes the input data by applying a regular expression pattern.
 
-        The method expects a 'pattern' key in the context dictionary, whose
-        value is the regex string to be applied.
+        The behavior of the regex operation is determined by the 'context' dictionary.
 
         Args:
-            data: The input data, which can be a single string or an iterable
-                  (e.g., list, tuple) of strings.
-            context: A dictionary containing node-specific parameters.
-                     Expected key: 'pattern' (str) - the regex pattern to match.
+            data: The string data to perform regex matching on.
+                  If `data` is not a string, an error is logged, and an empty list or None is returned.
+            context: A dictionary containing configuration for the regex operation:
+                     - 'pattern' (str): The regular expression pattern to use. (Required)
+                       If missing or not a string, an error is logged.
+                     - 'flags' (Union[int, str], optional): Regex flags. Can be an integer
+                       (e.g., `re.IGNORECASE | re.MULTILINE`) or a comma-separated string
+                       of flag names (e.g., "IGNORECASE,DOTALL"). Case-insensitive.
+                       Defaults to 0 (no flags). Unknown string flags are warned and ignored.
+                     - 'match_method' (str, optional): The method to use:
+                       "findall" (default): Returns all non-overlapping matches as a list of strings.
+                       "search": Scans through the string looking for the first location where
+                                 the regex produces a match. Returns the full matched string, or None.
+                       "match": Attempts to match the regex only at the beginning of the string.
+                                Returns the full matched string, or None.
+                       If an invalid method is specified, "findall" is used as a fallback.
 
         Returns:
-            If `data` is a single string, a `List[str]` containing all
-            non-overlapping matches found.
-            If `data` is an iterable of strings, a `Dict[str, List[str]]` where
-            keys are the original input strings and values are lists of their
-            respective matches.
-
-        Raises:
-            ValueError: If the 'pattern' key is missing, empty, or not a string
-                        in the `context`.
-            TypeError: If the input `data` is not a string or an iterable of strings.
-                       Also, if an item within an iterable `data` is not a string.
-            re.error: If the provided regex pattern is syntactically invalid.
+            - If 'match_method' is "findall": A `List[str]` containing all found matches.
+            - If 'match_method' is "search" or "match": An `Optional[str]` representing the
+              full matched string if found, otherwise `None`.
+            - Returns an empty list or `None` and logs an error if input data is invalid,
+              or if the pattern is missing/invalid, preventing node execution.
         """
-        pattern_str = context.get('pattern')
+        # 1. Validate input data type
+        if not isinstance(data, str):
+            logger.error(
+                f"[{self.node_name}] Invalid input data type. Expected 'str', "
+                f"got '{type(data).__name__}'. Returning empty result."
+            )
+            # Return type depends on the expected method for robust type hinting consistency
+            return [] if context.get('match_method', 'findall').lower() == 'findall' else None
 
-        if not isinstance(pattern_str, str) or not pattern_str.strip():
-            logger.error("RegexMatcherNode: 'pattern' must be a non-empty string in the context.")
-            raise ValueError("Missing or invalid 'pattern' in context. A non-empty string is required.")
+        # 2. Extract and validate regex pattern from context
+        pattern_str = context.get("pattern")
+        if not isinstance(pattern_str, str):
+            logger.error(
+                f"[{self.node_name}] Missing or invalid 'pattern' in context. Expected 'str'. "
+                "Returning empty result."
+            )
+            return [] if context.get('match_method', 'findall').lower() == 'findall' else None
 
-        try:
-            # Compile the regex pattern for efficiency, especially with repeated use
-            compiled_pattern = re.compile(pattern_str)
-            logger.debug(f"RegexMatcherNode: Successfully compiled regex pattern: '{pattern_str}'")
-        except re.error as e:
-            logger.error(f"RegexMatcherNode: Invalid regex pattern '{pattern_str}': {e}")
-            raise  # Re-raise the original regex error
-
-        if isinstance(data, str):
-            logger.debug(f"RegexMatcherNode: Applying pattern to single string input.")
-            return compiled_pattern.findall(data)
-        elif isinstance(data, Iterable):
-            results: Dict[str, List[str]] = {}
-            for item in data:
-                if isinstance(item, str):
-                    logger.debug(f"RegexMatcherNode: Applying pattern to iterable item: '{item[:50]}...'")
-                    results[item] = compiled_pattern.findall(item)
+        # 3. Process regex flags
+        flags = 0
+        context_flags = context.get("flags", 0)
+        if isinstance(context_flags, int):
+            flags = context_flags
+        elif isinstance(context_flags, str):
+            flag_map = {
+                "IGNORECASE": re.IGNORECASE, "MULTILINE": re.MULTILINE,
+                "DOTALL": re.DOTALL, "VERBOSE": re.VERBOSE,
+                "ASCII": re.ASCII, "UNICODE": re.UNICODE, "LOCALE": re.LOCALE,
+            }
+            # Support multiple flags via comma-separated string
+            for flag_name in context_flags.upper().split(','):
+                flag_name = flag_name.strip()
+                if flag_name in flag_map:
+                    flags |= flag_map[flag_name]
                 else:
-                    # Log a warning and skip non-string items to be robust
-                    logger.warning(f"RegexMatcherNode: Skipping non-string item in iterable input: type={type(item)}. "
-                                   "Only string elements are processed.")
-            return results
+                    logger.warning(
+                        f"[{self.node_name}] Unknown regex flag '{flag_name}' specified. Ignoring."
+                    )
         else:
-            logger.error(f"RegexMatcherNode: Input data must be a string or an iterable of strings, "
-                         f"but received type: {type(data)}.")
-            raise TypeError("Input data must be a string or an iterable of strings.")
+            logger.warning(
+                f"[{self.node_name}] Invalid 'flags' type in context. Expected 'int' or 'str', "
+                f"got '{type(context_flags).__name__}'. Defaulting to no flags (0)."
+            )
+
+        # 4. Determine matching method
+        match_method = context.get("match_method", "findall").lower()
+
+        # 5. Compile the regex pattern
+        try:
+            compiled_pattern = re.compile(pattern_str, flags)
+        except re.error as e:
+            logger.error(
+                f"[{self.node_name}] Invalid regex pattern '{pattern_str}' with flags {flags}: {e}. "
+                "Returning empty result."
+            )
+            return [] if match_method == 'findall' else None
+
+        # 6. Execute the specified matching method
+        if match_method == "findall":
+            return compiled_pattern.findall(data)
+        elif match_method == "search":
+            match_obj = compiled_pattern.search(data)
+            return match_obj.group(0) if match_obj else None
+        elif match_method == "match":
+            match_obj = compiled_pattern.match(data)
+            return match_obj.group(0) if match_obj else None
+        else:
+            logger.error(
+                f"[{self.node_name}] Invalid 'match_method' specified: '{match_method}'. "
+                "Supported methods are 'findall', 'search', 'match'. Falling back to 'findall'."
+            )
+            return compiled_pattern.findall(data) # Fallback to default
