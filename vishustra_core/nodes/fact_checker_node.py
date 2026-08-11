@@ -1,30 +1,18 @@
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List, Union
 
-# Assuming BaseNode is located in this path relative to the project root
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class FactCheckerNode(BaseNode):
     """
-    A processing node that simulates fact-checking an input statement
-    against a predefined set of known facts.
+    A Vishustra processing node that simulates fact-checking of textual data.
 
-    The node expects the input `data` to be a string representing the
-    statement to be checked. It returns a dictionary detailing the
-    verification status.
+    This node takes a piece of text (or a dictionary containing text) and
+    attempts to determine its veracity based on simulated rules, marking it
+    as verified, unverified, or requiring further review.
     """
-
-    _known_facts: Dict[str, bool] = {
-        "The Earth revolves around the Sun.": True,
-        "Water boils at 100 degrees Celsius at sea level.": True,
-        "Birds are mammals.": False,
-        "The moon is a satellite of Earth.": True,
-        "Humans can breathe underwater unaided.": False,
-        "The capital of France is Paris.": True,
-        "The sky is green.": False,
-    }
 
     @property
     def node_name(self) -> str:
@@ -33,108 +21,118 @@ class FactCheckerNode(BaseNode):
 
     def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input data by attempting to verify it as a fact.
+        Processes the input data to simulate fact-checking.
 
-        Args:
-            data: The statement to be fact-checked (expected as a string).
-            context: A dictionary containing contextual information
-                     (e.g., session ID, user info). Not directly used for
-                     fact-checking logic in this simulated implementation
-                     but available for potential extensions like external API calls.
+        The input `data` can be:
+        1. A string: The text directly to be fact-checked.
+        2. A dictionary: Expected to contain a 'text' key with the content
+           to be fact-checked. Other keys are ignored but passed through.
 
-        Returns:
-            A dictionary containing:
-            - "original_statement": The input statement.
-            - "is_fact_checked": True if the statement was processed, False on error.
-            - "verification_status": "TRUE", "FALSE", or "UNVERIFIED".
-            - "details": A brief explanation of the outcome.
+        The `context` dictionary can optionally contain specific fact-checking
+        rules or known assertions, though for this simulation, it's not strictly
+        required.
 
-        Raises:
-            TypeError: If the input `data` is not a string.
-            ValueError: If the input `data` is an empty string.
+        Returns a dictionary containing:
+        - 'original_input': The input data received.
+        - 'text_checked': The extracted text that was checked.
+        - 'is_verified': A boolean (True/False) indicating the verification
+                         status, or None if indeterminate.
+        - 'verification_status': A string describing the status (e.g.,
+                                 "VERIFIED", "UNVERIFIED", "UNCHECKABLE",
+                                 "REQUIRES_REVIEW").
+        - 'issues_found': A list of strings detailing any reasons for
+                          unverification or flags.
+        - 'sources_consulted': A list of mock sources for this simulation.
         """
+        original_input = data
+        text_to_check: str = ""
         result: Dict[str, Any] = {
-            "original_statement": data,
-            "is_fact_checked": False,
-            "verification_status": "ERROR",
-            "details": "An unexpected error occurred."
+            "original_input": original_input,
+            "text_checked": "",
+            "is_verified": None,
+            "verification_status": "UNCHECKABLE",
+            "issues_found": [],
+            "sources_consulted": ["Vishustra Internal Knowledge Base v1.0"]
         }
 
-        if not isinstance(data, str):
-            logger.error(
-                f"[{self.node_name}] Invalid input type. Expected 'str', got '{type(data).__name__}'."
-            )
-            result["details"] = f"Input data must be a string, but received {type(data).__name__}."
-            raise TypeError(result["details"])
-
-        statement = data.strip()
-        result["original_statement"] = statement # Update if stripped
-
-        if not statement:
+        # --- Input Data Extraction and Validation ---
+        if isinstance(data, str):
+            text_to_check = data
+            result["text_checked"] = text_to_check
+        elif isinstance(data, dict):
+            if "text" in data and isinstance(data["text"], str):
+                text_to_check = data["text"]
+                result["text_checked"] = text_to_check
+            else:
+                logger.warning(
+                    f"[{self.node_name}] Input dictionary missing 'text' key "
+                    f"or 'text' key is not a string. Data: {data}"
+                )
+                result["issues_found"].append("Input dictionary missing 'text' key or 'text' value is not a string.")
+                return result
+        else:
             logger.warning(
-                f"[{self.node_name}] Received an empty statement for fact-checking."
+                f"[{self.node_name}] Invalid input type received. Expected "
+                f"str or dict, got {type(data).__name__}. Data: {data}"
             )
-            result["is_fact_checked"] = True
-            result["verification_status"] = "UNVERIFIED"
-            result["details"] = "The provided statement was empty."
+            result["issues_found"].append(f"Invalid input type: Expected str or dict, got {type(data).__name__}.")
             return result
 
-        logger.info(
-            f"[{self.node_name}] Attempting to fact-check statement: '{statement}'"
-        )
+        if not text_to_check.strip():
+            logger.info(f"[{self.node_name}] Received empty or whitespace-only text for checking.")
+            result["verification_status"] = "REQUIRES_REVIEW"
+            result["issues_found"].append("Text to check was empty or whitespace-only.")
+            return result
 
-        found_fact = False
-        for fact, truth_value in self._known_facts.items():
-            if statement.lower() == fact.lower(): # Case-insensitive comparison
-                result["is_fact_checked"] = True
-                result["verification_status"] = "TRUE" if truth_value else "FALSE"
-                result["details"] = f"Statement found in known facts: It is {'true' if truth_value else 'false'}."
-                found_fact = True
-                logger.info(
-                    f"[{self.node_name}] Statement '{statement}' verified as '{result['verification_status']}'."
-                )
-                break
+        # --- Simulated Fact-Checking Logic ---
+        text_lower = text_to_check.lower()
+        issues: List[str] = []
+        is_verified_status: Union[bool, None] = None
 
-        if not found_fact:
-            result["is_fact_checked"] = True
+        # Define some simulated flags for demonstration purposes
+        red_flags = [
+            ("false claim", "Contains a phrase indicative of a false claim."),
+            ("unverified rumor", "Identified as an unverified rumor."),
+            ("misinformation", "Suggests presence of misinformation."),
+            ("not peer-reviewed", "Explicitly states lack of peer review."),
+            ("conspiracy theory", "Phrase common in conspiracy theories."),
+        ]
+        green_flags = [
+            ("scientifically proven", "Claim explicitly states scientific proof."),
+            ("established fact", "Identified as an established fact."),
+            ("official statement", "References an official statement."),
+            ("peer-reviewed study", "References a peer-reviewed study."),
+        ]
+
+        # Check for red flags
+        for flag_phrase, description in red_flags:
+            if flag_phrase in text_lower:
+                issues.append(f"Detected red flag: '{flag_phrase}' - {description}")
+                # For this simulation, any red flag immediately marks as unverified
+                is_verified_status = False
+
+        # Check for green flags if not already marked as unverified
+        if is_verified_status is not False: # Only proceed if not already definitively False
+            for flag_phrase, description in green_flags:
+                if flag_phrase in text_lower:
+                    issues.append(f"Detected green flag: '{flag_phrase}' - {description}")
+                    # A green flag indicates verification
+                    is_verified_status = True
+
+        # Determine final status if not set by flags
+        if is_verified_status is None:
+            # If no explicit flags, default to requiring review, as we can't definitively verify or unverify
+            result["verification_status"] = "REQUIRES_REVIEW"
+            issues.append("No explicit verification or unverification flags detected. Requires manual review.")
+            logger.info(f"[{self.node_name}] Text requires review: '{text_to_check[:50]}...'")
+        elif is_verified_status is True:
+            result["verification_status"] = "VERIFIED"
+            logger.info(f"[{self.node_name}] Text VERIFIED: '{text_to_check[:50]}...'")
+        else: # is_verified_status is False
             result["verification_status"] = "UNVERIFIED"
-            result["details"] = "Statement not found in the current known facts database."
-            logger.warning(
-                f"[{self.node_name}] Statement '{statement}' could not be verified against known facts."
-            )
+            logger.warning(f"[{self.node_name}] Text UNVERIFIED: '{text_to_check[:50]}...'")
+
+        result["is_verified"] = is_verified_status
+        result["issues_found"].extend(issues)
 
         return result
-
-if __name__ == '__main__':
-    # Basic usage example for demonstration and testing purposes
-    logging.basicConfig(level=logging.INFO)
-    logger.setLevel(logging.DEBUG) # Set higher for testing outputs
-
-    fact_checker = FactCheckerNode()
-    mock_context: Dict[str, Any] = {"session_id": "test-123", "user_id": "anon"}
-
-    # Test cases
-    test_statements = [
-        "The Earth revolves around the Sun.",
-        "birds are mammals.", # Case-insensitive test
-        "The moon is a satellite of Earth.",
-        "The sky is green.",
-        "Python is the best programming language.", # Unknown fact
-        "", # Empty string
-        123, # Invalid type
-        " The Capital of france is paris. ", # With leading/trailing spaces
-    ]
-
-    print(f"\n--- Running {fact_checker.node_name} tests ---")
-    for stmt in test_statements:
-        try:
-            output = fact_checker.process(stmt, mock_context)
-            print(f"\nInput: '{stmt}'")
-            print(f"Output: {output}")
-        except (TypeError, ValueError) as e:
-            print(f"\nInput: '{stmt}'")
-            print(f"Error: {e}")
-        except Exception as e:
-            print(f"\nInput: '{stmt}'")
-            print(f"Unexpected Error: {e}")
-    print("\n--- Tests finished ---")
