@@ -2,112 +2,120 @@ import logging
 import re
 from typing import Any, Dict, List, Set
 
-# Assuming BaseNode is available at this path as per project context
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class KeywordExtractorNode(BaseNode):
     """
-    A Vishustra processing node that extracts keywords from a given text.
+    A processing node that extracts keywords from a given text.
 
-    This node tokenizes the input text, converts words to lowercase, filters
-    out common stop words and words shorter than a specified minimum length,
-    and returns a unique list of identified keywords.
+    This node tokenizes the input text, filters out common stopwords and short words,
+    and then ranks the remaining words by frequency to identify potential keywords.
+    The number of keywords and minimum word length can be configured via the context.
     """
 
-    def __init__(self, min_word_length: int = 4, stop_words: Set[str] = None):
+    def __init__(self):
         """
-        Initializes the KeywordExtractorNode.
-
-        Args:
-            min_word_length (int): The minimum length a word must have to be considered a keyword.
-            stop_words (Set[str], optional): A set of words to be excluded from keywords.
-                                              Defaults to a common English stop word set if None.
+        Initializes the KeywordExtractorNode with a default set of stopwords.
         """
-        if not isinstance(min_word_length, int) or min_word_length < 1:
-            raise ValueError("min_word_length must be a positive integer.")
-        if stop_words is not None and not isinstance(stop_words, set):
-            raise TypeError("stop_words must be a set of strings or None.")
+        super().__init__()
+        self._stopwords: Set[str] = self._get_default_stopwords()
+        logger.debug("KeywordExtractorNode initialized with default stopwords.")
 
-        self._min_word_length = min_word_length
-        self._stop_words = stop_words if stop_words is not None else self._default_stop_words()
-        logger.debug(
-            f"KeywordExtractorNode initialized with min_word_length={self._min_word_length} "
-            f"and {len(self._stop_words)} stop words."
-        )
-
-    def _default_stop_words(self) -> Set[str]:
-        """Provides a default set of common English stop words."""
-        # This set can be expanded or made configurable via external data in a real application
+    def _get_default_stopwords(self) -> Set[str]:
+        """
+        Provides a basic, English set of stopwords. In a production system, this
+        might be loaded from a more comprehensive source or be configurable.
+        """
         return {
-            "a", "an", "the", "and", "or", "but", "if", "then", "else", "when",
-            "at", "by", "for", "with", "about", "above", "below", "to", "from",
-            "up", "down", "in", "out", "on", "off", "over", "under", "again",
-            "further", "once", "here", "there", "where", "why", "how",
-            "all", "any", "both", "each", "few", "more", "most", "other", "some",
-            "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too",
-            "very", "s", "t", "can", "will", "just", "don", "should", "now",
-            "is", "am", "are", "was", "were", "be", "been", "being", "have",
-            "has", "had", "having", "do", "does", "did", "doing", "would",
-            "could", "shall", "may", "might", "must", "it", "its", "me", "my",
-            "myself", "he", "him", "his", "himself", "she", "her", "hers",
-            "herself", "we", "us", "our", "ours", "ourselves", "you", "your",
-            "yours", "yourself", "yourselves", "this", "that", "these", "those",
-            "i", "what", "which", "who", "whom", "of", "also", "into", "through",
-            "during", "before", "after", "above", "below", "between", "among",
-            "while", "as", "much", "many", "even", "much", "very", "can", "will",
-            "said", "say", "says", "like"
+            "a", "an", "the", "is", "are", "and", "or", "in", "on", "at", "for", "with", "to", "of",
+            "it", "that", "this", "but", "by", "from", "as", "he", "she", "it", "they", "we", "you",
+            "i", "me", "him", "her", "us", "them", "my", "your", "our", "their", "itself", "himself",
+            "herself", "myself", "yourself", "ourselves", "themselves", "be", "been", "being",
+            "have", "has", "had", "do", "does", "did", "not", "no", "yes", "can", "could", "would",
+            "shall", "will", "may", "might", "must", "if", "then", "else", "when", "where", "why",
+            "how", "what", "who", "whom", "whose", "which", "there", "here", "over", "under", "again",
+            "further", "once", "all", "any", "both", "each", "few", "more", "most", "other", "some",
+            "such", "nor", "only", "own", "same", "so", "than", "too", "very", "s", "t", "just",
+            "don", "should", "now", "ve", "ll", "re", "m", "o", "d", "won", "didn", "doesn", "hadn",
+            "hasn", "haven", "isn", "wasn", "weren", "wouldn", "couldn", "shouldn"
         }
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "KeywordExtractor"
+        """
+        Returns the descriptive name of this node.
+        """
+        return "Keyword Extractor"
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Extracts keywords from the input text data.
+        Processes the input data (expected to be a string) to extract keywords.
 
-        The input `data` is expected to be a string. It is tokenized,
-        converted to lowercase, and filtered based on minimum word length
-        and a configurable set of stop words.
+        The extraction logic includes:
+        1. Lowercasing the input text.
+        2. Tokenizing the text into individual words.
+        3. Filtering out words shorter than `min_word_length` (default: 3).
+        4. Removing common stopwords.
+        5. Counting the frequency of the remaining words.
+        6. Returning the `num_keywords` most frequent words (default: 5).
+
+        Configuration can be provided in the `context` dictionary:
+        - `num_keywords`: int, the maximum number of keywords to return. Defaults to 5.
+        - `min_word_length`: int, the minimum length for a word to be considered a keyword. Defaults to 3.
 
         Args:
-            data (Any): The input data, expected to be a string containing text.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                       for the processing (not used by this node, but required
-                                       by the BaseNode interface).
+            data (Any): The input data, expected to be a string (text).
+            context (Dict[str, Any]): A dictionary containing runtime configuration
+                                       and state for the current processing pipeline.
 
         Returns:
-            List[str]: A sorted list of unique keywords extracted from the text,
-                       converted to lowercase. An empty list is returned if no
-                       keywords are found or if the input text is empty.
+            List[str]: A list of extracted keywords, sorted by frequency (descending)
+                       and then alphabetically (ascending) for ties.
 
         Raises:
-            TypeError: If the input data is not a string.
+            TypeError: If the input `data` is not a string.
         """
         if not isinstance(data, str):
-            logger.error(f"Invalid input type for KeywordExtractorNode. Expected 'str', got '{type(data).__name__}'.")
-            raise TypeError(f"KeywordExtractorNode requires string input, but received {type(data).__name__}.")
+            logger.error(
+                f"Invalid input type for KeywordExtractorNode. "
+                f"Expected 'str', but received '{type(data).__name__}'."
+            )
+            raise TypeError("KeywordExtractorNode expects string data for processing.")
 
-        text = data.strip()
-        if not text:
-            logger.warning("KeywordExtractorNode received an empty string for processing, returning empty list.")
-            return []
+        text = data.lower()
 
-        logger.info(f"Starting keyword extraction for input of length {len(text)}.")
+        # Retrieve configuration from context with default values
+        num_keywords: int = context.get("num_keywords", 5)
+        min_word_length: int = context.get("min_word_length", 3)
 
-        # Tokenize words using a regex that handles alphanumeric characters,
-        # and allows internal apostrophes or hyphens (e.g., "AI-driven", "don't").
-        # Converts to lowercase directly.
-        words = re.findall(r'\b[a-z0-9](?:[a-z0-9\'-]*[a-z0-9])?\b', text.lower())
+        logger.info(
+            f"Starting keyword extraction with: num_keywords={num_keywords}, "
+            f"min_word_length={min_word_length}."
+        )
 
-        keywords_set = set()
+        # Basic tokenization: find all sequences of word characters
+        words = re.findall(r'\b\w+\b', text)
+
+        filtered_words: List[str] = []
         for word in words:
-            if word not in self._stop_words and len(word) >= self._min_word_length:
-                keywords_set.add(word)
+            if len(word) >= min_word_length and word not in self._stopwords:
+                filtered_words.append(word)
 
-        result = sorted(list(keywords_set))
-        logger.info(f"Finished keyword extraction. Found {len(result)} unique keywords.")
-        return result
+        # Count word frequencies
+        word_counts: Dict[str, int] = {}
+        for word in filtered_words:
+            word_counts[word] = word_counts.get(word, 0) + 1
+
+        # Sort keywords by frequency (descending) and then alphabetically (ascending) for ties
+        sorted_keywords = sorted(
+            word_counts.items(),
+            key=lambda item: (-item[1], item[0])
+        )
+
+        # Extract the top N keywords
+        keywords: List[str] = [word for word, count in sorted_keywords[:num_keywords]]
+
+        logger.info(f"Successfully extracted {len(keywords)} keywords.")
+        return keywords
