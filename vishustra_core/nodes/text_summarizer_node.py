@@ -8,89 +8,81 @@ logger = logging.getLogger(__name__)
 
 class TextSummarizerNode(BaseNode):
     """
-    A Vishustra processing node responsible for generating a concise summary
-    of input text data.
-
-    This node simulates summarization by extracting a configurable number of
-    leading sentences from the input, providing a basic but effective
-    text condensation mechanism. Future enhancements could integrate
-    actual LLM-based summarization models.
+    A processing node that simulates text summarization.
+    It condenses input text based on a specified ratio or a default.
     """
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the unique name of this summarizer node.
-        """
-        return "TextSummarizerNode"
+        """Returns the name of the node."""
+        return "TextSummarizer"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> str:
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, extracting a summary based on the provided
-        configuration in the context.
+        Processes the input text to generate a summary.
+
+        Expects `data` to be a string.
+        Context can optionally contain `summary_ratio` (float between 0.0 and 1.0)
+        to control the length of the summary. If not provided, a default ratio
+        of 0.3 (30% of original length) is used.
 
         Args:
-            data (Any): The input text to be summarized. Expected to be a string.
-            context (Dict[str, Any]): A dictionary containing node-specific
-                                       configuration and shared workflow state.
-                                       Expected keys:
-                                       - 'max_sentences' (int, optional): The maximum
-                                         number of leading sentences to include in the summary.
-                                         Defaults to 3 if not provided or invalid.
-
-        Raises:
-            ValueError: If the input `data` is not a string.
+            data: The input text string to be summarized.
+            context: A dictionary containing operational context, potentially
+                     including 'summary_ratio'.
 
         Returns:
-            str: The summarized text, potentially truncated and appended with
-                 an ellipsis if the original text was longer.
+            A string representing the summarized text.
+
+        Raises:
+            TypeError: If the input data is not a string.
+            ValueError: If 'summary_ratio' in context is not a valid float
+                        between 0.0 and 1.0.
         """
         if not isinstance(data, str):
-            logger.error(
-                f"[{self.node_name}] Invalid input type. Expected 'str', "
-                f"received '{type(data).__name__}'."
-            )
-            raise ValueError(f"Input data for {self.node_name} must be a string.")
+            error_msg = f"Invalid input data type for TextSummarizerNode. Expected str, got {type(data).__name__}."
+            logger.error(error_msg)
+            raise TypeError(error_msg)
 
-        original_text = data.strip()
-        if not original_text:
-            logger.warning(f"[{self.node_name}] Received empty or whitespace-only text for summarization. Returning empty string.")
+        text = data.strip()
+        if not text:
+            logger.info("Received empty string for summarization, returning empty string.")
             return ""
 
-        original_length = len(original_text)
-        logger.debug(f"[{self.node_name}] Initiating summarization for text of length {original_length} characters.")
+        summary_ratio = context.get("summary_ratio")
+        default_summary_ratio = 0.3  # Default to 30% summary
 
-        # Determine the maximum number of sentences for the summary
-        max_sentences = context.get('max_sentences', 3)
-        if not isinstance(max_sentences, int) or max_sentences <= 0:
-            logger.warning(
-                f"[{self.node_name}] Invalid 'max_sentences' value in context: '{max_sentences}'. "
-                "Defaulting to 3 sentences."
+        if summary_ratio is None:
+            summary_ratio = default_summary_ratio
+            logger.debug(f"No 'summary_ratio' provided in context. Using default: {summary_ratio:.2f}.")
+        elif not isinstance(summary_ratio, (int, float)) or not (0.0 <= summary_ratio <= 1.0):
+            error_msg = (
+                f"Invalid 'summary_ratio' in context for TextSummarizerNode. "
+                f"Expected a float between 0.0 and 1.0, got {summary_ratio} (type: {type(summary_ratio).__name__})."
             )
-            max_sentences = 3
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        else:
+            logger.debug(f"Using 'summary_ratio' from context: {summary_ratio:.2f}.")
 
-        # A simple regex for sentence tokenization.
-        # This works by splitting at common sentence-ending punctuation
-        # followed by whitespace, but is not robust for all linguistic nuances.
-        sentences = re.split(r'(?<=[.!?])\s+', original_text)
+        # A simple simulation: split text into sentences and take a percentage.
+        # This is a heuristic approximation for demonstration purposes.
+        # Real-world summarization would involve NLP models.
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        if not sentences or (len(sentences) == 1 and not sentences[0]):
+            logger.info("Text contains no discernible sentences, returning original text.")
+            return text
 
-        if not sentences:
-            logger.warning(f"[{self.node_name}] No distinct sentences identified in the input text. Returning original text.")
-            return original_text # If no sentences, return the original text
+        num_sentences_to_keep = max(1, int(len(sentences) * summary_ratio))
+        
+        # Ensure we don't try to get more sentences than available
+        summarized_sentences = sentences[:min(num_sentences_to_keep, len(sentences))]
+        
+        summary = " ".join(summarized_sentences).strip()
 
-        # Select the specified number of leading sentences
-        summary_parts = sentences[:max_sentences]
-        summarized_text = " ".join(summary_parts)
-
-        # Append an ellipsis if the text was actually truncated
-        if len(sentences) > max_sentences:
-            summarized_text += "..."
-
-        summarized_length = len(summarized_text)
         logger.info(
-            f"[{self.node_name}] Summarization complete. Original length: {original_length} "
-            f"chars, Summarized length: {summarized_length} chars. "
-            f"Used {min(len(sentences), max_sentences)} of {len(sentences)} sentences."
+            f"Successfully summarized text (original sentences: {len(sentences)}, "
+            f"summary sentences: {len(summarized_sentences)}, ratio: {summary_ratio:.2f})."
         )
+        return summary
 
-        return summarized_text
