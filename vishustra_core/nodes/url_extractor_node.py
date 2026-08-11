@@ -1,99 +1,85 @@
 import logging
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 
+# BaseNode is expected to be in this path based on the project context.
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class URLExtractorNode(BaseNode):
     """
-    A processing node designed to extract URLs from text data.
+    A processing node designed to extract URLs from textual content.
 
-    This node leverages a robust regular expression to identify common URL patterns,
-    including those starting with 'http://', 'https://', and 'www.'. It can process
-    either a single string or a list of strings, providing a list of all discovered URLs.
-    Non-string elements within a list input are gracefully skipped with a warning.
+    This node expects a string as input. It utilizes a regular expression
+    to identify and return a list of unique URLs. The extraction mechanism
+    is robust enough to capture common URL formats, including those prefixed
+    with 'http://', 'https://', and 'www.', and properly handles various
+    URL-valid characters in the path, query, and fragment.
     """
-
-    # A comprehensive regex pattern to capture various URL formats.
-    # It accounts for schemes (http/https), optional 'www.', domain names,
-    # port numbers, paths, query parameters, and fragments.
-    # This pattern is designed to be largely compliant with RFC 3986 (URI Generic Syntax)
-    # and common web practices, while also being practical for text extraction.
-    _URL_PATTERN = re.compile(
-        r'(?:https?://|www\.)'  # Scheme or 'www.' prefix
-        r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+'  # Domain name and subdomains
-        r'[a-zA-Z]{2,6}'  # TLD (e.g., .com, .org, .co.uk)
-        r'(?::\d{2,5})?'  # Optional port number
-        r'(?:/?|[/?]\S+)'  # Optional path, query, or fragment
-    )
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """
+        Returns the descriptive name of the node.
+        """
         return "URL Extractor"
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Processes the input data to identify and extract URLs.
-
-        The node expects input data to be either a string or a list of strings.
-        If a list is provided, each string element within the list will be processed.
-        Non-string elements in a list are logged as warnings and skipped.
-        Unsupported data types for the main input 'data' will also trigger a warning
-        and result in an empty list being returned.
+        Processes the input data to extract URLs.
 
         Args:
-            data: The input content to be scanned for URLs. Expected types are `str`
-                  or `list[str]`.
-            context: A dictionary providing contextual information for the processing
-                     (not utilized by this specific node).
+            data: The input data, expected to be a string.
+            context: A dictionary containing contextual information
+                     (not directly used by this node but part of the BaseNode interface).
 
         Returns:
-            A `list[str]` containing all unique URLs found in the input data.
-            Returns an empty list if no URLs are found or if the input data
-            type is not supported.
-        """
-        found_urls: List[str] = []
+            A list of unique URLs found in the input text. Returns an empty list
+            if no URLs are found.
 
-        if isinstance(data, str):
-            found_urls.extend(self._extract_from_text(data))
-        elif isinstance(data, list):
-            for item in data:
-                if isinstance(item, str):
-                    found_urls.extend(self._extract_from_text(item))
-                else:
-                    logger.warning(
-                        f"URLExtractorNode received a non-string item ({type(item).__name__}) "
-                        "in the input list. Skipping this item for URL extraction."
-                    )
-        else:
-            logger.warning(
-                f"URLExtractorNode received unsupported data type: {type(data).__name__}. "
-                "Expected `str` or `list[str]`. Returning an empty list."
+        Raises:
+            TypeError: If the input 'data' is not a string.
+        """
+        if not isinstance(data, str):
+            error_msg = (
+                f"URLExtractorNode received invalid input type. "
+                f"Expected 'str', but got '{type(data).__name__}'."
             )
+            logger.error(error_msg)
+            raise TypeError(error_msg)
 
-        # Ensure uniqueness of URLs while preserving their original order of discovery.
-        # This can be achieved by converting to a set and back to a list, or using
-        # a dictionary to maintain insertion order if Python 3.7+ is guaranteed.
-        unique_urls = list(dict.fromkeys(found_urls))
+        # A robust regex pattern to find URLs.
+        # It matches 'http://', 'https://', or 'www.'
+        # followed by a sequence of characters commonly found in URLs,
+        # including alphanumeric, various punctuation, and URL-encoded characters.
+        # The use of word boundaries `\b` helps prevent partial matches and
+        # handles common trailing punctuation from sentences.
+        url_pattern = re.compile(
+            r'\b'  # Word boundary at the start
+            r'(?:https?://|www\.)'  # Match 'http://', 'https://', or 'www.' prefix
+            r'(?:'                  # Start non-capturing group for URL body characters
+            r'[a-zA-Z0-9$-_@.&+]|'  # Common URL-safe characters
+            r'[!*\(\),]|'           # Additional punctuation allowed in URLs
+            r'%[0-9a-fA-F]{2}'      # URL-encoded characters (e.g., %20 for space)
+            r')+'                   # Match one or more of the above URL body characters
+            r'\b'  # Word boundary at the end
+        )
 
-        if not unique_urls:
-            logger.debug("No URLs were found in the provided data by URLExtractorNode.")
+        extracted_urls: Set[str] = set()
+        try:
+            found_urls = url_pattern.findall(data)
+            for url in found_urls:
+                extracted_urls.add(url)
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during URL extraction: {e}", exc_info=True)
+            # In case of a regex engine error, we return an empty list gracefully
+            return []
+
+        if extracted_urls:
+            logger.info(f"Successfully extracted {len(extracted_urls)} unique URLs.")
         else:
-            logger.debug(f"Successfully extracted {len(unique_urls)} unique URL(s).")
+            logger.info("No URLs found in the provided text data.")
 
-        return unique_urls
-
-    def _extract_from_text(self, text: str) -> List[str]:
-        """
-        Helper method to find all occurrences of the URL pattern in a given text string.
-
-        Args:
-            text: The string from which to extract URLs.
-
-        Returns:
-            A list of strings, where each string is a discovered URL.
-        """
-        return self._URL_PATTERN.findall(text)
+        # Convert the set of unique URLs to a sorted list for consistent, deterministic output.
+        return sorted(list(extracted_urls))
