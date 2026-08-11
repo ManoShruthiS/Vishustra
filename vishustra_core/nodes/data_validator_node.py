@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Any, Dict, List, Callable, Union
+from typing import Any, Dict, List, Union
 
 from vishustra_core.nodes.base_node import BaseNode
 
@@ -8,186 +8,212 @@ logger = logging.getLogger(__name__)
 
 class DataValidatorNode(BaseNode):
     """
-    A processing node that validates input data against a defined schema.
+    A Vishustra processing node that validates input data against a set of
+    predefined rules specified in the orchestration context.
 
-    This node is crucial for ensuring data quality and consistency within the
-    orchestration framework. It allows for specification of expected types,
-    string lengths, numeric ranges, regex patterns, and more for various fields.
+    This node is crucial for ensuring data quality and integrity at various
+    stages of an LLM pipeline, preventing malformed or invalid data from
+    propagating downstream.
     """
-
-    def __init__(self, validation_schema: Dict[str, Dict[str, Any]]):
-        """
-        Initializes the DataValidatorNode with a validation schema.
-
-        The validation_schema is a dictionary where keys are expected data fields
-        and values are dictionaries defining validation rules for that field.
-
-        Example schema structure:
-        {
-            "user_id": {"type": int, "min_value": 1},
-            "username": {"type": str, "min_length": 3, "max_length": 50},
-            "email": {"type": str, "regex": r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"},
-            "is_active": {"type": bool, "required": True},
-            "tags": {"type": list, "item_type": str, "max_items": 10, "required": False},
-            "metadata": {"type": dict, "schema": {"source": {"type": str, "required": True}}},
-            "optional_field": {"type": str, "required": False}
-        }
-
-        Supported rules for fields:
-        - "type": Expected Python type (e.g., int, str, bool, list, dict).
-        - "required": bool (default: True). If False, a missing field or None value is not an error.
-        - "min_length": int (for str, list, dict - applies to len()).
-        - "max_length": int (for str, list, dict - applies to len()).
-        - "min_value": Union[int, float] (for int, float).
-        - "max_value": Union[int, float] (for int, float).
-        - "regex": str (for str). A regex pattern to match.
-        - "enum": List[Any] (for any type). A list of allowed values.
-        - "custom_validator": Callable[[Any], bool] (for any type). A custom function
-                              that returns True for valid, False for invalid.
-        - "item_type": Type (for list). Expected type for elements in a list.
-        - "schema": Dict (for dict). A nested validation schema for dictionary fields.
-        """
-        if not isinstance(validation_schema, dict):
-            raise TypeError("`validation_schema` must be a dictionary.")
-        self._validation_schema = validation_schema
-        logger.debug(f"DataValidatorNode initialized with schema: {self._validation_schema}")
 
     @property
     def node_name(self) -> str:
         """Returns the name of the node."""
-        return "DataValidator"
-
-    def _validate_field(self, field_name: str, value: Any, rules: Dict[str, Any]) -> None:
-        """
-        Internal method to validate a single field against its rules.
-        Raises ValueError if validation fails.
-        """
-        expected_type = rules.get("type")
-        required = rules.get("required", True) # Default to required
-
-        # If the value is None and not required, it's considered valid for this field.
-        # No further rules (type, length, value) apply to a non-required None.
-        if value is None and not required:
-            return
-
-        # If the value is None but required, it's an error.
-        if value is None and required:
-            raise ValueError(f"Field '{field_name}' is required but its value is None.")
-
-        # Type check
-        if expected_type and not isinstance(value, expected_type):
-            raise ValueError(
-                f"Field '{field_name}' has invalid type. Expected '{expected_type.__name__}', "
-                f"got '{type(value).__name__}' with value '{value}'."
-            )
-
-        # Enum check
-        if "enum" in rules and value not in rules["enum"]:
-            raise ValueError(f"Field '{field_name}' value '{value}' is not in allowed enum: {rules['enum']}.")
-
-        # Length checks (for str, list, dict)
-        if isinstance(value, (str, list, dict)):
-            current_length = len(value)
-            min_length = rules.get("min_length")
-            max_length = rules.get("max_length")
-
-            if min_length is not None and current_length < min_length:
-                raise ValueError(
-                    f"Field '{field_name}' length ({current_length}) is less than minimum required ({min_length})."
-                )
-            if max_length is not None and current_length > max_length:
-                raise ValueError(
-                    f"Field '{field_name}' length ({current_length}) exceeds maximum allowed ({max_length})."
-                )
-        
-        # Numeric range checks (for int, float)
-        if isinstance(value, (int, float)):
-            min_value = rules.get("min_value")
-            max_value = rules.get("max_value")
-
-            if min_value is not None and value < min_value:
-                raise ValueError(f"Field '{field_name}' value ({value}) is less than minimum allowed ({min_value}).")
-            if max_value is not None and value > max_value:
-                raise ValueError(f"Field '{field_name}' value ({value}) exceeds maximum allowed ({max_value}).")
-
-        # Regex check (for str)
-        if isinstance(value, str) and "regex" in rules:
-            pattern = rules["regex"]
-            if not re.fullmatch(pattern, value):
-                raise ValueError(f"Field '{field_name}' value '{value}' does not match regex pattern '{pattern}'.")
-
-        # List item type check
-        if isinstance(value, list) and "item_type" in rules:
-            item_type = rules["item_type"]
-            for i, item in enumerate(value):
-                if not isinstance(item, item_type):
-                    raise ValueError(
-                        f"Field '{field_name}' list item at index {i} has invalid type. "
-                        f"Expected '{item_type.__name__}', got '{type(item).__name__}'."
-                    )
-        
-        # Nested dictionary schema validation
-        if isinstance(value, dict) and "schema" in rules:
-            nested_schema = rules["schema"]
-            try:
-                # Recursively call process on nested data with nested schema
-                # Create a temporary validator for the nested schema
-                nested_validator = DataValidatorNode(nested_schema)
-                # Pass an empty context to the nested validator, as its context is distinct
-                nested_validator.process(value, context={}) 
-            except (ValueError, TypeError) as e:
-                raise ValueError(f"Field '{field_name}' nested schema validation failed: {e}") from e
-
-        # Custom validator check
-        custom_validator = rules.get("custom_validator")
-        if isinstance(custom_validator, Callable):
-            if not custom_validator(value):
-                raise ValueError(f"Field '{field_name}' failed custom validation with value '{value}'.")
+        return "Data Validator"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Validates the input data against the configured validation schema.
+        Validates the input data based on a list of rules provided in the context.
+
+        Validation rules should be provided in `context` under the key
+        'validation_rules'. This key expects a list of dictionaries, where
+        each dictionary defines a single validation rule for a specific field
+        within the input `data`.
+
+        Example structure for a single rule:
+        ```json
+        {
+            "field": "user_id",
+            "type": "int",
+            "required": true,
+            "min_value": 1,
+            "max_value": 100000
+        }
+        ```
+
+        Supported rule properties:
+        - `field` (str): The key in the data (e.g., 'user_id', 'email') to validate.
+          Required for each rule.
+        - `type` (str): The expected data type ('str', 'int', 'float', 'bool', 'list', 'dict').
+          Required for each rule.
+        - `required` (bool, optional): If `True`, the `field` must exist in `data`.
+          Defaults to `False`.
+        - `min_length` (int, optional): Minimum length for 'str' or 'list' types.
+        - `max_length` (int, optional): Maximum length for 'str' or 'list' types.
+        - `min_value` (Union[int, float], optional): Minimum value for 'int' or 'float' types.
+        - `max_value` (Union[int, float], optional): Maximum value for 'int' or 'float' types.
+        - `format` (str, optional): Special format validation for 'str' types.
+          Currently supports:
+            - 'email': Validates if the string is a basic email format.
+        - `of_type` (str, optional): For 'list' types, specifies the expected type
+          of each element within the list (e.g., 'str', 'int').
 
         Args:
-            data: The input data to be validated. Expected to be a dictionary
-                  if a validation_schema is provided.
-            context: A dictionary containing contextual information,
-                     not directly used for validation in this node but passed along.
+            data (Any): The input data to be validated. It is expected to be
+                        a dictionary if field-specific validation rules are applied.
+            context (Dict[str, Any]): The operational context, containing validation
+                                      rules under the 'validation_rules' key.
 
         Returns:
-            The original data if all validations pass.
+            Any: The original input data if all validation rules pass successfully.
 
         Raises:
-            ValueError: If the data fails any validation rule defined in the schema.
-            TypeError: If the input data is not a dictionary when a schema is present.
+            ValueError: If validation rules are malformed, or if the input data
+                        fails to meet any of the specified validation criteria.
         """
-        logger.info("Starting data validation process.")
+        if not isinstance(context, dict):
+            logger.error("Context for DataValidatorNode must be a dictionary.")
+            raise ValueError("Context must be a dictionary to provide validation rules.")
 
-        if not self._validation_schema:
-            logger.info("No validation schema provided. Data passed through without validation.")
+        validation_rules: List[Dict[str, Any]] = context.get('validation_rules', [])
+
+        if not validation_rules:
+            logger.warning("No 'validation_rules' found in context. Data passed without validation.")
             return data
 
         if not isinstance(data, dict):
-            raise TypeError(
-                f"DataValidatorNode expects dictionary data when a schema is defined. "
-                f"Received type: {type(data).__name__}."
+            # If rules are provided, they expect dictionary-like data for field access.
+            logger.error(f"Validation rules expect dictionary-like data, but received {type(data).__name__}.")
+            raise ValueError(
+                "Input data must be a dictionary to apply field-specific validation rules. "
+                "No 'validation_rules' were found for non-dictionary data types."
             )
 
-        # First, iterate through the schema to check for required fields that are entirely missing.
-        for field_name, rules in self._validation_schema.items():
-            required = rules.get("required", True)
-            if required and field_name not in data:
-                raise ValueError(f"Required field '{field_name}' is missing from data.")
-
-        # Now, iterate through the schema again to validate each field present or specified.
-        for field_name, rules in self._validation_schema.items():
-            value = data.get(field_name) # Use .get() to retrieve value or None if field is missing
+        logger.info(f"Initiating data validation for {len(validation_rules)} rules.")
+        for i, rule in enumerate(validation_rules):
             try:
-                self._validate_field(field_name, value, rules)
-            except (ValueError, TypeError) as e:
-                logger.error(f"Validation failed for field '{field_name}': {e}")
-                # Re-raise the validation error, possibly wrapped for better context
-                raise ValueError(f"Data validation failed for field '{field_name}'. Details: {e}") from e
+                self._apply_rule(data, rule)
+            except ValueError as e:
+                logger.error(
+                    f"Validation failed for rule {i+1} (field: '{rule.get('field', 'N/A')}'): {e}"
+                )
+                raise  # Re-raise the validation error to halt processing
 
-        logger.info("Data validation completed successfully.")
+        logger.info("Data successfully validated against all specified rules.")
         return data
+
+    def _apply_rule(self, data: Dict[str, Any], rule: Dict[str, Any]) -> None:
+        """Applies a single validation rule to a specific field in the data."""
+        field = rule.get('field')
+        expected_type_str = rule.get('type')
+        required = rule.get('required', False)
+
+        if not isinstance(field, str) or not field:
+            raise ValueError(f"Malformed validation rule: 'field' must be a non-empty string. Rule: {rule}")
+        if not isinstance(expected_type_str, str) or not expected_type_str:
+            raise ValueError(f"Malformed validation rule for field '{field}': 'type' must be a non-empty string. Rule: {rule}")
+
+        # Check if field exists and is required
+        if field not in data:
+            if required:
+                raise ValueError(f"Required field '{field}' is missing from data.")
+            else:
+                # If not required and missing, no further validation needed for this field.
+                return
+
+        value = data[field]
+        actual_type = type(value)
+
+        # Map string type names to actual Python types
+        type_mapping = {
+            'str': str,
+            'int': int,
+            'float': float,
+            'bool': bool,
+            'list': list,
+            'dict': dict,
+        }
+        expected_type = type_mapping.get(expected_type_str)
+
+        if expected_type is None:
+            logger.warning(
+                f"Unknown type '{expected_type_str}' specified for field '{field}'. "
+                "Skipping strict type check for this rule."
+            )
+        elif not isinstance(value, expected_type):
+            raise ValueError(
+                f"Field '{field}' has incorrect type. Expected '{expected_type_str}', "
+                f"but received '{actual_type.__name__}' (value: {value!r})."
+            )
+
+        # Apply specific constraints based on the expected type
+        if expected_type in [str, list]:
+            if 'min_length' in rule and not isinstance(rule['min_length'], int):
+                raise ValueError(f"Malformed rule for '{field}': 'min_length' must be an integer.")
+            if 'max_length' in rule and not isinstance(rule['max_length'], int):
+                raise ValueError(f"Malformed rule for '{field}': 'max_length' must be an integer.")
+
+            if 'min_length' in rule and len(value) < rule['min_length']:
+                raise ValueError(
+                    f"Field '{field}' must have a minimum length of {rule['min_length']}, "
+                    f"but has length {len(value)}."
+                )
+            if 'max_length' in rule and len(value) > rule['max_length']:
+                raise ValueError(
+                    f"Field '{field}' must have a maximum length of {rule['max_length']}, "
+                    f"but has length {len(value)}."
+                )
+
+        if expected_type in [int, float]:
+            if 'min_value' in rule and not isinstance(rule['min_value'], (int, float)):
+                raise ValueError(f"Malformed rule for '{field}': 'min_value' must be a number.")
+            if 'max_value' in rule and not isinstance(rule['max_value'], (int, float)):
+                raise ValueError(f"Malformed rule for '{field}': 'max_value' must be a number.")
+
+            if 'min_value' in rule and value < rule['min_value']:
+                raise ValueError(
+                    f"Field '{field}' must have a minimum value of {rule['min_value']}, "
+                    f"but is {value}."
+                )
+            if 'max_value' in rule and value > rule['max_value']:
+                raise ValueError(
+                    f"Field '{field}' must have a maximum value of {rule['max_value']}, "
+                    f"but is {value}."
+                )
+
+        if expected_type == str and 'format' in rule:
+            format_type = rule['format']
+            if not isinstance(format_type, str):
+                raise ValueError(f"Malformed rule for '{field}': 'format' must be a string.")
+
+            if format_type == 'email':
+                # A robust email regex for common cases.
+                # This regex is a balance between strictness and practical acceptance.
+                email_regex = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+                if not email_regex.fullmatch(value):
+                    raise ValueError(f"Field '{field}' must be a valid email address, but is '{value}'.")
+            else:
+                logger.warning(
+                    f"Unsupported format '{format_type}' specified for string field '{field}'. "
+                    "Skipping format validation."
+                )
+
+        # Validate elements within a list if 'of_type' is specified
+        if expected_type == list and 'of_type' in rule:
+            item_expected_type_str = rule['of_type']
+            if not isinstance(item_expected_type_str, str) or not item_expected_type_str:
+                raise ValueError(f"Malformed rule for list field '{field}': 'of_type' must be a non-empty string.")
+
+            item_expected_type = type_mapping.get(item_expected_type_str)
+            if item_expected_type is None:
+                logger.warning(
+                    f"Unknown item type '{item_expected_type_str}' for list field '{field}'. "
+                    "Skipping individual item type checks."
+                )
+            else:
+                for idx, item in enumerate(value):
+                    if not isinstance(item, item_expected_type):
+                        raise ValueError(
+                            f"List item at index {idx} in field '{field}' has incorrect type. "
+                            f"Expected '{item_expected_type_str}', but got '{type(item).__name__}' (value: {item!r})."
+                        )
