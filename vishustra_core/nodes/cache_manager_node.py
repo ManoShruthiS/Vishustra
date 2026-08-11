@@ -1,132 +1,157 @@
 import logging
-from typing import Any, Dict
+import threading
+import time
+from typing import Any, Dict, Optional, Callable, Hashable
 
 from vishustra_core.nodes.base_node import BaseNode
 
-# Initialize logger for this module
 logger = logging.getLogger(__name__)
 
 class CacheManagerNode(BaseNode):
     """
-    A Vishustra node responsible for managing a simple key-value cache
-    within the orchestration context.
+    A processing node that manages a time-based in-memory cache for data produced
+    by an underlying resolver.
 
-    This node supports common cache operations like 'get', 'set', and 'delete',
-    allowing other nodes in a pipeline to store and retrieve ephemeral data.
-    The cache itself is stored in the `context` dictionary under the key
-    `'cache_store'`.
+    This node intercepts calls, checks if the result for a given key is in the cache
+    and is still valid (not expired). If found, it returns the cached value.
+    Otherwise, it delegates to a `cache_resolver` callable, stores its result
+    in the cache with a Time-To-Live (TTL), and then returns it.
+
+    Parameters:
+        cache_resolver (Callable[[Any, Dict[str, Any]], Any]):
+            A callable (e.g., another node's process method or a function) that
+            will be invoked to produce the value when a cache miss occurs or
+            the cached value has expired. It must accept `data` and `context`
+            as arguments.
+        ttl (int):
+            The Time-To-Live in seconds for cache entries. After this duration,
+            a cached item is considered stale and will be re-resolved. Defaults to 300 seconds.
+        max_entries (Optional[int]):
+            Maximum number of entries the cache can hold. If exceeded, the
+            oldest entry (based on creation time) will be evicted. If None,
+            the cache size is unbounded. Defaults to None.
     """
+
+    def __init__(self,
+                 cache_resolver: Callable[[Any, Dict[str, Any]], Any],
+                 ttl: int = 300,
+                 max_entries: Optional[int] = None):
+        if not callable(cache_resolver):
+            raise TypeError("cache_resolver must be a callable function or method.")
+        if not isinstance(ttl, int) or ttl <= 0:
+            raise ValueError("ttl must be a positive integer.")
+        if max_entries is not None and (not isinstance(max_entries, int) or max_entries <= 0):
+            raise ValueError("max_entries must be a positive integer or None.")
+
+        self._cache_resolver = cache_resolver
+        self._ttl = ttl
+        self._max_entries = max_entries
+        self._cache: Dict[Hashable, Dict[str, Any]] = {}
+        self._cache_lock = threading.Lock()
+        logger.info(f"CacheManagerNode initialized with TTL: {ttl}s, Max Entries: {max_entries}")
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of this cache manager node.
-        """
+        """Returns the name of the node."""
         return "CacheManager"
+
+    def _generate_key(self, data: Any, context: Dict[str, Any]) -> Hashable:
+        """
+        Generates a cache key from the input data and context.
+        Prioritizes `context['cache_key']` if present. Otherwise, attempts
+        to use `data` directly.
+
+        Raises:
+            TypeError: If a suitable hashable key cannot be generated.
+        """
+        # Allow an explicit cache key to be passed in the context
+        if 'cache_key' in context:
+            key = context['cache_key']
+            if not isinstance(key, Hashable):
+                raise TypeError(f"Provided 'cache_key' in context is not hashable: {type(key)}")
+            return key
+
+        # Otherwise, attempt to use the data itself as the key
+        try:
+            if isinstance(data, (dict, list, set)):
+                # For mutable types, attempt a stable hash.
+                # A more sophisticated key generation for complex objects
+                # might be needed for real-world scenarios.
+                if isinstance(data, dict):
+                    return hash(frozenset(sorted(data.items())))
+                elif isinstance(data, list):
+                    return hash(tuple(data))
+                else: # set
+                    return hash(frozenset(data))
+            else:
+                return hash(data)
+        except TypeError as e:
+            raise TypeError(
+                f"Input data is not hashable and no 'cache_key' was provided in context. "
+                f"Unable to generate cache key. Consider passing a hashable 'cache_key' in the context. Original error: {e}"
+            )
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes cache operations based on the input `data`.
-
-        The `data` input is expected to be a dictionary specifying the operation
-        and relevant details:
-        -   `"operation"` (str): Must be "get", "set", or "delete".
-        -   `"key"` (Any): The identifier for the cache entry.
-        -   `"value"` (Any, optional): Required for "set" operation; the value
-            to store in the cache.
-        -   `"default"` (Any, optional): Used for "get" operation; the value
-            to return if the key is not found in the cache. Defaults to `None`.
-
-        The cache state is managed within the `context` dictionary at
-        `context['cache_store']`. If this key is not present or not a dictionary,
-        it will be initialized to an empty dictionary.
+        Processes the input data, either by retrieving from cache or
+        by resolving it and then caching the result.
 
         Args:
-            data (Any): A dictionary containing the cache operation instructions.
-                        Example: `{"operation": "set", "key": "user_id", "value": 123}`
-                        Example: `{"operation": "get", "key": "user_id", "default": 0}`
-            context (Dict[str, Any]): The current orchestration context, used
-                                      to store and access the cache.
+            data (Any): The input data for the resolver, often used to derive the cache key.
+            context (Dict[str, Any]): The execution context, which may contain
+                                       `'cache_key'` to explicitly define the key,
+                                       or `'cache_bypass'` to force a re-resolution.
 
         Returns:
-            Any: The result of the cache operation:
-                 - For "get": The cached value, or the default value if not found.
-                 - For "set": The value that was successfully set.
-                 - For "delete": The key that was deleted, or `None` if not found.
+            Any: The cached or newly resolved result.
 
         Raises:
-            ValueError: If the input `data` is malformed, missing required keys,
-                        or specifies an unknown operation.
-            RuntimeError: For unexpected errors during cache manipulation.
+            Exception: Any exception raised by the underlying `cache_resolver`.
+            TypeError: If a cache key cannot be generated.
         """
-        if not isinstance(data, dict):
-            logger.error(
-                "CacheManagerNode received malformed data. Expected a dictionary, got %s.",
-                type(data).__name__
-            )
-            raise ValueError("Invalid input data format. Expected a dictionary.")
-
-        operation = data.get("operation")
-        key = data.get("key")
-
-        if not operation:
-            logger.error("CacheManagerNode received data without 'operation': %s", data)
-            raise ValueError("Missing 'operation' in input data.")
-        if key is None:
-            logger.error(
-                "CacheManagerNode received data without 'key' for operation '%s': %s",
-                operation, data
-            )
-            raise ValueError("Missing 'key' in input data for cache operation.")
-
-        # Ensure the cache store exists and is a dictionary in the context
-        if 'cache_store' not in context or not isinstance(context['cache_store'], dict):
-            logger.warning(
-                "Cache store not found or is not a dictionary in context. Initializing an empty 'cache_store'."
-            )
-            context['cache_store'] = {}
-
-        cache_store = context['cache_store']
-        result = None
-
+        cache_key: Hashable
         try:
-            if operation == "get":
-                result = cache_store.get(key, data.get("default", None))
-                if key in cache_store:
-                    logger.debug("Cache hit for key '%s'. Value retrieved.", key)
-                else:
-                    logger.debug(
-                        "Cache miss for key '%s'. Returning default value: %s.",
-                        key, result
-                    )
-            elif operation == "set":
-                value = data.get("value")
-                cache_store[key] = value
-                result = value
-                logger.debug("Cache set operation: key='%s', value set.", key)
-            elif operation == "delete":
-                if key in cache_store:
-                    del cache_store[key]
-                    result = key
-                    logger.debug("Cache delete operation: key='%s' removed.", key)
-                else:
-                    logger.debug(
-                        "Cache delete operation: key='%s' not found, no action taken.",
-                        key
-                    )
-                    result = None # Indicate that the key was not present to delete
-            else:
-                logger.error("Invalid cache operation '%s' received.", operation)
-                raise ValueError(
-                    f"Invalid cache operation: '{operation}'. Must be 'get', 'set', or 'delete'."
-                )
-        except Exception as e:
-            logger.exception(
-                "An unexpected error occurred during cache operation '%s' for key '%s'.",
-                operation, key
-            )
-            raise RuntimeError(
-                f"Failed to perform cache operation '{operation}' for key '{key}': {e}"
-            ) from e
+            cache_key = self._generate_key(data, context)
+        except TypeError as e:
+            logger.error(f"Failed to generate cache key: {e}")
+            raise
 
-        return result
+        cache_bypass = context.get('cache_bypass', False)
+
+        with self._cache_lock:
+            # Check for cache hit
+            cached_item = self._cache.get(cache_key)
+            current_time = time.time()
+
+            if not cache_bypass and cached_item and (current_time - cached_item['timestamp']) < self._ttl:
+                logger.debug(f"Cache hit for key: {cache_key}")
+                return cached_item['value']
+            
+            # Cache miss or expired or bypass requested
+            if cache_bypass:
+                logger.info(f"Cache bypass requested for key: {cache_key}")
+            elif cached_item:
+                logger.debug(f"Cache expired for key: {cache_key}. Resolving...")
+            else:
+                logger.debug(f"Cache miss for key: {cache_key}. Resolving...")
+
+            # If cache size limit is hit, evict the oldest entry
+            if self._max_entries is not None and len(self._cache) >= self._max_entries and cache_key not in self._cache:
+                oldest_key = min(self._cache, key=lambda k: self._cache[k]['timestamp'])
+                logger.debug(f"Cache full, evicting oldest entry: {oldest_key}")
+                del self._cache[oldest_key]
+
+            # Resolve the value using the underlying resolver
+            try:
+                resolved_value = self._cache_resolver(data, context)
+            except Exception as e:
+                logger.error(f"Error resolving value for key '{cache_key}': {e}")
+                raise
+
+            # Store the resolved value in cache
+            self._cache[cache_key] = {
+                'value': resolved_value,
+                'timestamp': current_time
+            }
+            logger.debug(f"Value resolved and cached for key: {cache_key}")
+            return resolved_value
