@@ -1,97 +1,75 @@
 import logging
 from typing import Any, Dict
 
+# Assuming this path is where BaseNode resides in the Vishustra project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
+
 class ToneConverterNode(BaseNode):
     """
-    A processing node designed to simulate the conversion of text tone.
-
-    This node processes input text data, attempting to adjust its tone
-    based on a 'target_tone' specified within the execution context.
-    It supports a set of predefined tone transformations.
+    A Vishustra processing node responsible for simulating tone conversion of text data.
+    It expects a string as input data and a 'target_tone' string in the context
+    to perform a simulated transformation.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the programmatic name of this node."""
+        """Returns the descriptive name of this node."""
         return "ToneConverter"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data by simulating a tone conversion based on context.
-
-        This method expects the 'data' to be a string representing the text
-        to be converted. The 'context' dictionary must contain a 'target_tone'
-        key, whose value is a string indicating the desired output tone
-        (e.g., 'formal', 'casual', 'humorous').
+        Processes the input data to simulate tone conversion based on the
+        'target_tone' provided in the context.
 
         Args:
-            data: The input text to be processed, expected as a string.
-            context: A dictionary containing operational parameters,
-                     expected to include 'target_tone' (str).
+            data: The input text to be converted, expected to be a string.
+            context: A dictionary containing additional processing parameters,
+                     expected to include 'target_tone' as a string.
 
         Returns:
-            The processed text as a string, with the simulated tone applied.
+            The simulated tone-converted string, or the original data if
+            conversion parameters are invalid.
 
         Raises:
-            TypeError: If the input 'data' is not a string, or if 'target_tone'
-                       in the context is not a string.
-            ValueError: If 'target_tone' is missing from the context.
+            TypeError: If the input data is not a string.
         """
         if not isinstance(data, str):
-            error_msg = (
-                f"{self.node_name} requires string input for 'data', "
-                f"but received type {type(data).__name__}."
+            logger.error(
+                "[%s] Invalid input data type. Expected 'str', but received '%s'.",
+                self.node_name,
+                type(data).__name__,
             )
-            logger.error(error_msg)
-            raise TypeError(error_msg)
-
-        try:
-            target_tone = context.get('target_tone')
-            if target_tone is None:
-                error_msg = f"Context missing required 'target_tone' key for {self.node_name}."
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-            if not isinstance(target_tone, str):
-                error_msg = (
-                    f"'target_tone' in context must be a string, "
-                    f"but received type {type(target_tone).__name__}."
-                )
-                logger.error(error_msg)
-                raise TypeError(error_msg)
-
-            processed_text = str(data)  # Defensive conversion to string
-            normalized_tone = target_tone.lower()
-
-            if normalized_tone == 'formal':
-                processed_text = f"Regarding the matter at hand: {processed_text}"
-                logger.info(f"Applied 'formal' tone conversion to text using {self.node_name}.")
-            elif normalized_tone == 'casual':
-                processed_text = f"Hey, just wanted to say: {processed_text}"
-                logger.info(f"Applied 'casual' tone conversion to text using {self.node_name}.")
-            elif normalized_tone == 'humorous':
-                processed_text = f"{processed_text} (just kidding, mostly!)"
-                logger.info(f"Applied 'humorous' tone conversion to text using {self.node_name}.")
-            else:
-                logger.warning(
-                    f"Unsupported target tone '{target_tone}' encountered in {self.node_name}. "
-                    "Returning original text without modification."
-                )
-
-            logger.debug(
-                f"{self.node_name} successfully processed data. "
-                f"Original length: {len(data)}, Output length: {len(processed_text)}."
+            raise TypeError(
+                f"Input data for {self.node_name} must be a string, got {type(data).__name__}."
             )
-            return processed_text
 
-        except (TypeError, ValueError) as e:
-            # Re-raise specific TypeErrors/ValueErrors already handled and logged.
-            logger.error(f"Parameter validation error in {self.node_name}: {e}")
-            raise
-        except Exception as e:
-            # Catch any unexpected errors during processing
-            logger.exception(f"An unexpected error occurred during {self.node_name} processing: {e}")
-            raise
+        target_tone = context.get("target_tone")
+
+        if not isinstance(target_tone, str) or not target_tone.strip():
+            logger.warning(
+                "[%s] No valid 'target_tone' specified in the context. "
+                "Returning original data without simulated tone conversion.",
+                self.node_name,
+            )
+            # In a real LLM scenario, a default neutral tone might be applied or
+            # the request might be rejected. For this simulation, we return original.
+            return data
+
+        # Simulate tone conversion by prepending the target tone.
+        # In a live LLM orchestration, this would involve a sophisticated prompt
+        # to an underlying language model configured for tone adjustment.
+        processed_data = f"[{target_tone.strip().capitalize()} Tone] {data}"
+
+        logger.debug(
+            "[%s] Successfully applied simulated '%s' tone conversion. "
+            "Original data snippet: '%s...', Processed data snippet: '%s...'",
+            self.node_name,
+            target_tone.strip(),
+            data[:50].replace('\n', ' '), # Log first 50 chars, replace newlines for readability
+            processed_data[:50].replace('\n', ' ')
+        )
+
+        return processed_data
