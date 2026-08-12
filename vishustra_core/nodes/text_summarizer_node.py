@@ -1,151 +1,112 @@
 import logging
 from typing import Any, Dict
-import re
-
-# Assuming BaseNode is correctly located at this path within the project structure
 from vishustra_core.nodes.base_node import BaseNode
 
+# Initialize a logger for this module.
 logger = logging.getLogger(__name__)
-
 
 class TextSummarizerNode(BaseNode):
     """
-    A Vishustra processing node designed to simulate text summarization.
+    A Vishustra processing node that simulates text summarization.
 
-    This node takes a string as input and produces a shorter summary.
-    The summarization logic is simplified for simulation purposes, primarily
-    extracting key sentences from the beginning of the text until a
-    configurable maximum word count is reached.
+    This node truncates input text to a specified maximum length, attempting
+    to end on a word boundary and appending an ellipsis to indicate truncation.
     """
 
-    def __init__(self, default_max_summary_words: int = 100):
+    def __init__(self, max_summary_length: int = 200):
         """
-        Initializes the TextSummarizerNode with default configuration.
+        Initializes the TextSummarizerNode.
 
         Args:
-            default_max_summary_words (int): The default maximum number of words
-                                             for the summary if not explicitly provided
-                                             in the process context. Must be a positive integer.
-        Raises:
-            ValueError: If `default_max_summary_words` is not a positive integer.
+            max_summary_length (int): The maximum desired length for the summary,
+                                      including space for the ellipsis if truncation occurs.
+                                      Must be a positive integer.
         """
-        if not isinstance(default_max_summary_words, int) or default_max_summary_words <= 0:
-            raise ValueError("`default_max_summary_words` must be a positive integer.")
-        self._default_max_summary_words = default_max_summary_words
-        logger.debug(
-            f"TextSummarizerNode initialized with default_max_summary_words: {default_max_summary_words}"
-        )
+        if not isinstance(max_summary_length, int) or max_summary_length <= 0:
+            logger.error(f"Invalid max_summary_length provided: {max_summary_length}. It must be a positive integer.")
+            raise ValueError("max_summary_length must be a positive integer.")
+            
+        self.max_summary_length = max_summary_length
+        logger.debug(f"Initialized TextSummarizerNode with max_summary_length={self.max_summary_length}")
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """
+        Returns the descriptive name of the node.
+        """
         return "TextSummarizer"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> str:
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data by generating a summary of the text.
+        Processes the input data by generating a simulated summary.
 
-        The method expects `data` to be a string. The `context` dictionary
-        can override the default summary length using the 'max_summary_words' key.
+        The summary is created by truncating the input text to `max_summary_length`,
+        attempting to end on a word boundary and appending an ellipsis if truncation occurs.
 
         Args:
             data (Any): The input text to be summarized. Expected to be a string.
-            context (Dict[str, Any]): A dictionary of runtime parameters.
-                                      Optional key: 'max_summary_words' (int) to
-                                      specify the desired maximum word count for the summary.
+            context (Dict[str, Any]): A dictionary containing contextual information
+                                       for the current processing flow. (Not directly
+                                       used by this node but passed as per BaseNode contract).
 
         Returns:
-            str: The summarized text.
+            Any: The summarized text (string).
 
         Raises:
-            TypeError: If the input `data` is not a string.
-            ValueError: If the input `data` is an empty or whitespace-only string.
+            TypeError: If the input 'data' is not a string.
         """
+        # --- Input Validation ---
         if not isinstance(data, str):
-            logger.error(
-                f"Invalid input type for {self.node_name}. Expected `str`, got `{type(data).__name__}`."
-            )
-            raise TypeError(
-                f"{self.node_name} expects string input, but received `{type(data).__name__}`."
-            )
+            logger.error(f"TextSummarizerNode received non-string data: {type(data)}. Expected string.")
+            raise TypeError("TextSummarizerNode expects string input for summarization.")
 
-        original_text = data.strip()
-        if not original_text:
+        cleaned_data = data.strip()
+        if not cleaned_data:
+            logger.warning("TextSummarizerNode received an empty or whitespace-only string. Returning an empty string.")
+            return ""
+
+        # Log the beginning of processing, showing a snippet of the input data.
+        log_snippet = cleaned_data[:70] + ('...' if len(cleaned_data) > 70 else '')
+        logger.info(f"Processing text for summarization (snippet): '{log_snippet}'")
+
+        # --- Summarization Logic (Simulation) ---
+        # If the text is shorter than or equal to the maximum length, return it as is.
+        if len(cleaned_data) <= self.max_summary_length:
+            logger.debug(f"Input text length ({len(cleaned_data)}) is <= max_summary_length ({self.max_summary_length}). Returning full text.")
+            return cleaned_data
+
+        # Define the ellipsis string and its length.
+        ellipsis = "..."
+        ellipsis_len = len(ellipsis)
+
+        # Calculate the effective length for the content before adding the ellipsis.
+        # Ensure there's enough space for the ellipsis itself.
+        if self.max_summary_length <= ellipsis_len:
             logger.warning(
-                f"Received empty or whitespace-only string for summarization in {self.node_name}."
+                f"Configured max_summary_length ({self.max_summary_length}) is too small to add a meaningful "
+                f"ellipsis. Truncating text directly to {self.max_summary_length} characters."
             )
-            raise ValueError("Cannot summarize an empty or whitespace-only string.")
+            return cleaned_data[:self.max_summary_length].strip()
 
-        original_words = original_text.split()
-        original_word_count = len(original_words)
-        logger.info(f"Initiating summarization for text of ~{original_word_count} words.")
+        effective_content_length = self.max_summary_length - ellipsis_len
+        
+        # Take the initial segment of the text up to the effective content length.
+        summary_segment = cleaned_data[:effective_content_length]
+        
+        # Attempt to find a word boundary to make the truncation less abrupt.
+        # We search for the last space character within the summary_segment.
+        last_space_index = summary_segment.rfind(' ')
 
-        # Determine max_summary_words, prioritizing context over instance default
-        max_summary_words = context.get("max_summary_words", self._default_max_summary_words)
-        if not isinstance(max_summary_words, int) or max_summary_words <= 0:
-            logger.warning(
-                f"Invalid or non-positive 'max_summary_words' in context ({max_summary_words}). "
-                f"Falling back to default of {self._default_max_summary_words}."
-            )
-            max_summary_words = self._default_max_summary_words
+        final_summary: str
+        # If a space is found relatively close to the end of the segment,
+        # we cut there and append the ellipsis. This heuristic aims for better readability.
+        if last_space_index != -1 and last_space_index > effective_content_length * 0.7: 
+            final_summary = summary_segment[:last_space_index].strip() + ellipsis
+        else:
+            # If no suitable word boundary is found, or if the segment is mostly one long word,
+            # we just append the ellipsis to the hard-cut segment.
+            final_summary = summary_segment.strip() + ellipsis
+            
+        logger.debug(f"Generated summary (length {len(final_summary)}): '{final_summary}'")
+        return final_summary
 
-        # If the original text is already concise (e.g., less than 1.5 times the target length),
-        # return it as is to avoid unnecessary truncation or overly short summaries.
-        if original_word_count <= max_summary_words * 1.5:
-            logger.debug(
-                f"Original text (~{original_word_count} words) is short relative to target "
-                f"({max_summary_words} words). Returning full text."
-            )
-            return original_text
-
-        # Simple sentence tokenization: splits by common sentence-ending punctuation
-        # followed by one or more whitespace characters.
-        # This regex attempts to avoid splitting on common abbreviations (e.g., "Dr.", "U.S.").
-        sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", original_text)
-
-        # Fallback to simpler split if the initial split yields too few sentences,
-        # which can happen with complex or malformed text.
-        if len(sentences) <= 1:
-            sentences = re.split(r"(?<=[.!?])\s+", original_text)
-
-        summary_sentences = []
-        current_word_count = 0
-
-        for sentence in sentences:
-            sentence_words_list = sentence.split()
-            sentence_word_count = len(sentence_words_list)
-
-            # Check if adding this sentence would exceed the max word count
-            if current_word_count + sentence_word_count <= max_summary_words:
-                summary_sentences.append(sentence)
-                current_word_count += sentence_word_count
-            elif current_word_count == 0 and sentence_word_count > max_summary_words:
-                # If the very first sentence is longer than the target,
-                # truncate it and add an ellipsis.
-                truncated_sentence = " ".join(sentence_words_list[:max_summary_words])
-                summary_sentences.append(truncated_sentence + "...")
-                current_word_count = max_summary_words
-                break  # Stop, as we've hit the limit with just one sentence
-            else:
-                break  # Stop adding sentences if the next one would exceed the limit
-
-        if not summary_sentences:
-            # This can occur if the sentence splitting was ineffective for very unusual text,
-            # or if the text was too short to yield meaningful sentences but still longer
-            # than the `max_summary_words * 1.5` threshold.
-            logger.warning(
-                f"No sentences were added to the summary. Attempting simple word-level truncation."
-            )
-            if original_word_count > max_summary_words:
-                return " ".join(original_words[:max_summary_words]) + "..."
-            else:
-                return original_text  # Should theoretically be caught by the earlier check
-
-        summary = " ".join(summary_sentences).strip()
-        summary_word_count = len(summary.split())
-        logger.info(
-            f"Summarization complete. Original words: {original_word_count}, "
-            f"Summary words: {summary_word_count} (target: {max_summary_words})."
-        )
-
-        return summary
