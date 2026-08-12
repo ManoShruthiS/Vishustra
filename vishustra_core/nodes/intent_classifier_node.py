@@ -1,6 +1,5 @@
-
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from vishustra_core.nodes.base_node import BaseNode
 
@@ -8,132 +7,121 @@ logger = logging.getLogger(__name__)
 
 class IntentClassifierNode(BaseNode):
     """
-    A processing node designed to classify the intent of an input text utterance.
+    A Vishustra processing node designed to classify the intent of a given text input.
 
-    This node simulates intent classification by matching keywords in the input
-    against predefined patterns. In a production environment, this would typically
-    integrate with a sophisticated machine learning model (e.g., a transformer-based
-    classifier or a custom NLU service) to provide robust intent detection
-    and confidence scores.
+    This node simulates intent classification based on a set of predefined keyword rules.
+    In a production environment, this would typically integrate with a dedicated
+    Natural Language Understanding (NLU) service or a sophisticated machine learning model
+    to perform more robust and dynamic intent recognition.
     """
 
-    # For demonstration, a simple keyword-based intent mapping is used.
-    # In a real system, this would be loaded from configuration, a model,
-    # or an external service.
-    _INTENT_PATTERNS: Dict[str, Dict[str, Any]] = {
-        "greeting": {"keywords": ["hello", "hi", "hey", "good morning", "good evening"], "confidence": 0.95},
-        "farewell": {"keywords": ["bye", "goodbye", "see you later"], "confidence": 0.90},
-        "weather_query": {"keywords": ["weather", "forecast", "temperature", "rain", "sunny"], "confidence": 0.88},
-        "time_query": {"keywords": ["time", "what time is it", "current time"], "confidence": 0.85},
-        "help_request": {"keywords": ["help", "support", "assist me", "trouble"], "confidence": 0.80},
-        "create_task": {"keywords": ["create task", "add to do", "new task"], "confidence": 0.92},
-        "set_reminder": {"keywords": ["set reminder", "remind me"], "confidence": 0.91},
-    }
-
-    def __init__(self):
+    def __init__(self, config: Dict[str, Any] = None):
         """
-        Initializes the IntentClassifierNode.
+        Initializes the IntentClassifierNode with optional configuration.
 
-        In a production scenario, this might involve loading a pre-trained
-        intent classification model, configurations, or establishing
-        connections to external NLU services.
+        Args:
+            config: An optional dictionary containing configuration parameters.
+                    Expected keys:
+                    - 'intent_rules': A dictionary where keys are intent names (str)
+                                      and values are lists of keywords (list[str])
+                                      associated with that intent. These rules
+                                      will merge with or override default rules.
         """
-        logger.debug(f"[{self.node_name}] Initializing node.")
-        # self.model = load_intent_model() # Placeholder for actual model loading
+        self._node_name = "IntentClassifierNode"
+        
+        # Default intent rules for demonstration
+        self._intent_rules = {
+            "greeting": ["hello", "hi", "hey", "good morning", "good evening"],
+            "order_status": ["track my order", "where is my package", "order status", "delivery status", "my order"],
+            "product_info": ["tell me about", "what is", "product details", "specs for", "information on"],
+            "goodbye": ["bye", "see you", "goodbye", "farewell"],
+            "support_request": ["help", "support", "contact us", "problem with"],
+            "thank_you": ["thank you", "thanks", "appreciate it"],
+            # 'unclear' is handled as a fallback if no other rules match
+        }
+
+        if config and isinstance(config, dict) and 'intent_rules' in config:
+            if isinstance(config['intent_rules'], dict):
+                # Merge custom rules provided in config with default rules
+                self._intent_rules.update(config['intent_rules'])
+                logger.info(f"[{self.node_name}] Initialized with custom intent rules from configuration.")
+            else:
+                logger.warning(
+                    f"[{self.node_name}] 'intent_rules' in config must be a dictionary. "
+                    "Falling back to default rules."
+                )
+        else:
+            logger.info(f"[{self.node_name}] Initialized with default intent rules.")
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "IntentClassifierNode"
+        """Returns the name of the node."""
+        return self._node_name
 
     def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input data to classify its underlying intent.
+        Classifies the intent of the input text using keyword matching.
 
-        The `data` input is expected to be either a raw string containing the
-        user utterance or a dictionary that includes a 'text' key with the utterance.
+        The input `data` is expected to be either a string directly representing
+        the user query, or a dictionary containing a 'text' key whose value
+        is the string to be classified.
 
         Args:
-            data: The input utterance, which can be a `str` or a `Dict[str, str]`
-                  containing a 'text' key.
-            context: A dictionary providing contextual information that might be
-                     relevant for intent classification (e.g., user session data,
-                     previous turns in a conversation, available tools).
+            data: The input data, which can be a string (e.g., "Hello, how are you?")
+                  or a dictionary like `{'text': 'Where is my order?'}`.
+            context: A dictionary providing shared context or state across nodes
+                     within the Vishustra pipeline. Not directly used by this
+                     node for intent classification, but available.
 
         Returns:
-            A dictionary containing the classified 'intent' (str) and a
-            'confidence' score (float) indicating the model's certainty.
-            If no specific intent is confidently matched, it defaults to
-            "unknown" with a low confidence score.
+            A dictionary containing the original text, the classified intent,
+            and a confidence score for that classification.
+            Example: `{'text': 'Hello there', 'intent': 'greeting', 'confidence': 0.9}`
 
         Raises:
-            TypeError: If the input `data` is not a string or a dictionary.
-            ValueError: If `data` is a dictionary but does not contain a 'text' key,
-                        or if the value associated with 'text' is not a string.
+            ValueError: If the input data is not a string or a dictionary with
+                        a valid 'text' key.
         """
-        utterance: Optional[str] = None
-        result: Dict[str, Any] = {"intent": "unknown", "confidence": 0.1} # Default fallback
-
+        text_to_classify = None
         if isinstance(data, str):
-            utterance = data
-        elif isinstance(data, dict):
-            utterance = data.get("text")
-            if utterance is None:
-                logger.error(
-                    f"[{self.node_name}] Input dictionary 'data' is missing the mandatory 'text' key. Received: {data}"
-                )
-                raise ValueError(
-                    f"[{self.node_name}] Input dictionary 'data' must contain a 'text' key for intent classification."
-                )
-            if not isinstance(utterance, str):
-                logger.error(
-                    f"[{self.node_name}] The value associated with 'text' in input data is not a string. Received: {data}"
-                )
-                raise TypeError(
-                    f"[{self.node_name}] The 'text' value in input data must be a string for intent classification."
-                )
-        else:
-            logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected str or dict, but received {type(data).__name__}. Data: {data}"
+            text_to_classify = data
+        elif isinstance(data, dict) and 'text' in data and isinstance(data['text'], str):
+            text_to_classify = data['text']
+        
+        if text_to_classify is None:
+            logger.warning(
+                f"[{self.node_name}] Invalid input data type. Expected string or dict with 'text' key. Got: {type(data)}."
             )
-            raise TypeError(
-                f"[{self.node_name}] Invalid input data type for IntentClassifierNode. Expected str or dict, got {type(data).__name__}."
+            raise ValueError(
+                f"[{self.node_name}] Input data must be a string or a dictionary with a 'text' key. "
+                f"Received type: {type(data)}."
             )
 
-        processed_utterance = utterance.lower().strip()
-        if not processed_utterance:
-            logger.warning(f"[{self.node_name}] Received empty or whitespace-only utterance. Defaulting to 'unknown' intent.")
-            return result
+        processed_text = text_to_classify.lower()
+        
+        classified_intent = "unclear"
+        confidence = 0.5  # Default confidence for an 'unclear' classification
 
-        logger.debug(f"[{self.node_name}] Classifying intent for utterance: '{processed_utterance}'")
+        # Perform simple keyword-based intent classification
+        for intent, keywords in self._intent_rules.items():
+            if not keywords: # Skip intents with no keywords defined if we ever get them
+                continue
+            for keyword in keywords:
+                if keyword.lower() in processed_text:
+                    classified_intent = intent
+                    confidence = 0.9  # Assign higher confidence for a direct keyword match
+                    logger.debug(f"[{self.node_name}] Matched keyword '{keyword}' for intent '{intent}'.")
+                    break  # Found a match, no need to check other keywords for this intent
+            if classified_intent != "unclear":
+                break  # If a specific intent was found, stop checking other intents
 
-        matched_intent: Optional[str] = None
-        highest_confidence: float = 0.0
-
-        for intent_name, config in self._INTENT_PATTERNS.items():
-            for keyword in config["keywords"]:
-                if keyword in processed_utterance:
-                    current_confidence = config["confidence"]
-                    if current_confidence > highest_confidence:
-                        highest_confidence = current_confidence
-                        matched_intent = intent_name
-                        logger.debug(
-                            f"[{self.node_name}] Potential match for intent '{intent_name}' with keyword '{keyword}' (confidence: {current_confidence:.2f})"
-                        )
-                    # For a simple keyword model, once a keyword matches, we can prioritize
-                    # the first match or the highest confidence if multiple intents share keywords.
-                    # Here, we keep searching for the highest confidence match.
-
-        if matched_intent:
-            result["intent"] = matched_intent
-            result["confidence"] = highest_confidence
-            logger.info(
-                f"[{self.node_name}] Classified intent: '{matched_intent}' with confidence: {highest_confidence:.2f} for utterance: '{processed_utterance}'"
-            )
-        else:
-            logger.info(
-                f"[{self.node_name}] No specific intent matched for utterance: '{processed_utterance}'. Defaulting to 'unknown'."
-            )
-
-        return result
-
+        logger.info(
+            f"[{self.node_name}] Classified intent for text '{text_to_classify[:70]}{'...' if len(text_to_classify) > 70 else ''}' "
+            f"as '{classified_intent}' with confidence {confidence:.2f}."
+        )
+        
+        return {
+            "text": text_to_classify,
+            "intent": classified_intent,
+            "confidence": confidence
+        }
