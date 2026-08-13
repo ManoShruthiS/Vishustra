@@ -1,73 +1,80 @@
-import re
 import logging
+import re
 from typing import Any, Dict, List
+
 from vishustra_core.nodes.base_node import BaseNode
 
-# Initialize logger for this module
 logger = logging.getLogger(__name__)
+
 
 class URLExtractorNode(BaseNode):
     """
-    A Vishustra processing node that extracts URLs from text data.
-    It identifies common HTTP/HTTPS URLs and returns them as a list of strings.
+    A Vishustra processing node that extracts URLs from input text.
+    It identifies common HTTP/HTTPS URLs within the provided string data,
+    including those with domain names or IPv4 addresses, optional 'www.' prefix,
+    ports, paths, query parameters, and fragments.
     """
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of the node.
-        """
+        """Returns the name of the node."""
         return "URL Extractor"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
+    def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Processes the input data to extract URLs.
-
-        This method expects a string as input data and uses a regular expression
-        to find common HTTP/HTTPS URLs within the text.
+        Extracts URLs from the input data.
 
         Args:
-            data: The input data, expected to be a string containing text.
-                  If a non-string type is provided, a warning is logged, and
-                  an empty list is returned.
-            context: A dictionary of contextual information. This node does not
-                     currently utilize any context.
+            data (Any): The input data, expected to be a string containing text.
+            context (Dict[str, Any]): A dictionary containing contextual information
+                                       for the current processing flow. This can
+                                       include session details or global settings.
 
         Returns:
-            A list of unique URLs (str) found in the input data.
-            Returns an empty list if data is not a string or no URLs are found.
-            The return type matches `Any` as per the `BaseNode` definition.
+            List[str]: A list of full URLs found in the input data. Returns an empty
+                       list if no URLs are found or if the input data is not a string.
         """
+        logger.debug(f"[{self.node_name}] Starting URL extraction. Context keys: {list(context.keys())}")
+
         if not isinstance(data, str):
             logger.warning(
-                f"[{self.node_name}] Received non-string data of type '{type(data).__name__}'. "
-                "Expected string for URL extraction. Returning empty list."
+                f"[{self.node_name}] Input data is not a string. Received type: {type(data).__name__}. "
+                "Returning an empty list as no URLs can be extracted from non-string data."
             )
             return []
 
-        # A robust regular expression to find common URLs in text.
-        # This pattern aims to capture full URLs including scheme, domain,
-        # and optional path/query/fragment components.
-        # Explanation of the regex:
-        # (?:(?:https?|ftp):\/\/|www\.) - Matches 'http://', 'https://', 'ftp://', or 'www.'
-        # (?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+ - Matches domain name segments (e.g., 'sub.domain.')
-        # [a-zA-Z]{2,6} - Matches the top-level domain (e.g., 'com', 'org', 'co.uk')
-        # (?:[-\w._~:/?#\[\]@!$&'()*+,;=%]*)? - Matches optional path, query, fragment, etc.
+        # Regex components for robust URL matching:
+        # 1. IPv4 address pattern
+        ipv4_pattern = r'(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)'
+
+        # 2. Domain name pattern (including subdomains and flexible TLDs)
+        # TLDs are typically 2+ characters, allowing up to 10 for future proofing and new TLDs.
+        domain_pattern = r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+' \
+                         r'[a-zA-Z]{2,10}'
+
+        # 3. Combine hostname (domain or IPv4)
+        host_pattern = f'(?:{domain_pattern}|{ipv4_pattern})'
+
+        # 4. Full URL regex combining all parts
+        # - https?://          : HTTP or HTTPS scheme (required for strict URL extraction)
+        # - (?:www\.)?         : Optional 'www.' prefix
+        # - {host_pattern}     : The combined domain name or IPv4
+        # - (?::\d{1,5})?      : Optional port number (1 to 5 digits)
+        # - (?:/?|[/?][^\s]*)  : Optional path, query, and fragment (allowing non-whitespace characters)
         url_regex = re.compile(
-            r'(?:(?:https?|ftp):\/\/|www\.)'  # Scheme (http/https/ftp) or 'www.' prefix
-            r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+'  # Domain name parts (e.g., 'example.com')
-            r'[a-zA-Z]{2,6}'  # Top-level domain (e.g., 'com', 'org', 'net')
-            r'(?:[-\w._~:/?#\[\]@!$&\'()*+,;=%]*)?'  # Optional path, query, fragment, and other URL characters
+            r'https?://'
+            r'(?:www\.)?'
+            f'{host_pattern}'
+            r'(?::\d{1,5})?'
+            r'(?:/?|[/?][^\s]*)'
+            , re.IGNORECASE
         )
 
-        found_urls = url_regex.findall(data)
+        found_urls: List[str] = url_regex.findall(data)
 
-        # Remove duplicate URLs using a set, then convert back to a list.
-        unique_urls: List[str] = list(set(found_urls))
-
-        if not unique_urls:
-            logger.debug(f"[{self.node_name}] No URLs found in the provided text.")
+        if found_urls:
+            logger.debug(f"[{self.node_name}] Successfully extracted {len(found_urls)} URLs.")
         else:
-            logger.info(f"[{self.node_name}] Extracted {len(unique_urls)} unique URL(s).")
+            logger.debug(f"[{self.node_name}] No URLs found in the input data.")
 
-        return unique_urls
+        return found_urls
