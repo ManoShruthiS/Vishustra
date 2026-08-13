@@ -4,111 +4,123 @@ from typing import Any, Dict, List, Optional
 
 from vishustra_core.nodes.base_node import BaseNode
 
-# Initialize a logger for this module
 logger = logging.getLogger(__name__)
-
 
 class ProfanityFilterNode(BaseNode):
     """
-    A processing node designed to filter out profane words from input text.
-    It replaces specified profane words with a designated censor character,
-    maintaining the original word's length for readability and context.
-
-    This node leverages regular expressions for robust, case-insensitive,
-    and whole-word matching to prevent partial word censorship.
+    A Vishustra processing node that filters profane words from input text.
+    It replaces detected profane words with a specified replacement character.
+    The filter is case-insensitive and respects word boundaries.
     """
 
-    def __init__(self, profane_words: Optional[List[str]] = None, censor_char: str = '*'):
+    _DEFAULT_PROFANITY_LIST = [
+        'fuck', 'shit', 'bitch', 'asshole', 'damn', 'cunt', 'piss', 'bastard', 'motherfucker'
+    ]
+    _DEFAULT_REPLACEMENT_CHAR = '*'
+
+    def __init__(self, profanity_list: Optional[List[str]] = None, replacement_char: Optional[str] = None):
         """
-        Initializes the ProfanityFilterNode with a list of words to filter
-        and a character to use for censoring.
+        Initializes the ProfanityFilterNode.
 
         Args:
-            profane_words: An optional list of strings considered profane.
-                           If None or an empty list, a default set of words will be used.
-                           Words will be converted to lowercase internally for case-insensitive matching.
-            censor_char: The single character to use for replacing profane words.
-                         Defaults to '*'.
+            profanity_list (Optional[List[str]]): A list of words to consider profane.
+                                                 If None, a default list is used.
+                                                 Words are internally converted to lowercase.
+            replacement_char (Optional[str]): The single character used to replace profane words.
+                                            If None, a default '*' is used. If not a single character,
+                                            a warning is logged and the default is used.
         """
-        if profane_words is None or not profane_words:
-            self._profane_words = self._get_default_profane_words()
-            logger.info(f"[{self.node_name}] Initialized with default profane word list.")
-        else:
-            self._profane_words = [word.lower() for word in profane_words]
-            logger.info(f"[{self.node_name}] Initialized with {len(self._profane_words)} custom profane words.")
-
-        if not isinstance(censor_char, str) or len(censor_char) != 1:
+        # Validate and set replacement character
+        self._replacement_char = replacement_char if replacement_char is not None else self._DEFAULT_REPLACEMENT_CHAR
+        if not isinstance(self._replacement_char, str) or len(self._replacement_char) != 1:
             logger.warning(
-                f"[{self.node_name}] Invalid censor_char '{censor_char}'. "
-                "Using default '*' character."
+                f"[{self.node_name}] Invalid replacement_char '{self._replacement_char}'. "
+                f"Expected a single character string. Falling back to default '{self._DEFAULT_REPLACEMENT_CHAR}'."
             )
-            self._censor_char = '*'
+            self._replacement_char = self._DEFAULT_REPLACEMENT_CHAR
+
+        # Validate and set profanity list
+        processed_profanity_list: List[str] = []
+        if profanity_list is not None:
+            if not isinstance(profanity_list, list):
+                logger.warning(
+                    f"[{self.node_name}] Invalid type for profanity_list. Expected 'List[str]', got '{type(profanity_list).__name__}'. "
+                    f"Falling back to default profanity list."
+                )
+                processed_profanity_list = [word.lower() for word in self._DEFAULT_PROFANITY_LIST]
+            else:
+                for item in profanity_list:
+                    if isinstance(item, str):
+                        processed_profanity_list.append(item.lower())
+                    else:
+                        logger.warning(f"[{self.node_name}] Non-string item '{item}' found in profanity_list and ignored.")
         else:
-            self._censor_char = censor_char
+            processed_profanity_list = [word.lower() for word in self._DEFAULT_PROFANITY_LIST]
+        
+        self._profanity_list = processed_profanity_list
+            
+        # Compile a regular expression for efficient and robust profanity detection.
+        # It handles whole words and is case-insensitive.
+        if self._profanity_list:
+            # Escape each word to handle special regex characters in profanity list, then join with '|' for OR logic.
+            # \b ensures whole word matching.
+            self._profanity_regex = re.compile(
+                r'\b(' + '|'.join(re.escape(word) for word in self._profanity_list) + r')\b',
+                re.IGNORECASE
+            )
+        else:
+            self._profanity_regex = None # No profanity to filter if list is empty
 
         logger.debug(
-            f"[{self.node_name}] Configuration: {len(self._profane_words)} words, "
-            f"censor_char='{self._censor_char}'"
+            f"[{self.node_name}] Initialized with replacement char: '{self._replacement_char}' "
+            f"and profanity list: {self._profanity_list}"
         )
-
-    def _get_default_profane_words(self) -> List[str]:
-        """
-        Provides a default list of common profane words.
-        In a production environment, this list might be loaded from a configuration
-        file, a database, or an external service.
-        """
-        return ["fuck", "shit", "asshole", "bitch", "cunt", "damn", "piss", "bastard"]
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of this processing node.
-        """
+        """Returns the descriptive name of the node."""
         return "ProfanityFilter"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data by identifying and censoring profane words.
-
-        The method expects `data` to be a string. If `data` is not a string,
-        it logs a warning and returns the original data unchanged.
-        The `context` dictionary is currently not used by this node but is
-        available for future extensions, e.g., for dynamic word lists.
+        Processes the input data, filtering out profane words.
 
         Args:
-            data: The input data, ideally a string that needs filtering.
-            context: A dictionary containing contextual information relevant
-                     to the current processing pipeline.
+            data (Any): The input data. Expected to be a string that needs filtering.
+            context (Dict[str, Any]): A dictionary containing contextual information
+                                       for the processing. Not directly used by this node,
+                                       but part of the BaseNode interface.
 
         Returns:
-            The processed data with profane words replaced by the censor character,
-            or the original data if it was not a string.
+            Any: The filtered string if the input 'data' was a string and profanity was
+                 detected and replaced. Returns the original data if it's not a string
+                 or if no profanity was found.
         """
-        logger.info(f"[{self.node_name}] Initiating profanity filtering process.")
-
         if not isinstance(data, str):
             logger.warning(
-                f"[{self.node_name}] Input data type ({type(data).__name__}) is not a string. "
-                "Profanity filtering will be skipped."
+                f"[{self.node_name}] Invalid input type. Expected 'str', got '{type(data).__name__}'. "
+                "Returning original data without processing."
             )
             return data
 
-        processed_text = data
+        if not self._profanity_regex:
+            logger.debug(f"[{self.node_name}] Profanity list is empty or invalid. No filtering performed.")
+            return data
 
-        for word_to_censor in self._profane_words:
-            # Construct a regex pattern for whole-word, case-insensitive matching
-            # re.escape() handles special characters in the word
-            # \b ensures word boundaries
-            pattern = r'\b' + re.escape(word_to_censor) + r'\b'
+        original_text = data
+        
+        # Use the compiled regex to find and replace profane words.
+        # The lambda function ensures that each matched profane word is replaced
+        # with a string of replacement characters of the same length as the original word.
+        filtered_text = self._profanity_regex.sub(
+            lambda match: self._replacement_char * len(match.group(0)),
+            original_text
+        )
 
-            # Create the replacement string (e.g., '****' for a 4-letter word)
-            censor_replacement = self._censor_char * len(word_to_censor)
+        if original_text != filtered_text:
+            logger.info(f"[{self.node_name}] Successfully filtered profanity from text.")
+            logger.debug(f"[{self.node_name}] Original: '{original_text}', Filtered: '{filtered_text}'")
+        else:
+            logger.debug(f"[{self.node_name}] No profanity found in text.")
 
-            # Perform the replacement using re.sub for case-insensitivity
-            # and global replacement
-            if re.search(pattern, processed_text, re.IGNORECASE):
-                processed_text = re.sub(pattern, censor_replacement, processed_text, flags=re.IGNORECASE)
-                logger.debug(f"[{self.node_name}] Censored instances of '{word_to_censor}'.")
-
-        logger.info(f"[{self.node_name}] Profanity filtering process completed.")
-        return processed_text
+        return filtered_text
