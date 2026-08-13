@@ -1,106 +1,154 @@
 import logging
+import re
 from typing import Any, Dict
 
-# External library for Markdown parsing.
-# Ensure 'markdown' is installed: pip install markdown
-try:
-    import markdown
-except ImportError:
-    # Log a critical error and halt if the essential dependency is missing,
-    # as this node cannot function without it.
-    logging.getLogger(__name__).critical(
-        "The 'markdown' library is not installed. Please install it using 'pip install markdown' "
-        "to enable the MarkdownParserNode functionality."
-    )
-    raise
-
-# Assume BaseNode is accessible relative to the project structure
+# Assuming BaseNode is available at this path in the Vishustra project structure
+# The BaseNode definition from the prompt is used for interface understanding.
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class MarkdownParserNode(BaseNode):
     """
-    A Vishustra processing node designed to parse Markdown formatted strings
-    into their corresponding HTML representations.
+    A processing node designed to parse and convert Markdown formatted text
+    into a simplified HTML-like structure or plain text, suitable for further
+    processing or rendering.
 
-    This node leverages the 'markdown' Python library for efficient and
-    configurable conversion. It supports passing Markdown extensions and
-    their configurations via the context dictionary, allowing for flexible
-    parsing behaviors.
+    This node demonstrates basic Markdown syntax conversion for headers,
+    bold, and italic text.
     """
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the unique and descriptive name of this processing node.
-        """
+        """Returns the descriptive name of the node."""
         return "MarkdownParser"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> str:
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Parses the input data, expected to be a Markdown string, into an HTML string.
-
-        The node can be configured via the `context` dictionary to use specific
-        Markdown extensions and their configurations:
-        - `context['markdown_extensions']`: An optional list of extension names
-          (e.g., ['fenced_code', 'tables']).
-        - `context['markdown_extension_configs']`: An optional dictionary of
-          extension configurations, where keys are extension names and values
-          are dictionaries of their respective settings.
+        Processes the input data, treating it as Markdown text, and converts
+        common Markdown elements into a simplified HTML-like string.
 
         Args:
-            data (Any): The input data. Expected to be a string containing Markdown.
-            context (Dict[str, Any]): A dictionary containing contextual information,
-                                       potentially including 'markdown_extensions'
-                                       and 'markdown_extension_configs' for configuration.
+            data: The input data, expected to be a string containing Markdown.
+            context: A dictionary containing contextual information for the node.
+                     Currently, not used for specific configuration but can be
+                     leveraged for parsing options in the future.
 
         Returns:
-            str: The HTML string resulting from the Markdown parsing.
+            A string with basic Markdown syntax converted to HTML-like tags.
 
         Raises:
-            TypeError: If the input `data` is not a string, as Markdown parsing
-                       is only applicable to string content.
-            ValueError: If an unexpected error occurs during the Markdown parsing
-                        process, possibly due to malformed input or invalid
-                        extension configurations.
+            TypeError: If the input data is not a string.
+            ValueError: If parsing encounters an unexpected internal error.
         """
+        logger.debug(f"[{self.node_name}] Starting Markdown parsing process.")
+        logger.debug(f"[{self.node_name}] Context received: {context}")
+
         if not isinstance(data, str):
-            error_message = (
-                f"{self.node_name} expects input data of type 'str' for parsing, "
-                f"but received '{type(data).__name__}'. Aborting process."
+            logger.error(
+                f"[{self.node_name}] Invalid input type. Expected 'str', "
+                f"but received '{type(data).__name__}'."
             )
-            logger.error(error_message, extra={"node_name": self.node_name, "received_type": type(data).__name__})
-            raise TypeError(error_message)
+            raise TypeError(
+                f"Data for MarkdownParserNode must be a string. "
+                f"Got {type(data).__name__}"
+            )
+
+        if not data.strip():
+            logger.warning(f"[{self.node_name}] Received empty or whitespace-only string for parsing.")
+            return ""
+
+        processed_text = data
 
         try:
-            # Retrieve optional Markdown extensions and their configurations from context.
-            # Default to empty lists/dictionaries if not provided.
-            extensions = context.get('markdown_extensions', [])
-            extension_configs = context.get('markdown_extension_configs', {})
+            # Convert headers: ### Header -> <h3>Header</h3>, ## Header -> <h2>Header</h2>, # Header -> <h1>Header</h1>
+            # Order matters: parse higher-level headers first to avoid partial matches
+            processed_text = re.sub(r'^(###)\s*(.*)$', r'<h3>\2</h3>', processed_text, flags=re.MULTILINE)
+            processed_text = re.sub(r'^(##)\s*(.*)$', r'<h2>\2</h2>', processed_text, flags=re.MULTILINE)
+            processed_text = re.sub(r'^(#)\s*(.*)$', r'<h1>\2</h1>', processed_text, flags=re.MULTILINE)
 
-            # Perform the Markdown to HTML conversion using the configured extensions.
-            html_output = markdown.markdown(data, extensions=extensions, extension_configs=extension_configs)
+            # Convert bold: **text** -> <strong>text</strong>
+            processed_text = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', processed_text)
 
-            logger.info(
-                f"Successfully parsed Markdown data into HTML using {self.node_name}.",
-                extra={
-                    "node_name": self.node_name,
-                    "input_data_length": len(data),
-                    "output_data_length": len(html_output),
-                    "extensions_used": extensions
-                }
-            )
-            return html_output
+            # Convert italic: *text* -> <em>text</em>
+            processed_text = re.sub(r'\*(.*?)\*', r'<em>\1</em>', processed_text)
 
         except Exception as e:
-            # Catch any unexpected errors that might occur during the markdown processing
-            # (e.g., invalid extension names, issues within extension processing).
-            error_message = (
-                f"An unexpected error occurred during Markdown parsing in {self.node_name}: {e}. "
-                "Review the input data or context configurations for 'markdown_extensions' "
-                "and 'markdown_extension_configs'."
-            )
-            logger.error(error_message, exc_info=True, extra={"node_name": self.node_name, "error_type": type(e).__name__})
-            # Re-raise as a ValueError, chaining the original exception for better debuggability.
-            raise ValueError(error_message) from e
+            logger.exception(f"[{self.node_name}] An unexpected error occurred during Markdown parsing.")
+            raise ValueError(f"Failed to parse Markdown due to an internal error: {e}") from e
+
+        logger.debug(f"[{self.node_name}] Successfully completed Markdown parsing.")
+        return processed_text
+
+# Example of how to use the node (for testing purposes, not part of the core library)
+if __name__ == "__main__":
+    # Dummy BaseNode for local execution without the full vishustra_core
+    # In a real Vishustra environment, this would be imported from the framework.
+    class BaseNode(ABC):
+        @abstractmethod
+        def process(self, data: Any, context: Dict[str, Any]) -> Any:
+            pass
+        @property
+        @abstractmethod
+        def node_name(self) -> str:
+            pass
+
+    # Re-declare MarkdownParserNode using the local BaseNode for standalone testing
+    # This block would not be part of the actual file committed to Vishustra.
+    class MarkdownParserNode(BaseNode):
+        @property
+        def node_name(self) -> str:
+            return "MarkdownParser"
+        def process(self, data: Any, context: Dict[str, Any]) -> Any:
+            # Replicate the actual process method logic here for standalone test
+            logger.debug(f"[{self.node_name}] (Local Test) Starting Markdown parsing process.")
+            if not isinstance(data, str):
+                raise TypeError(f"Data for MarkdownParserNode must be a string. Got {type(data).__name__}")
+            
+            processed_text = data
+            processed_text = re.sub(r'^(###)\s*(.*)$', r'<h3>\2</h3>', processed_text, flags=re.MULTILINE)
+            processed_text = re.sub(r'^(##)\s*(.*)$', r'<h2>\2</h2>', processed_text, flags=re.MULTILINE)
+            processed_text = re.sub(r'^(#)\s*(.*)$', r'<h1>\2</h1>', processed_text, flags=re.MULTILINE)
+            processed_text = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', processed_text)
+            processed_text = re.sub(r'\*(.*?)\*', r'<em>\1</em>', processed_text)
+            logger.debug(f"[{self.node_name}] (Local Test) Successfully completed Markdown parsing.")
+            return processed_text
+
+    logging.basicConfig(level=logging.DEBUG, format='%(levelname)s: %(message)s')
+    parser_node = MarkdownParserNode()
+
+    test_markdown = """
+# Welcome to Vishustra
+
+This is a **paragraph** with *some italic text*.
+
+## Subheading One
+
+### Deeper Subheading
+
+- Item 1
+- Item 2
+
+Another line of text.
+    """
+
+    print("\n--- Original Markdown ---")
+    print(test_markdown)
+
+    try:
+        parsed_output = parser_node.process(test_markdown, {"metadata": "example"})
+        print("\n--- Parsed Output ---")
+        print(parsed_output)
+
+        print("\n--- Testing with empty string ---")
+        empty_output = parser_node.process("", {})
+        print(f"Empty string output: '{empty_output}'")
+
+        print("\n--- Testing with non-string data ---")
+        try:
+            parser_node.process(123, {})
+        except TypeError as e:
+            print(f"Caught expected error: {e}")
+
+    except Exception as e:
+        print(f"\nAn unexpected error occurred during test execution: {e}")
