@@ -1,86 +1,94 @@
-import logging
 from typing import Any, Dict
+import logging
 
-# Assuming vishustra_core is a package and nodes.base_node is a module within it
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class SentimentAnalyzerNode(BaseNode):
     """
-    A Vishustra node that performs sentiment analysis on input text.
-
-    This node simulates sentiment detection (positive, negative, neutral)
-    based on a simplified keyword matching approach. In a real-world scenario,
-    it would integrate with an actual NLP model or service.
+    A processing node that performs sentiment analysis on input text.
+    It simulates sentiment detection by looking for predefined positive and negative keywords.
     """
 
     @property
     def node_name(self) -> str:
         """Returns the name of the node."""
-        return "Sentiment Analyzer"
+        return "SentimentAnalyzer"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
+    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Analyzes the sentiment of the input text data.
+        Analyzes the sentiment of the input data.
 
-        Expected input `data`: A string containing the text to analyze.
-        Expected output: A dictionary containing the original text, detected sentiment
-                         ('positive', 'negative', 'neutral'), and a simulated score.
-
-        Args:
-            data (Any): The input data, expected to be a string.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                       for the processing. Not directly used by this
-                                       node's core logic but provided for extensibility.
-
-        Returns:
-            Any: A dictionary structured as follows:
-                 `{"text": original_text, "sentiment": detected_sentiment, "score": simulated_score}`
-
-        Raises:
-            TypeError: If the input data is not a string.
+        Expected `data` type: str
+        Returns: A dictionary containing 'sentiment' (str) and 'score' (float).
+                 Sentiment can be 'positive', 'negative', or 'neutral'.
+                 Score ranges from -1.0 (highly negative) to 1.0 (highly positive).
+        Raises: ValueError if the input `data` is not a string.
         """
         if not isinstance(data, str):
-            error_msg = (
-                f"{self.node_name} received invalid data type. "
-                f"Expected 'str', but got '{type(data).__name__}'."
-            )
+            error_msg = f"SentimentAnalyzerNode received invalid data type: {type(data)}. Expected string."
             logger.error(error_msg)
-            raise TypeError(error_msg)
+            raise ValueError(error_msg)
 
-        text_to_analyze = data.strip()
+        text = data.lower()
+        sentiment_score = 0.0
+        sentiment_label = "neutral"
 
-        if not text_to_analyze:
-            logger.warning(f"{self.node_name} received an empty string for analysis. Returning 'neutral' sentiment.")
-            return {"text": data, "sentiment": "neutral", "score": 0.50}
+        # Simple keyword-based sentiment simulation
+        positive_keywords = ["good", "great", "excellent", "awesome", "happy", "love", "positive", "fine", "well"]
+        negative_keywords = ["bad", "terrible", "poor", "awful", "unhappy", "hate", "negative", "problem", "wrong"]
 
-        # --- Simulate sentiment analysis based on keywords ---
-        lower_text = text_to_analyze.lower()
-        sentiment = "neutral"
-        score = 0.50  # Default neutral score
+        found_positive = sum(text.count(kw) for kw in positive_keywords)
+        found_negative = sum(text.count(kw) for kw in negative_keywords)
 
-        positive_keywords = ["good", "great", "excellent", "wonderful", "amazing", "happy", "love", "awesome", "perfect"]
-        negative_keywords = ["bad", "terrible", "poor", "awful", "horrible", "sad", "hate", "disappointing", "frustrating"]
+        if found_positive > found_negative:
+            sentiment_label = "positive"
+            sentiment_score = min(1.0, 0.2 * (found_positive - found_negative)) # Simple score scaling
+        elif found_negative > found_positive:
+            sentiment_label = "negative"
+            sentiment_score = max(-1.0, -0.2 * (found_negative - found_positive)) # Simple score scaling
+        else:
+            sentiment_label = "neutral"
+            sentiment_score = 0.0
 
-        positive_count = sum(1 for keyword in positive_keywords if keyword in lower_text)
-        negative_count = sum(1 for keyword in negative_keywords if keyword in lower_text)
+        result = {
+            "sentiment": sentiment_label,
+            "score": sentiment_score
+        }
 
-        if positive_count > negative_count:
-            sentiment = "positive"
-            # Simulate a higher score for positive sentiment, capped near 0.99
-            score = 0.50 + min(0.49, positive_count * 0.15)
-        elif negative_count > positive_count:
-            sentiment = "negative"
-            # Simulate a lower score for negative sentiment, floored near 0.01
-            score = 0.50 - min(0.49, negative_count * 0.15)
-        # If counts are equal or zero, sentiment remains 'neutral' and score 0.50
+        logger.debug(f"[{self.node_name}] Processed text (len={len(data)}). Result: {result}")
+        return result
 
-        # Log the result for debugging purposes
-        log_text_preview = text_to_analyze[:70] + ("..." if len(text_to_analyze) > 70 else "")
-        logger.debug(
-            f"Analyzed text '{log_text_preview}': "
-            f"Detected sentiment: '{sentiment}' (Score: {score:.2f})"
-        )
+# Example Usage (for testing purposes, not part of the node itself)
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG)
+    analyzer = SentimentAnalyzerNode()
 
-        return {"text": data, "sentiment": sentiment, "score": round(score, 2)}
+    test_cases = [
+        "This is a great product, I love it!",
+        "The service was terrible and very poor.",
+        "It's an average experience, nothing special.",
+        "I am happy with the outcome.",
+        "This is wrong and bad.",
+        "",
+        "Good good good bad", # mixed
+    ]
+
+    for text_input in test_cases:
+        try:
+            analysis_result = analyzer.process(text_input, {})
+            print(f"Text: '{text_input}'\n  -> {analysis_result}\n")
+        except ValueError as e:
+            print(f"Error processing '{text_input}': {e}\n")
+
+    # Test with invalid input type
+    try:
+        analyzer.process(123, {})
+    except ValueError as e:
+        print(f"Error processing non-string data: {e}\n")
+
+    try:
+        analyzer.process(["list", "of", "strings"], {})
+    except ValueError as e:
+        print(f"Error processing list data: {e}\n")
