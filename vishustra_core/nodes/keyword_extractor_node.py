@@ -1,124 +1,101 @@
 import logging
-import re
-from typing import Any, Dict, List, Set, Union
+from typing import Any, Dict, List, Set
 
-# Assuming BaseNode is located here as per project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
+
 class KeywordExtractorNode(BaseNode):
     """
-    A Vishustra node that simulates extracting keywords from a given text.
-    It processes a string input to identify and return a list of potential keywords
-    based on basic text processing rules (e.g., filtering stop words, minimum length,
-    and removing punctuation).
+    A Vishustra processing node that extracts keywords from a given text.
+    This node simulates keyword extraction by searching for a predefined
+    or context-provided set of keywords within the input data.
     """
 
-    DEFAULT_STOP_WORDS = {
-        "the", "a", "an", "is", "and", "or", "in", "of", "to", "for", "with", "on", "at", "by", "from",
-        "it", "its", "as", "he", "she", "they", "we", "you", "i", "my", "your", "his", "her", "their",
-        "our", "this", "that", "these", "those", "be", "been", "being", "was", "were", "are", "do",
-        "does", "did", "not", "no", "yes", "but", "if", "then", "else", "when", "where", "why", "how",
-        "what", "who", "whom", "which", "will", "would", "should", "could", "can", "may", "might",
-        "must", "have", "has", "had", "just", "only", "also", "even", "much", "more", "most", "many",
-        "some", "any", "all", "each", "every", "few", "other", "such", "so", "up", "down", "out",
-        "off", "over", "under", "again", "further", "then", "once", "here", "there", "when", "where",
-        "why", "how", "all", "any", "both", "each", "few", "more", "most", "other", "some", "such",
-        "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very", "s", "t", "can", "will",
-        "just", "don", "should", "now"
-    }
-    DEFAULT_MIN_KEYWORD_LENGTH = 3
-
-    def __init__(self,
-                 stop_words: Union[Set[str], List[str], None] = None,
-                 min_keyword_length: int = DEFAULT_MIN_KEYWORD_LENGTH):
+    def __init__(self):
         """
-        Initializes the KeywordExtractorNode with configurable stop words and
-        minimum keyword length.
-
-        Args:
-            stop_words: A set or list of words to exclude from keywords.
-                        Defaults to a predefined set if None. All words are
-                        converted to lowercase for case-insensitive matching.
-            min_keyword_length: The minimum length a word must have to be considered
-                                a keyword. Defaults to 3.
+        Initializes the KeywordExtractorNode with a default set of keywords
+        to search for if none are provided in the processing context.
         """
-        self._stop_words: Set[str] = set(word.lower() for word in stop_words) if stop_words else self.DEFAULT_STOP_WORDS
-        self._min_keyword_length: int = min_keyword_length
-        logger.debug(
-            f"KeywordExtractorNode initialized with min_keyword_length={self._min_keyword_length} "
-            f"and {len(self._stop_words)} stop words."
-        )
+        self._default_keywords: Set[str] = {
+            "vishustra", "llm", "orchestration", "framework", "node",
+            "processing", "data", "engineer", "backend", "python",
+            "module", "component", "workflow"
+        }
+        logger.debug(f"KeywordExtractorNode initialized with default keywords: {', '.join(sorted(list(self._default_keywords)))}")
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """
+        Returns the descriptive name of this node.
+        """
         return "KeywordExtractor"
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Processes the input data (expected to be a string) to extract keywords.
+        Processes the input data to extract relevant keywords.
 
-        The extraction process involves:
-        1. Converting the text to lowercase.
-        2. Splitting the text into words.
-        3. Removing punctuation and non-alphabetic characters from each word.
-        4. Filtering out words that are in the configured stop words list.
-        5. Filtering out words shorter than the configured minimum length.
-        6. Returning a sorted list of unique extracted keywords.
+        The `data` is expected to be a string (text). The method will look for
+        keywords within this text.
+
+        The `context` dictionary can optionally contain a 'keywords_to_extract'
+        key, which should be a list or set of strings. If provided, these
+        keywords will be used instead of the node's default set.
 
         Args:
-            data: The input text as a string.
-            context: A dictionary for shared context or state across nodes.
-                     This node does not directly use the context for its core
-                     keyword extraction logic, but it's available for potential
-                     future extensions or debugging.
+            data (Any): The input data to process. Expected to be a string.
+            context (Dict[str, Any]): A dictionary containing contextual
+                                      information or configuration for the node.
 
         Returns:
-            A list of unique keywords extracted from the text, sorted alphabetically.
+            List[str]: A sorted list of unique keywords found in the input text.
 
         Raises:
-            ValueError: If the input data is not a string.
-            Exception: For any unexpected errors encountered during the extraction process.
+            ValueError: If the input `data` is not a string.
         """
+        node_id = context.get('node_id', self.node_name)
+        logger.info(f"[{node_id}] Starting keyword extraction process.")
+
         if not isinstance(data, str):
-            logger.error(
-                f"Invalid input type for KeywordExtractorNode '{self.node_name}'. "
-                f"Expected 'str', but received '{type(data).__name__}'."
-            )
-            raise ValueError(
-                f"KeywordExtractorNode '{self.node_name}' requires 'data' to be a string, "
-                f"but received {type(data).__name__}."
-            )
+            logger.error(f"[{node_id}] Invalid input data type. Expected 'str', but received '{type(data).__name__}'.")
+            raise ValueError(f"{self.node_name} expects string input, but received {type(data).__name__}.")
 
-        try:
-            text = data.lower()
-            # A more robust split that handles various delimiters and removes empty strings
-            words = re.findall(r'\b\w+\b', text)
+        extracted_keywords: Set[str] = set()
+        text_lower = data.lower()
 
-            extracted_keywords: Set[str] = set()
+        keywords_to_search_lower: Set[str] = set()
+        if 'keywords_to_extract' in context:
+            context_keywords = context['keywords_to_extract']
+            if isinstance(context_keywords, (list, set)):
+                try:
+                    keywords_to_search_lower = set(str(k).lower() for k in context_keywords if isinstance(k, str))
+                    logger.debug(f"[{node_id}] Using {len(keywords_to_search_lower)} keywords provided in context.")
+                except Exception as e:
+                    logger.warning(
+                        f"[{node_id}] Could not properly parse 'keywords_to_extract' from context ({e}). "
+                        "Falling back to node's default keywords."
+                    )
+                    keywords_to_search_lower = self._default_keywords
+            else:
+                logger.warning(
+                    f"[{node_id}] 'keywords_to_extract' in context is not a list or set "
+                    f"(type: {type(context_keywords).__name__}). Falling back to node's default keywords."
+                )
+                keywords_to_search_lower = self._default_keywords
+        else:
+            keywords_to_search_lower = self._default_keywords
+            logger.debug(f"[{node_id}] Using node's default {len(self._default_keywords)} keywords.")
 
-            for word in words:
-                # Basic alphanumeric filter, `re.findall(r'\b\w+\b', text)` already handles this
-                # but an extra layer ensures consistency if splitting logic changes.
-                clean_word = ''.join(char for char in word if char.isalpha())
+        if not keywords_to_search_lower:
+            logger.warning(f"[{node_id}] No keywords specified for extraction. Returning empty list.")
+            return []
 
-                if clean_word and \
-                   len(clean_word) >= self._min_keyword_length and \
-                   clean_word not in self._stop_words:
-                    extracted_keywords.add(clean_word)
+        # Simulate keyword extraction by checking for substring presence
+        for keyword_candidate_lower in keywords_to_search_lower:
+            if keyword_candidate_lower in text_lower:
+                extracted_keywords.add(keyword_candidate_lower)
 
-            sorted_keywords = sorted(list(extracted_keywords))
-            logger.info(
-                f"Successfully extracted {len(sorted_keywords)} keywords from input data "
-                f"using node '{self.node_name}'."
-            )
-            return sorted_keywords
-        except Exception as e:
-            logger.exception(
-                f"An unexpected error occurred during keyword extraction in node '{self.node_name}'. "
-                f"Error: {e}"
-            )
-            # Re-raise the exception to propagate the error up the orchestration chain
-            raise
+        result = sorted(list(extracted_keywords))
+        logger.info(f"[{node_id}] Finished keyword extraction. Found {len(result)} keywords.")
+        return result
