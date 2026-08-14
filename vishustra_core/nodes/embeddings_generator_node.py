@@ -2,110 +2,135 @@ import logging
 import random
 from typing import Any, Dict, List, Union
 
+# Assuming BaseNode is available from the vishustra_core package as specified
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
+
 class EmbeddingsGeneratorNode(BaseNode):
     """
-    A processing node designed to generate vector embeddings from text data.
+    A Vishustra node designed to generate (or simulate the generation of)
+    text embeddings.
 
-    This node takes either a single string or a list of strings and
-    simulates the creation of corresponding fixed-dimension vector embeddings.
-    The simulation ensures deterministic output for identical inputs and
-    supports configurable embedding dimensions via the processing context.
+    This node accepts a single string or a list of strings as input data.
+    It returns a list of embedding vectors, where each vector is a list of floats.
+    The dimension of the embeddings can be specified via the 'embedding_dim'
+    key in the context dictionary.
     """
-
-    DEFAULT_EMBEDDING_DIMENSION: int = 768
-    """The default dimension for generated embeddings if not specified in the context."""
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of this processing node."""
+        """Returns the descriptive name of the node."""
         return "EmbeddingsGenerator"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Union[List[float], List[List[float]], None]:
-        """
-        Generates vector embeddings for the provided input data.
-
-        The `context` dictionary can optionally specify the desired `embedding_dim`
-        (an integer greater than 0) for the output vectors. If not provided or
-        invalid, `DEFAULT_EMBEDDING_DIMENSION` will be used.
-
-        Args:
-            data (Any): The input data, expected to be a `str` for a single text
-                        or a `List[str]` for multiple texts.
-            context (Dict[str, Any]): A dictionary containing runtime configuration
-                                      and contextual information for the node.
-
-        Returns:
-            Union[List[float], List[List[float]], None]:
-                - A `List[float]` if the input `data` was a single string.
-                - A `List[List[float]]` if the input `data` was a list of strings.
-                - `None` if the input data is `None`, of an unsupported type,
-                  or if an error occurred during processing.
-        """
-        embedding_dim = context.get('embedding_dim', self.DEFAULT_EMBEDDING_DIMENSION)
-        if not isinstance(embedding_dim, int) or embedding_dim <= 0:
-            logger.warning(
-                f"Invalid or non-positive 'embedding_dim' '{embedding_dim}' provided in context. "
-                f"Using default dimension: {self.DEFAULT_EMBEDDING_DIMENSION}."
-            )
-            embedding_dim = self.DEFAULT_EMBEDDING_DIMENSION
-
-        if data is None:
-            logger.debug("Received None as input data. Returning None.")
-            return None
-        elif isinstance(data, str):
-            logger.debug(f"Processing single text input (first 20 chars: '{data[:20]}').")
-            return self._generate_single_embedding(data, embedding_dim)
-        elif isinstance(data, list):
-            logger.debug(f"Processing list of {len(data)} text inputs.")
-            results = []
-            for item_idx, item in enumerate(data):
-                if isinstance(item, str):
-                    results.append(self._generate_single_embedding(item, embedding_dim))
-                else:
-                    logger.warning(
-                        f"Skipping non-string item at index {item_idx} in input list "
-                        f"(type: {type(item).__name__}). Only strings are supported."
-                    )
-            return results
-        else:
-            logger.error(
-                f"Unsupported input data type for EmbeddingsGenerator: '{type(data).__name__}'. "
-                "Expected str or List[str]."
-            )
-            return None
-
-    def _generate_single_embedding(self, text: str, dimension: int) -> List[float]:
+    def _generate_single_embedding(self, text: str, dim: int) -> List[float]:
         """
         Simulates the generation of a single embedding vector for a given text.
-
-        This method uses a hash-based pseudo-random number generator to produce
-        a deterministic list of floats. This ensures that the same text input
-        always yields the same simulated embedding vector for a given dimension.
+        In a production environment, this method would interface with an
+        actual embedding model (e.g., from Hugging Face, OpenAI, Cohere, etc.).
 
         Args:
-            text (str): The text string for which to generate an embedding.
-            dimension (int): The desired dimension of the output embedding vector.
+            text: The input string for which to generate an embedding.
+            dim: The desired dimension for the embedding vector.
 
         Returns:
-            List[float]: A list of floats representing the generated embedding vector.
-                         Returns a vector of zeros if the input `text` is empty.
+            A list of floats representing the embedding vector.
         """
         if not text:
-            logger.debug("Received an empty string for embedding generation. Returning a zero vector.")
-            return [0.0] * dimension
+            # Handle empty strings by returning a zero vector or specific placeholder
+            logger.debug(f"[{self.node_name}] Generating zero vector for empty text.")
+            return [0.0] * dim
+        # Simulate an embedding with random floats between -1.0 and 1.0
+        return [random.uniform(-1.0, 1.0) for _ in range(dim)]
 
-        # Use a seed derived from the text's hash to ensure deterministic "embeddings"
-        # The seed is capped to fit common PRNG requirements (e.g., Python's random.seed takes an int).
-        seed = hash(text) % (2**32 - 1)
-        rng = random.Random(seed)
+    def process(self, data: Any, context: Dict[str, Any]) -> List[List[float]]:
+        """
+        Processes input data to generate embedding vectors.
 
-        embedding = [round(rng.uniform(-1.0, 1.0), 6) for _ in range(dimension)]
+        Args:
+            data: The input to be embedded. This can be:
+                  - A `str`: A single text string.
+                  - A `List[str]`: A list of text strings.
+            context: A dictionary containing operational context.
+                     Expected keys:
+                     - 'embedding_dim' (int): The desired dimension of the
+                       embedding vectors. Defaults to 128 if not provided
+                       or invalid.
+
+        Returns:
+            A `List[List[float]]`, where each inner list is an embedding vector.
+            Each inner list corresponds to an input text in the order they were
+            processed. Returns an empty list if no valid texts were processed
+            or all embedding generations failed.
+
+        Raises:
+            TypeError: If the input 'data' is not a string or a list of strings.
+            ValueError: If 'data' is a list containing non-string elements.
+        """
+        logger.debug(f"[{self.node_name}] Process initiated for data of type: {type(data).__name__}")
+
+        embedding_dim = context.get('embedding_dim', 128)
+        if not isinstance(embedding_dim, int) or embedding_dim <= 0:
+            logger.warning(
+                f"[{self.node_name}] Invalid or non-positive 'embedding_dim' in context "
+                f"('{embedding_dim}'). Using default dimension: 128."
+            )
+            embedding_dim = 128
+
+        texts_to_embed: List[str] = []
+
+        if isinstance(data, str):
+            texts_to_embed.append(data)
+        elif isinstance(data, list):
+            # Validate that all elements in the list are strings
+            if not all(isinstance(item, str) for item in data):
+                non_str_items = [item for item in data if not isinstance(item, str)]
+                error_msg = (
+                    f"[{self.node_name}] Input list contains non-string elements. "
+                    f"First non-string type encountered: {type(non_str_items[0]).__name__}."
+                )
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            texts_to_embed.extend(data)
+        else:
+            error_msg = (
+                f"[{self.node_name}] Invalid input data type. "
+                f"Expected 'str' or 'List[str]', got '{type(data).__name__}'."
+            )
+            logger.error(error_msg)
+            raise TypeError(error_msg)
+
+        if not texts_to_embed:
+            logger.info(f"[{self.node_name}] No valid texts provided for embedding. Returning an empty list.")
+            return []
+
+        embeddings: List[List[float]] = []
+        for i, text in enumerate(texts_to_embed):
+            try:
+                embedding = self._generate_single_embedding(text, embedding_dim)
+                embeddings.append(embedding)
+                logger.debug(
+                    f"[{self.node_name}] Generated embedding for text index {i} "
+                    f"(first 20 chars: '{text[:20]}...') with dimension {embedding_dim}."
+                )
+            except Exception as e:
+                # Log the error and continue processing other texts.
+                # The caller will receive a list with fewer embeddings than input texts
+                # for such failures.
+                logger.error(
+                    f"[{self.node_name}] Error generating embedding for text at index {i} "
+                    f"('{text[:50]}...'): {e}",
+                    exc_info=True  # Include stack trace for detailed debugging
+                )
+                # Decide whether to append a placeholder or simply skip. Skipping here.
+                pass
+
+        if not embeddings and texts_to_embed:
+            logger.warning(f"[{self.node_name}] All embedding generations failed for the given inputs. Returning an empty list.")
+
         logger.debug(
-            f"Successfully generated simulated embedding of dimension {dimension} "
-            f"for text (first 20 chars: '{text[:20]}...')"
+            f"[{self.node_name}] Process completed. Generated {len(embeddings)} embedding vectors."
+            f"{f' First vector length: {len(embeddings[0])}' if embeddings else ''}"
         )
-        return embedding
+        return embeddings
