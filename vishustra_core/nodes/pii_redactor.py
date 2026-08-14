@@ -1,37 +1,38 @@
-import logging
 import re
-from typing import Any, Dict, List, Union
+import logging
+from typing import Any, Dict, Union, List
 
+# Assuming BaseNode is available at this path as per project instructions
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-class PIIRedactorNode(BaseNode):
+class PII_RedactorNode(BaseNode):
     """
-    A Vishustra node designed to redact personally identifiable information (PII)
-    from text data. It applies a set of predefined regex patterns to identify
-    and replace sensitive information with generic placeholders.
+    A Vishustra node designed to redact Personally Identifiable Information (PII)
+    from text data. This node identifies common PII patterns using regular expressions
+    and replaces them with generic '[REDACTED_TYPE]' placeholders.
 
-    This node supports redaction within strings, and recursively processes
-    string values found within dictionaries and lists, preserving the overall
-    data structure.
+    It supports redaction within:
+    - Pure string inputs.
+    - String values within dictionaries (including nested dictionaries and lists of strings/dictionaries).
+
+    Supported PII types for redaction include:
+    - Email addresses
+    - Phone numbers (common international and North American formats)
+    - Basic Credit Card Numbers (13-16 digits, with optional spaces/hyphens)
+    - Social Security Numbers (US format: ###-##-####)
+    - IP Addresses (IPv4)
     """
 
-    # Predefined PII patterns and their corresponding redaction placeholders.
-    # These patterns are illustrative and can be extended or made configurable
-    # for production deployments.
-    _PII_PATTERNS = {
-        # Email addresses (e.g., user@example.com)
-        re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'): '[EMAIL_REDACTED]',
-        # Common US phone number formats (e.g., 123-456-7890, (123) 456-7890)
-        re.compile(r'\b(?:\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})\b'): '[PHONE_REDACTED]',
-        # US Social Security Numbers (e.g., 123-45-6789)
-        re.compile(r'\b\d{3}-\d{2}-\d{4}\b'): '[SSN_REDACTED]',
-        # Credit Card Numbers (basic 13-16 digit patterns, without Luhn validation)
-        re.compile(r'\b(?:\d[ -]*?){13,16}\b'): '[CREDIT_CARD_REDACTED]',
-        # IP Addresses (IPv4, e.g., 192.168.1.1)
-        re.compile(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b'): '[IP_REDACTED]',
-    }
+    # Compiled regular expressions for various PII patterns
+    _email_pattern = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b')
+    _phone_pattern = re.compile(r'\b(?:\+?\d{1,3}[-. ]?)?\(?\d{3}\)?[ -. ]?\d{3}[ -. ]?\d{4}\b')
+    # This credit card pattern is a heuristic and might match non-CC numbers.
+    # For high-assurance redaction, integrating Luhn algorithm validation would be necessary.
+    _credit_card_pattern = re.compile(r'\b(?:\d[ -]*?){13,16}\b')
+    _ssn_pattern = re.compile(r'\b\d{3}[- ]?\d{2}[- ]?\d{4}\b')
+    _ip_address_pattern = re.compile(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b')
 
     @property
     def node_name(self) -> str:
@@ -40,67 +41,92 @@ class PIIRedactorNode(BaseNode):
         """
         return "PII Redactor"
 
-    def _redact_string(self, text: str) -> str:
+    def process(self, data: Union[str, Dict[str, Any], List[Any]], context: Dict[str, Any]) -> Union[str, Dict[str, Any], List[Any]]:
         """
-        Applies all defined PII redaction patterns to a given string.
+        Processes the input data to identify and redact PII.
+
+        If the input `data` is a string, it redacts PII directly.
+        If the input `data` is a dictionary or list, it recursively attempts to redact PII
+        from all string values within the structure. Non-string values are returned unchanged.
 
         Args:
-            text: The input string potentially containing PII.
+            data: The input data, expected to be a string, dictionary, or list containing
+                  string values or nested structures.
+            context: A dictionary containing contextual information relevant to the
+                     orchestration, though not directly used for redaction logic in this node.
 
         Returns:
-            The string with identified PII replaced by placeholders.
+            The data with PII redacted. The return type matches the input type where possible.
+
+        Raises:
+            TypeError: If the input data is of an unsupported fundamental type.
+            Exception: Catches and logs any unexpected errors during the redaction process.
         """
-        redacted_text = text
-        for pattern, placeholder in self._PII_PATTERNS.items():
-            redacted_text = pattern.sub(placeholder, redacted_text)
-        return redacted_text
+        if data is None:
+            logger.debug("Received None data for PII redaction. Returning None.")
+            return None
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
-        """
-        Processes the input data to redact PII.
-
-        This method supports:
-        -   `str`: Direct redaction using defined patterns.
-        -   `dict`: Recursively processes string values within the dictionary.
-        -   `list`: Recursively processes string elements within the list.
-
-        For other data types, the data is returned unchanged, and a warning
-        is logged.
-
-        Args:
-            data: The input data, which can be a string, dictionary, list,
-                  or any other type.
-            context: A dictionary containing contextual information for the node's
-                     operation. While not used for PII rules in this base implementation,
-                     it provides extensibility for dynamic rule application.
-
-        Returns:
-            The processed data with PII redacted, maintaining its original structure.
-            If the data type is unsupported for redaction, the original data is returned.
-        """
         try:
             if isinstance(data, str):
-                logger.debug("Attempting PII redaction on string data.")
                 return self._redact_string(data)
             elif isinstance(data, dict):
-                logger.debug("Recursively processing dictionary for PII redaction.")
-                redacted_dict = {}
-                for key, value in data.items():
-                    redacted_dict[key] = self.process(value, context)  # Recursive call
-                return redacted_dict
+                return self._redact_dict(data)
             elif isinstance(data, list):
-                logger.debug("Recursively processing list for PII redaction.")
-                redacted_list = []
-                for item in data:
-                    redacted_list.append(self.process(item, context))  # Recursive call
-                return redacted_list
+                return self._redact_list(data)
             else:
-                logger.info(
-                    f"Skipping PII redaction for unsupported data type: {type(data).__name__}. "
-                    "Data must be a string, dict, or list."
-                )
-                return data
+                error_msg = f"Unsupported data type for PII redaction: {type(data).__name__}. Expected str, dict, or list."
+                logger.error(error_msg)
+                raise TypeError(error_msg)
         except Exception as e:
-            logger.error(f"An error occurred during PII redaction: {e}", exc_info=True)
-            # In case of an unexpected error, return the original data to prevent data loss.
-            return data
+            logger.exception(f"An unexpected error occurred during PII redaction: {e}")
+            raise
+
+    def _redact_string(self, text: str) -> str:
+        """
+        Helper method to apply PII redaction rules to a single string.
+        """
+        redacted_text = text
+        
+        redacted_text = self._email_pattern.sub('[REDACTED_EMAIL]', redacted_text)
+        redacted_text = self._phone_pattern.sub('[REDACTED_PHONE]', redacted_text)
+        redacted_text = self._credit_card_pattern.sub('[REDACTED_CC]', redacted_text)
+        redacted_text = self._ssn_pattern.sub('[REDACTED_SSN]', redacted_text)
+        redacted_text = self._ip_address_pattern.sub('[REDACTED_IP]', redacted_text)
+
+        if text != redacted_text:
+            logger.debug(f"PII redacted from string. Original length: {len(text)}, Redacted length: {len(redacted_text)}.")
+        return redacted_text
+
+    def _redact_dict(self, data_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Helper method to recursively redact PII from string values within a dictionary.
+        """
+        redacted_dict = {}
+        for key, value in data_dict.items():
+            if isinstance(value, str):
+                redacted_dict[key] = self._redact_string(value)
+            elif isinstance(value, dict):
+                redacted_dict[key] = self._redact_dict(value)
+            elif isinstance(value, list):
+                redacted_dict[key] = self._redact_list(value)
+            else:
+                redacted_dict[key] = value # Keep non-string/non-dict/non-list values as is
+        logger.debug(f"PII redaction applied to dictionary with {len(data_dict)} items.")
+        return redacted_dict
+
+    def _redact_list(self, data_list: List[Any]) -> List[Any]:
+        """
+        Helper method to recursively redact PII from string values within a list.
+        """
+        redacted_list = []
+        for item in data_list:
+            if isinstance(item, str):
+                redacted_list.append(self._redact_string(item))
+            elif isinstance(item, dict):
+                redacted_list.append(self._redact_dict(item))
+            elif isinstance(item, list):
+                redacted_list.append(self._redact_list(item))
+            else:
+                redacted_list.append(item) # Keep non-string/non-dict/non-list items as is
+        logger.debug(f"PII redaction applied to list with {len(data_list)} items.")
+        return redacted_list
