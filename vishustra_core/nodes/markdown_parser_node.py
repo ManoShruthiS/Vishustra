@@ -2,125 +2,116 @@ import logging
 import re
 from typing import Any, Dict
 
-# Assuming vishustra_core.nodes.base_node is available in the Python path
+# Assuming BaseNode is available at this path as per Vishustra project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class MarkdownParserNode(BaseNode):
     """
-    A Vishustra processing node that parses Markdown content.
+    A Vishustra processing node designed to parse Markdown content.
 
-    This node takes a string of Markdown, performs a simulated parsing
-    to extract plain text and basic metadata, and returns a structured
-    dictionary representation. This simulation does not use a full-fledged
-    Markdown parser library but rather demonstrates common extraction patterns.
+    This node accepts a string containing Markdown, simulates its parsing,
+    and extracts structured information such as headers and bold text.
+    It provides a transformed version of the text and a summary of identified elements.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
-        return "MarkdownParser"
-
-    def _strip_markdown_syntax(self, markdown_text: str) -> str:
-        """
-        A very basic simulation of stripping common Markdown syntax to get plain text.
-        This method uses regular expressions to remove common Markdown elements.
-        It is not a full-fledged Markdown parser and might not handle all edge cases
-        or complex nested structures perfectly.
-        """
-        # Remove headers (e.g., # Header, ## Subheader)
-        text = re.sub(r'#+\s*(.*)', r'\1', markdown_text)
-        # Remove bold/italic markers (e.g., **bold**, _italic_)
-        text = re.sub(r'(\*\*|__)(.*?)\1', r'\2', text)  # Bold
-        text = re.sub(r'(\*|_)(.*?)\1', r'\2', text)    # Italic
-        # Remove links (e.g., [text](url) -> text)
-        text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)
-        # Remove images (e.g., ![alt text](url) -> alt text)
-        text = re.sub(r'!\[(.*?)\]\(.*?\)', r'\1', text)
-        # Remove code blocks (multiline)
-        text = re.sub(r'`{3}[\s\S]*?`{3}', '', text, flags=re.DOTALL)
-        # Remove inline code (e.g., `code`)
-        text = re.sub(r'`(.*?)`', r'\1', text)
-        # Remove blockquotes (e.g., > Quote)
-        text = re.sub(r'^\s*>\s*', '', text, flags=re.MULTILINE)
-        # Remove list markers (unordered: -, *, +; ordered: 1., 2.)
-        text = re.sub(r'^\s*[-*+]\s+', '', text, flags=re.MULTILINE)
-        text = re.sub(r'^\s*\d+\.\s+', '', text, flags=re.MULTILINE)
-        # Replace multiple newlines with single ones, then strip leading/trailing whitespace
-        text = re.sub(r'\n{2,}', '\n', text)
-        text = text.strip()
-        return text
+        """Returns the descriptive name of the node."""
+        return "MarkdownParserNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
         Processes the input data, expecting Markdown content as a string.
 
-        This method simulates parsing Markdown by extracting a plain text
-        representation and calculating basic structural metadata, such as
-        the number of headers, links, and code blocks.
+        This method attempts to identify and extract common Markdown elements like
+        headers and bold text. It returns a dictionary containing the original content,
+        a subtly transformed text, and structured lists of identified elements.
 
         Args:
-            data (Any): The input data, expected to be a string containing Markdown.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                       relevant to the current processing pipeline.
-                                       This node does not directly use context for parsing.
+            data (Any): The input data, which must be a string containing Markdown.
+            context (Dict[str, Any]): A dictionary for contextual information,
+                                       not directly used in this basic parsing simulation.
 
         Returns:
             Any: A dictionary containing:
-                 - `original_markdown`: The input Markdown string.
-                 - `plain_text`: A simulated plain text version of the Markdown.
-                 - `metadata`: A dictionary with extracted metrics like character count,
-                               word count, number of headers, links, images, code blocks,
-                               and list items.
-                 - `parsed_structure_simulated`: A boolean flag indicating completion.
+                 - 'original_content': The input Markdown string.
+                 - 'parsed_text': A string where simple Markdown headers are converted
+                                  to basic HTML-like tags (e.g., # Header -> <h1>Header</h1>).
+                 - 'headers': A list of dictionaries, each representing a header
+                              with its level and text.
+                 - 'bold_texts': A list of strings, each being content identified as bold.
+                 - 'summary': A string summarizing the parsing outcome.
 
         Raises:
             TypeError: If the input `data` is not a string.
         """
         if not isinstance(data, str):
             logger.error(
-                "[%s] Invalid input data type. Expected 'str' for Markdown content, got '%s'.",
-                self.node_name,
-                type(data).__name__,
+                f"[{self.node_name}] Invalid input type. Expected str, "
+                f"got {type(data).__name__}."
             )
             raise TypeError(
-                f"{self.node_name} expects input 'data' to be a string (Markdown content), "
-                f"but received {type(data).__name__}."
+                f"[{self.node_name}] Input 'data' must be a string. "
+                f"Received {type(data).__name__}."
             )
 
-        logger.info("[%s] Starting Markdown content parsing process.", self.node_name)
+        if not data.strip():
+            logger.warning(f"[{self.node_name}] Received empty or whitespace-only markdown content.")
+            return {
+                "original_content": data,
+                "parsed_text": "",
+                "headers": [],
+                "bold_texts": [],
+                "summary": "Empty markdown processed."
+            }
 
-        original_markdown = data
-        plain_text = self._strip_markdown_syntax(original_markdown)
+        parsed_headers = []
+        parsed_bold_texts = []
+        transformed_lines = []
 
-        # Simulate extracting basic metadata from the original markdown
-        num_headers = len(re.findall(r'^\s*#+\s.*$', original_markdown, re.MULTILINE))
-        num_links = len(re.findall(r'\[.*?\]\(.*?\)', original_markdown))
-        num_images = len(re.findall(r'!\[.*?\]\(.*?\)', original_markdown))
-        num_code_blocks = len(re.findall(r'`{3}[\s\S]*?`{3}', original_markdown, re.DOTALL))
-        num_list_items = len(re.findall(r'^\s*[-*+]\s|^\s*\d+\.\s', original_markdown, re.MULTILINE))
+        # Regular expression to find Markdown headers (e.g., # Header, ## Subheader)
+        header_pattern = re.compile(r"^(#+)\s*(.*)$", re.MULTILINE)
+        # Regular expression to find bold text (e.g., **bold** or __bold__)
+        bold_pattern = re.compile(r"(\*\*|__)(.*?)\1")
 
-        result = {
-            "original_markdown": original_markdown,
-            "plain_text": plain_text,
-            "metadata": {
-                "num_characters": len(original_markdown),
-                "num_words": len(plain_text.split()) if plain_text else 0,
-                "num_headers": num_headers,
-                "num_links": num_links,
-                "num_images": num_images,
-                "num_code_blocks": num_code_blocks,
-                "num_list_items": num_list_items,
-            },
-            "parsed_structure_simulated": True  # Flag to indicate processing occurred
-        }
+        # --- Simulate header parsing and transformation ---
+        for line in data.splitlines():
+            header_match = header_pattern.match(line)
+            if header_match:
+                level_hashes, content = header_match.groups()
+                level = len(level_hashes)
+                header_text = content.strip()
+                parsed_headers.append({"level": level, "text": header_text})
+                logger.debug(f"[{self.node_name}] Identified H{level}: '{header_text}'")
+                # Transform header lines into a simplified HTML-like representation
+                transformed_lines.append(f"<h{level}>{header_text}</h{level}>")
+            else:
+                transformed_lines.append(line) # Keep non-header lines as is
 
-        logger.info(
-            "[%s] Markdown parsing completed. Extracted %d characters and %d words (plain text).",
-            self.node_name,
-            result["metadata"]["num_characters"],
-            result["metadata"]["num_words"]
+        # --- Simulate bold text parsing ---
+        # We iterate over the original data for bold texts as they can be inline
+        for match in bold_pattern.finditer(data):
+            # Group 2 contains the actual bold text
+            bold_text = match.group(2).strip()
+            if bold_text: # Ensure not to add empty strings from e.g., "** **"
+                parsed_bold_texts.append(bold_text)
+                logger.debug(f"[{self.node_name}] Identified bold text: '{bold_text}'")
+
+        processed_text = "\n".join(transformed_lines)
+
+        summary_msg = (
+            f"[{self.node_name}] Successfully processed markdown. "
+            f"Found {len(parsed_headers)} header(s) and {len(parsed_bold_texts)} bold text instance(s)."
         )
-        
-        return result
+        logger.info(summary_msg)
+
+        # Return a structured dictionary representing the parsed outcome
+        return {
+            "original_content": data,
+            "parsed_text": processed_text,
+            "headers": parsed_headers,
+            "bold_texts": parsed_bold_texts,
+            "summary": summary_msg
+        }
