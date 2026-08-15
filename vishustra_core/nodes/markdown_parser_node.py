@@ -1,117 +1,84 @@
 import logging
-import re
 from typing import Any, Dict
 
-# Assuming BaseNode is available at this path as per Vishustra project structure
 from vishustra_core.nodes.base_node import BaseNode
+
+try:
+    import markdown
+except ImportError:
+    # Log a critical error if the 'markdown' library is not available.
+    # This node requires it for its core functionality.
+    logging.critical("The 'markdown' library is not installed. Please install it using 'pip install markdown'.")
+    markdown = None  # Set to None to indicate missing dependency
 
 logger = logging.getLogger(__name__)
 
 class MarkdownParserNode(BaseNode):
     """
-    A Vishustra processing node designed to parse Markdown content.
-
-    This node accepts a string containing Markdown, simulates its parsing,
-    and extracts structured information such as headers and bold text.
-    It provides a transformed version of the text and a summary of identified elements.
+    A Vishustra processing node that takes Markdown formatted text as input
+    and converts it into HTML. It relies on the 'markdown' Python library.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """
+        Returns the descriptive name of this processing node.
+        """
         return "MarkdownParserNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, expecting Markdown content as a string.
-
-        This method attempts to identify and extract common Markdown elements like
-        headers and bold text. It returns a dictionary containing the original content,
-        a subtly transformed text, and structured lists of identified elements.
+        Processes the input data, converting a Markdown string into an HTML string.
 
         Args:
-            data (Any): The input data, which must be a string containing Markdown.
-            context (Dict[str, Any]): A dictionary for contextual information,
-                                       not directly used in this basic parsing simulation.
+            data (Any): The input data, expected to be a string containing Markdown content.
+            context (Dict[str, Any]): A dictionary containing contextual information
+                                       for the processing flow. This node does not
+                                       directly use the context, but it's part of
+                                       the `BaseNode` signature.
 
         Returns:
-            Any: A dictionary containing:
-                 - 'original_content': The input Markdown string.
-                 - 'parsed_text': A string where simple Markdown headers are converted
-                                  to basic HTML-like tags (e.g., # Header -> <h1>Header</h1>).
-                 - 'headers': A list of dictionaries, each representing a header
-                              with its level and text.
-                 - 'bold_texts': A list of strings, each being content identified as bold.
-                 - 'summary': A string summarizing the parsing outcome.
+            Any: The resulting HTML string after Markdown parsing.
 
         Raises:
-            TypeError: If the input `data` is not a string.
+            TypeError: If the input 'data' is not a string.
+            RuntimeError: If the 'markdown' library is not available at processing time,
+                          or if an unexpected error occurs during parsing.
         """
+        if markdown is None:
+            logger.error("MarkdownParserNode failed to process: 'markdown' library is missing.")
+            raise RuntimeError(
+                "Cannot process data. The 'markdown' library is required but not installed. "
+                "Please install it using 'pip install markdown'."
+            )
+
         if not isinstance(data, str):
             logger.error(
-                f"[{self.node_name}] Invalid input type. Expected str, "
-                f"got {type(data).__name__}."
+                f"MarkdownParserNode received invalid data type. Expected str, "
+                f"but got {type(data).__name__}."
             )
             raise TypeError(
-                f"[{self.node_name}] Input 'data' must be a string. "
-                f"Received {type(data).__name__}."
+                f"MarkdownParserNode expects string data for parsing, "
+                f"but received type {type(data).__name__}."
             )
 
-        if not data.strip():
-            logger.warning(f"[{self.node_name}] Received empty or whitespace-only markdown content.")
-            return {
-                "original_content": data,
-                "parsed_text": "",
-                "headers": [],
-                "bold_texts": [],
-                "summary": "Empty markdown processed."
-            }
+        logger.debug(f"[{self.node_name}] Starting Markdown to HTML conversion for input of length {len(data)}.")
 
-        parsed_headers = []
-        parsed_bold_texts = []
-        transformed_lines = []
-
-        # Regular expression to find Markdown headers (e.g., # Header, ## Subheader)
-        header_pattern = re.compile(r"^(#+)\s*(.*)$", re.MULTILINE)
-        # Regular expression to find bold text (e.g., **bold** or __bold__)
-        bold_pattern = re.compile(r"(\*\*|__)(.*?)\1")
-
-        # --- Simulate header parsing and transformation ---
-        for line in data.splitlines():
-            header_match = header_pattern.match(line)
-            if header_match:
-                level_hashes, content = header_match.groups()
-                level = len(level_hashes)
-                header_text = content.strip()
-                parsed_headers.append({"level": level, "text": header_text})
-                logger.debug(f"[{self.node_name}] Identified H{level}: '{header_text}'")
-                # Transform header lines into a simplified HTML-like representation
-                transformed_lines.append(f"<h{level}>{header_text}</h{level}>")
-            else:
-                transformed_lines.append(line) # Keep non-header lines as is
-
-        # --- Simulate bold text parsing ---
-        # We iterate over the original data for bold texts as they can be inline
-        for match in bold_pattern.finditer(data):
-            # Group 2 contains the actual bold text
-            bold_text = match.group(2).strip()
-            if bold_text: # Ensure not to add empty strings from e.g., "** **"
-                parsed_bold_texts.append(bold_text)
-                logger.debug(f"[{self.node_name}] Identified bold text: '{bold_text}'")
-
-        processed_text = "\n".join(transformed_lines)
-
-        summary_msg = (
-            f"[{self.node_name}] Successfully processed markdown. "
-            f"Found {len(parsed_headers)} header(s) and {len(parsed_bold_texts)} bold text instance(s)."
-        )
-        logger.info(summary_msg)
-
-        # Return a structured dictionary representing the parsed outcome
-        return {
-            "original_content": data,
-            "parsed_text": processed_text,
-            "headers": parsed_headers,
-            "bold_texts": parsed_bold_texts,
-            "summary": summary_msg
-        }
+        try:
+            # The 'markdown' library provides a straightforward function for conversion.
+            # Additional extensions could be configured via the 'extensions' argument
+            # if specific Markdown flavors were needed (e.g., 'fenced_code', 'tables').
+            parsed_html = markdown.markdown(data)
+            logger.debug(
+                f"[{self.node_name}] Successfully converted Markdown to HTML. "
+                f"Output length: {len(parsed_html)}."
+            )
+            return parsed_html
+        except Exception as e:
+            # Catching a broad exception to ensure robustness against unexpected issues
+            # from the markdown library or underlying system.
+            logger.error(
+                f"[{self.node_name}] An unexpected error occurred during Markdown parsing: {e}",
+                exc_info=True  # Log full traceback for debugging
+            )
+            raise RuntimeError(f"Failed to parse Markdown data in {self.node_name}: {e}") from e
