@@ -1,203 +1,93 @@
 import logging
-import re
 from typing import Any, Dict
 
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-class ToneConverterNode(BaseNode):
+class ToneConverter(BaseNode):
     """
-    A Vishustra processing node that simulates converting the tone of text data.
+    A Vishustra node designed to simulate the conversion of text tone.
 
-    This node expects the input `data` to be a string and the `context`
-    dictionary to contain a 'target_tone' key specifying the desired tone.
-    Supported tones for simulation are 'professional', 'casual', 'formal', 'friendly'.
-
-    The tone conversion is simulated using a predefined mapping of common phrases.
-    It performs case-insensitive, whole-word replacements to illustrate the concept.
-    In a production LLM orchestration framework, this would typically involve
-    calling an external LLM or a specialized NLP model.
+    This node expects a 'target_tone' key in the context dictionary, specifying the
+    desired tone (e.g., 'formal', 'informal', 'sarcastic', 'neutral').
+    The 'data' input is expected to be a string.
     """
-
-    # Internal mapping of common phrases/words for tone conversion simulation.
-    # Keys are sorted by length (desc) during processing to ensure longer phrases are matched first.
-    _TONE_MAPPINGS: Dict[str, Dict[str, str]] = {
-        "professional": {
-            "hello": "Greetings.",
-            "hi": "Good day.",
-            "hey": "Hello.",
-            "need to": "It is required to",
-            "get it done": "complete the task",
-            "asap": "at your earliest convenience",
-            "thanks": "Thank you for your attention.",
-            "bye": "Sincerely.",
-            "it's": "it is",
-            "i'm": "I am",
-            "you're": "you are",
-            "we'll": "we will",
-            "can't": "cannot",
-            "don't": "do not",
-            "won't": "will not",
-            "shouldn't": "should not",
-            "isn't": "is not",
-            "aren't": "are not",
-            "let's": "let us",
-            "we're": "we are",
-            "wouldn't": "would not",
-            "couldn't": "could not",
-        },
-        "casual": {
-            "greetings": "Hey there,",
-            "good day": "Hi,",
-            "esteemed colleague": "Friend,",
-            "it is required to": "Gotta",
-            "complete the task": "get it done",
-            "at your earliest convenience": "ASAP",
-            "thank you for your attention": "Thanks!",
-            "sincerely": "Later!",
-            "respectfully yours": "Cheers!",
-            "it is imperative that we": "We really need to",
-            "bring this to completion": "finish this up",
-            "we extend our gratitude": "Much appreciated!",
-            "it is": "it's",
-            "i am": "I'm",
-            "you are": "you're",
-            "we will": "we'll",
-            "cannot": "can't",
-            "do not": "don't",
-            "will not": "won't",
-            "should not": "shouldn't",
-            "is not": "isn't",
-            "are not": "aren't",
-            "let us": "let's",
-            "we are": "we're",
-            "would not": "wouldn't",
-            "could not": "couldn't",
-        },
-        "formal": {
-            "hello": "Greetings.",
-            "hi": "Good day.",
-            "hey": "Esteemed colleague,",
-            "need to": "It is imperative that we",
-            "get it done": "bring this to completion",
-            "asap": "expeditiously",
-            "thanks": "We extend our gratitude.",
-            "bye": "Respectfully yours.",
-            "it's": "it is",
-            "i'm": "I am",
-            "you're": "you are",
-            "we'll": "we will",
-            "can't": "cannot",
-            "don't": "do not",
-            "won't": "will not",
-            "shouldn't": "should not",
-            "isn't": "is not",
-            "aren't": "are not",
-            "let's": "let us",
-            "we're": "we are",
-            "wouldn't": "would not",
-            "couldn't": "could not",
-        },
-        "friendly": {
-            "hello": "Hi there!",
-            "hi": "Hey!",
-            "hey": "What's up?",
-            "need to": "We should probably",
-            "get it done": "knock this out",
-            "asap": "super soon",
-            "thanks": "Cheers!",
-            "bye": "Talk soon!",
-            "it is required to": "It's a good idea to",
-            "complete the task": "finish up",
-            "it is imperative that we": "Let's definitely",
-            "bring this to completion": "wrap this up",
-            "we extend our gratitude": "Thanks a bunch!",
-            "at your earliest convenience": "when you get a chance",
-            "sincerely": "Best,",
-            "respectfully yours": "Talk soon!",
-            "greetings": "Hi!",
-            "good day": "Hello!",
-            "esteemed colleague": "Hey buddy,",
-        }
-    }
-
-    def __init__(self):
-        """Initializes the ToneConverterNode."""
-        logger.info(f"[{self.node_name}] Node initialized.")
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """Returns the programmatic name of the node."""
         return "ToneConverter"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input text data to convert its tone based on the context.
-
-        This method simulates tone conversion by replacing phrases in the input
-        `data` with tone-appropriate alternatives defined in `_TONE_MAPPINGS`.
-        The replacement is case-insensitive and respects word boundaries.
+        Processes the input text data, attempting to convert its tone based on the
+        'target_tone' provided in the context dictionary.
 
         Args:
-            data: The input text data (expected to be a string).
-            context: A dictionary containing processing parameters,
-                     expected to have 'target_tone' (str).
+            data: The input text (string) to be transformed.
+            context: A dictionary containing operational parameters for the node.
+                     Must include 'target_tone' (str) to specify the desired output tone.
 
         Returns:
-            The tone-converted string.
+            A string representing the input text with the simulated converted tone.
 
         Raises:
-            TypeError: If `data` is not a string.
-            ValueError: If 'target_tone' is missing from context or
-                        is not a supported tone.
+            TypeError: If the input 'data' is not a string.
+            ValueError: If 'target_tone' is missing from the context or is not a valid string.
         """
         if not isinstance(data, str):
             logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected string, "
-                f"but received {type(data).__name__}. Data: {data!r}"
+                f"[{self.node_name}] Invalid input data type. Expected 'str', "
+                f"but received '{type(data).__name__}'. Aborting process."
             )
             raise TypeError(
-                f"ToneConverterNode expects string input data, but received {type(data).__name__}"
+                f"Input data for '{self.node_name}' must be a string, "
+                f"but got '{type(data).__name__}'."
             )
 
         target_tone = context.get("target_tone")
-        if not target_tone:
-            logger.error(f"[{self.node_name}] 'target_tone' key is missing in context.")
-            raise ValueError(
-                "Context must contain a 'target_tone' key for ToneConverterNode."
-            )
-
-        target_tone_lower = target_tone.lower()
-        if target_tone_lower not in self._TONE_MAPPINGS:
-            supported_tones = ", ".join(self._TONE_MAPPINGS.keys())
+        if not target_tone or not isinstance(target_tone, str):
             logger.error(
-                f"[{self.node_name}] Unsupported target tone '{target_tone}'. "
-                f"Supported tones are: {supported_tones}."
+                f"[{self.node_name}] 'target_tone' not found or is invalid in context. "
+                "Expected a string value for 'target_tone'. Aborting process."
             )
             raise ValueError(
-                f"Unsupported target tone: '{target_tone}'. "
-                f"Supported tones are: {supported_tones}"
+                f"Context for '{self.node_name}' must contain a valid 'target_tone' (str)."
             )
 
-        converted_text = data
-        tone_map = self._TONE_MAPPINGS[target_tone_lower]
-
-        # Sort phrases by length in descending order to ensure longer, more specific
-        # phrases are replaced before their shorter constituents (e.g., "get it done" before "get it").
-        sorted_phrases = sorted(tone_map.items(), key=lambda item: len(item[0]), reverse=True)
-
-        for original_phrase, replacement_phrase in sorted_phrases:
-            # Use re.sub for robust case-insensitive, whole-word replacement.
-            # \b ensures that only whole words/phrases are matched.
-            # re.escape() is used to treat original_phrase literally, in case it contains regex special characters.
-            pattern = r'\b' + re.escape(original_phrase) + r'\b'
-            converted_text = re.sub(
-                pattern,
-                replacement_phrase,
-                converted_text,
-                flags=re.IGNORECASE
-            )
+        logger.info(f"[{self.node_name}] Initiating tone conversion to '{target_tone}' for input data.")
         
-        logger.info(f"[{self.node_name}] Successfully converted data tone to '{target_tone}'.")
+        converted_text = data
+        # For logging, truncate long input data
+        original_data_preview = data[:70] + "..." if len(data) > 70 else data
+
+        # Simulate tone conversion based on the specified target_tone
+        lower_target_tone = target_tone.lower()
+        if lower_target_tone == "formal":
+            converted_text = f"Regarding the aforementioned subject, it is imperative to convey: '{data}'."
+        elif lower_target_tone == "informal":
+            converted_text = f"Hey, just wanted to let you know: '{data}'."
+        elif lower_target_tone == "sarcastic":
+            converted_text = f"Oh, how truly insightful; precisely what we needed to hear: '{data}'."
+        elif lower_target_tone == "neutral":
+            # For a 'neutral' tone, no transformative action is simulated.
+            pass
+        else:
+            logger.warning(
+                f"[{self.node_name}] Unsupported target tone '{target_tone}' requested. "
+                "Returning original data without conversion. "
+                "Consider defining this tone or handling it as an error."
+            )
+            # In a production system, one might raise a ValueError here for strictness
+            # Or pass it to an actual LLM if available to handle "any" tone.
+
+        # For logging, truncate long output data
+        converted_data_preview = converted_text[:70] + "..." if len(converted_text) > 70 else converted_text
+        
+        logger.debug(
+            f"[{self.node_name}] Successfully processed. Original: '{original_data_preview}', "
+            f"Converted ('{target_tone}'): '{converted_data_preview}'."
+        )
+
         return converted_text
