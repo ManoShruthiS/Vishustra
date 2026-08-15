@@ -1,91 +1,136 @@
 import logging
-from typing import Any, Dict, Optional
-
-# Assuming this path exists in the Vishustra project structure
+from typing import Any, Dict, Union
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class CacheManagerNode(BaseNode):
     """
-    A Vishustra node that manages an in-memory cache.
-    It supports 'get' and 'set' operations for data caching.
+    A Vishustra processing node that manages an internal, in-memory cache.
 
-    The 'process' method expects 'data' to serve as the key for 'get' operations,
-    and as the value to cache for 'set' operations.
-    The 'context' dictionary must specify the 'operation' (either "get" or "set")
-    and, for "set" operations, explicitly provide the 'key'.
+    It supports operations to 'get', 'set', 'delete', and 'clear' cache entries
+    based on the 'action' specified in the `context` dictionary.
+
+    Cache keys are expected to be hashable (e.g., str, int, float, tuple).
+
+    Expected `context` parameters and `data` input for `process` method:
+
+    - To 'get' a value:
+        `context = {'action': 'get'}`
+        `data`: The key (e.g., str, int) to retrieve.
+        Returns: The cached value, or `None` if the key is not found or invalid.
+
+    - To 'set' a value:
+        `context = {'action': 'set'}`
+        `data`: A dictionary like `{'key': 'my_key', 'value': 'my_value'}`.
+                The 'key' must be hashable.
+        Returns: The value that was successfully set, or `None` on error.
+
+    - To 'delete' a value:
+        `context = {'action': 'delete'}`
+        `data`: The key to delete from the cache.
+        Returns: `None`.
+
+    - To 'clear' the entire cache:
+        `context = {'action': 'clear'}`
+        `data`: Ignored.
+        Returns: `None`.
     """
 
-    def __init__(self, initial_cache: Optional[Dict[Any, Any]] = None):
-        """
-        Initializes the CacheManagerNode with an optional initial cache state.
-
-        Args:
-            initial_cache: An optional dictionary to pre-populate the cache.
-                           If None, an empty dictionary is used.
-        """
-        self._cache: Dict[Any, Any] = initial_cache if initial_cache is not None else {}
-        logger.debug(f"CacheManagerNode initialized with {len(self._cache)} initial items.")
+    def __init__(self):
+        super().__init__()
+        self._cache: Dict[Any, Any] = {}
+        logger.debug(f"CacheManagerNode '{self.node_name}' initialized with an empty cache.")
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """Returns the name of the node."""
         return "CacheManager"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes a cache operation (get or set) based on the provided 'context'.
-
-        For a 'get' operation:
-            - `data` should be the cache key to retrieve.
-            - `context` must contain `{"operation": "get"}`.
-            - Returns the cached value if found, otherwise `None`.
-
-        For a 'set' operation:
-            - `data` should be the value to store in the cache.
-            - `context` must contain `{"operation": "set", "key": <cache_key>}`.
-            - Returns the value that was successfully set.
+        Executes a cache operation based on the 'action' specified in the context.
 
         Args:
-            data: The cache key for a 'get' operation, or the value to cache for a 'set' operation.
-            context: A dictionary containing the operation type and additional parameters.
+            data: The input data, which typically serves as the key for 'get'/'delete',
+                  or a dictionary containing 'key' and 'value' for 'set'.
+            context: A dictionary containing operational parameters.
+                     Expected to have a 'action' key with values like 'get', 'set', 'delete', 'clear'.
 
         Returns:
-            The retrieved value for 'get', the set value for 'set', or `None` for a cache miss on 'get'.
-
-        Raises:
-            ValueError: If the 'operation' in 'context' is invalid, or if required
-                        parameters (like 'key' for a 'set' operation) are missing.
+            The result of the cache operation (e.g., retrieved value, or None).
         """
-        operation = context.get("operation")
-
-        if operation == "get":
-            key_to_get = data  # For 'get', 'data' is interpreted as the key.
-            logger.debug(f"Attempting to retrieve key '{key_to_get}' from cache.")
-            cached_value = self._cache.get(key_to_get)
-            if cached_value is not None:
-                logger.info(f"Cache HIT for key '{key_to_get}'.")
-                return cached_value
-            else:
-                logger.info(f"Cache MISS for key '{key_to_get}'.")
+        action = context.get('action', 'get').lower()
+        
+        if action == 'get':
+            if not isinstance(data, (str, int, float, tuple)): # Valid hashable types
+                logger.error(
+                    f"CacheManagerNode: 'get' action received invalid key type: {type(data)}. "
+                    "Key must be hashable (str, int, float, tuple)."
+                )
                 return None
-        elif operation == "set":
-            key_to_set = context.get("key")
-            value_to_set = data  # For 'set', 'data' is interpreted as the value.
-
-            if key_to_set is None:
-                logger.error("Attempted 'set' operation without a 'key' specified in context.")
-                raise ValueError("CacheManagerNode 'set' operation requires a 'key' in context.")
             
-            self._cache[key_to_set] = value_to_set
-            logger.info(f"Cache SET operation successful for key '{key_to_set}'. Value type: {type(value_to_set).__name__}.")
-            return value_to_set
+            key = data
+            value = self._cache.get(key)
+            if value is not None:
+                logger.debug(f"CacheManagerNode: Cache hit for key '{key}'.")
+                return value
+            else:
+                logger.debug(f"CacheManagerNode: Cache miss for key '{key}'.")
+                return None
+
+        elif action == 'set':
+            if not isinstance(data, dict) or 'key' not in data or 'value' not in data:
+                logger.error(
+                    f"CacheManagerNode: 'set' action requires 'data' to be a dict "
+                    f"with 'key' and 'value' fields. Received: {type(data)}: {data}"
+                )
+                return None
+            
+            key = data['key']
+            value = data['value']
+
+            if not isinstance(key, (str, int, float, tuple)):
+                logger.error(
+                    f"CacheManagerNode: 'set' action received invalid key type: {type(key)}. "
+                    "Key must be hashable (str, int, float, tuple)."
+                )
+                return None
+
+            try:
+                self._cache[key] = value
+                logger.info(f"CacheManagerNode: Set cache for key '{key}'.")
+                return value
+            except TypeError as e:
+                logger.error(f"CacheManagerNode: Failed to set cache for key '{key}' due to type error: {e}")
+                return None
+
+        elif action == 'delete':
+            if not isinstance(data, (str, int, float, tuple)):
+                logger.error(
+                    f"CacheManagerNode: 'delete' action received invalid key type: {type(data)}. "
+                    "Key must be hashable (str, int, float, tuple)."
+                )
+                return None
+
+            key = data
+            if key in self._cache:
+                del self._cache[key]
+                logger.info(f"CacheManagerNode: Deleted key '{key}' from cache.")
+            else:
+                logger.debug(f"CacheManagerNode: Key '{key}' not found for deletion.")
+            return None
+
+        elif action == 'clear':
+            initial_size = len(self._cache)
+            self._cache.clear()
+            logger.info(f"CacheManagerNode: Cleared cache. {initial_size} items removed.")
+            return None
+
         else:
-            logger.error(
-                f"Invalid or missing 'operation' in context: '{operation}'. "
-                f"Context provided: {context}"
+            logger.warning(
+                f"CacheManagerNode: Unknown cache action '{action}' specified in context. "
+                "Returning original data as no operation was performed."
             )
-            raise ValueError(
-                "CacheManagerNode requires 'operation' in context to be either 'get' or 'set'."
-            )
+            return data
+
