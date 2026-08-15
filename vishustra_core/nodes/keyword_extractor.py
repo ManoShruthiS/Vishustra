@@ -1,38 +1,80 @@
 import logging
 import re
-from typing import Any, Dict, List, Set, Union
+from typing import Any, Dict, List, Set
 
+# Assuming BaseNode is available from this path as per project context
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-
-class KeywordExtractor(BaseNode):
+class KeywordExtractorNode(BaseNode):
     """
-    A Vishustra node designed to extract keywords from textual data.
+    A Vishustra processing node designed to extract keywords from input text data.
 
-    This node performs a series of steps including text cleaning, tokenization,
-    stop-word removal, and length-based filtering to identify relevant keywords
-    within the input text. It can be configured via the context dictionary
-    to use custom stop words or adjust the minimum keyword length.
+    This node performs a series of steps:
+    1. Converts the input text to lowercase.
+    2. Tokenizes the text into individual words.
+    3. Filters out common stopwords based on a predefined or custom list.
+    4. Filters out words shorter than a specified minimum length.
+    5. Returns a sorted list of unique words identified as keywords.
+
+    Configuration parameters for stopwords and minimum keyword length can be
+    supplied via the `context` dictionary, allowing for flexible usage across
+    different orchestration workflows.
     """
 
-    # Default set of common English stop words.
-    DEFAULT_STOP_WORDS: Set[str] = {
-        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-        "and", "or", "but", "if", "because", "as", "until", "while", "of",
-        "at", "by", "for", "with", "about", "against", "between", "into",
-        "through", "during", "before", "after", "above", "below", "to",
-        "from", "up", "down", "in", "out", "on", "off", "over", "under",
-        "again", "further", "then", "once", "here", "there", "when", "where",
-        "why", "how", "all", "any", "both", "each", "few", "more", "most",
-        "other", "some", "such", "no", "nor", "not", "only", "own", "same",
-        "so", "than", "too", "very", "s", "t", "can", "will", "just", "don",
-        "should", "now", "has", "have", "had", "do", "does", "did", "him",
-        "his", "her", "hers", "me", "my", "mine", "you", "your", "yours",
-        "it", "its", "we", "us", "our", "ours", "they", "them", "their", "theirs"
+    DEFAULT_STOPWORDS: Set[str] = {
+        "a", "an", "the", "and", "or", "but", "is", "are", "was", "were",
+        "be", "been", "being", "to", "of", "in", "on", "at", "for", "with",
+        "as", "by", "from", "it", "its", "he", "she", "they", "we", "you",
+        "i", "me", "him", "her", "us", "them", "my", "your", "his", "our",
+        "their", "this", "that", "these", "those", "can", "will", "would",
+        "should", "has", "have", "had", "do", "does", "did", "not", "no",
+        "yes", "all", "any", "some", "most", "many", "other", "such",
+        "only", "very", "much", "more", "less", "about", "above", "after",
+        "again", "against", "all", "along", "also", "always", "among",
+        "an", "and", "another", "any", "anyone", "anything", "anywhere",
+        "appear", "are", "around", "as", "ask", "at", "away", "back",
+        "be", "became", "because", "become", "becomes", "been", "before",
+        "began", "begin", "beginning", "behind", "being", "below",
+        "beside", "besides", "best", "better", "between", "beyond", "both",
+        "but", "by", "came", "can", "cannot", "come", "comes", "could",
+        "did", "do", "does", "doing", "done", "down", "during", "each",
+        "early", "either", "else", "enough", "etc", "even", "ever",
+        "every", "everyone", "everything", "everywhere", "except", "far",
+        "few", "finally", "find", "first", "for", "found", "from",
+        "further", "get", "gets", "give", "given", "gives", "go", "goes",
+        "going", "good", "got", "had", "has", "have", "having", "he",
+        "hence", "her", "here", "hers", "herself", "him", "himself",
+        "his", "how", "however", "if", "in", "indeed", "instead", "into",
+        "is", "it", "its", "itself", "just", "keep", "kept", "know",
+        "known", "knows", "last", "later", "least", "less", "let", "like",
+        "likely", "long", "made", "make", "many", "may", "maybe", "me",
+        "mean", "meanwhile", "might", "more", "most", "mostly", "much",
+        "must", "my", "myself", "namely", "near", "nearly", "neither",
+        "never", "nevertheless", "next", "no", "none", "nor", "not",
+        "nothing", "now", "nowhere", "of", "off", "often", "on", "once",
+        "one", "only", "onto", "or", "order", "other", "others", "otherwise",
+        "ought", "our", "ours", "ourselves", "out", "over", "own", "part",
+        "perhaps", "place", "please", "point", "present", "put", "quite",
+        "rather", "really", "regarding", "report", "result", "return",
+        "said", "same", "say", "says", "second", "see", "seem", "seemed",
+        "seeming", "seems", "sees", "several", "shall", "she", "should",
+        "show", "showed", "shown", "shows", "side", "since", "so", "some",
+        "somehow", "someone", "something", "sometime", "sometimes",
+        "somewhere", "still", "such", "take", "taken", "takes", "than",
+        "that", "the", "their", "theirs", "them", "themselves", "then",
+        "there", "therefore", "these", "they", "thing", "things", "think",
+        "thinks", "this", "those", "though", "thought", "through", "thus",
+        "to", "today", "together", "told", "too", "took", "toward", "turn",
+        "under", "unless", "until", "up", "upon", "us", "use", "used",
+        "uses", "very", "want", "wanted", "wants", "was", "we", "well",
+        "went", "were", "what", "whatever", "when", "whence", "where",
+        "whereas", "wherever", "whether", "which", "while", "who", "whom",
+        "whose", "why", "will", "with", "within", "without", "word",
+        "words", "work", "worked", "would", "yet", "you", "your", "yours",
+        "yourself", "yourselves"
     }
-    # Default minimum length for an extracted keyword.
     DEFAULT_MIN_KEYWORD_LENGTH: int = 3
 
     @property
@@ -42,83 +84,65 @@ class KeywordExtractor(BaseNode):
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Processes the input data to extract a list of keywords.
-
-        The `context` dictionary can be used to customize the keyword extraction:
-        - `'stop_words'`: A `list` or `set` of strings representing custom stop words.
-                          If provided, these will override the default stop words.
-        - `'min_keyword_length'`: An `int` specifying the minimum character length
-                                  for a word to be considered a keyword.
-                                  Defaults to `DEFAULT_MIN_KEYWORD_LENGTH`.
+        Extracts keywords from the input data, expected to be a string.
 
         Args:
-            data: The input text as a string from which keywords are to be extracted.
-            context: A dictionary potentially containing configuration parameters
-                     for the extraction process.
+            data (Any): The input data. Must be a string containing the text
+                        from which to extract keywords.
+            context (Dict[str, Any]): A dictionary containing runtime configuration.
+                                      Supported keys:
+                                      - 'stopwords' (Set[str], optional): A custom set of
+                                        stopwords to exclude. Defaults to `DEFAULT_STOPWORDS`.
+                                      - 'min_keyword_length' (int, optional): Minimum character
+                                        length for a word to be considered a keyword.
+                                        Defaults to `DEFAULT_MIN_KEYWORD_LENGTH`.
 
         Returns:
-            A list of unique strings, each representing an extracted keyword,
-            sorted alphabetically.
+            List[str]: A sorted list of unique extracted keywords.
 
         Raises:
-            TypeError: If the input `data` is not a string.
-            ValueError: If 'min_keyword_length' in `context` is not a positive integer.
+            TypeError: If the input 'data' is not a string.
         """
         if not isinstance(data, str):
-            error_msg = (
-                f"Invalid input data type for '{self.node_name}'. "
-                f"Expected str, but received {type(data).__name__}."
+            logger.error(
+                f"KeywordExtractorNode received invalid data type. Expected 'str', "
+                f"but got '{type(data).__name__}'. Unable to process."
             )
-            logger.error(error_msg)
-            raise TypeError(error_msg)
+            raise TypeError(
+                f"Input data for KeywordExtractorNode must be a string, "
+                f"but received {type(data).__name__}."
+            )
 
         text = data.lower()
-        logger.debug(f"Initiating keyword extraction for text of length: {len(text)}.")
 
-        # Determine stop words to use
-        stop_words_from_context = context.get('stop_words')
-        stop_words: Set[str] = self.DEFAULT_STOP_WORDS
-        if stop_words_from_context is not None:
-            if isinstance(stop_words_from_context, (list, set)):
-                stop_words = set(stop_words_from_context)
-                logger.debug(f"Using custom stop words from context (count: {len(stop_words)}).")
-            else:
-                logger.warning(
-                    f"Invalid type for 'stop_words' in context for '{self.node_name}'. "
-                    f"Expected list or set, but got {type(stop_words_from_context).__name__}. "
-                    "Falling back to default stop words."
-                )
+        # Retrieve stopwords from context or fall back to default
+        stopwords = context.get('stopwords', self.DEFAULT_STOPWORDS)
+        if not isinstance(stopwords, set):
+            logger.warning(
+                f"Context 'stopwords' parameter for KeywordExtractorNode is not a set. "
+                f"Received type '{type(stopwords).__name__}', falling back to default stopwords."
+            )
+            stopwords = self.DEFAULT_STOPWORDS
+        
+        # Retrieve minimum keyword length from context or fall back to default
+        min_keyword_length = context.get('min_keyword_length', self.DEFAULT_MIN_KEYWORD_LENGTH)
+        if not isinstance(min_keyword_length, int) or min_keyword_length < 1:
+            logger.warning(
+                f"Context 'min_keyword_length' for KeywordExtractorNode is invalid or not an integer. "
+                f"Received '{min_keyword_length}' (type: {type(min_keyword_length).__name__}), "
+                f"falling back to default length ({self.DEFAULT_MIN_KEYWORD_LENGTH})."
+            )
+            min_keyword_length = self.DEFAULT_MIN_KEYWORD_LENGTH
 
-        # Determine minimum keyword length
-        min_keyword_length: int = self.DEFAULT_MIN_KEYWORD_LENGTH
-        min_length_from_context = context.get('min_keyword_length')
-        if min_length_from_context is not None:
-            if isinstance(min_length_from_context, int) and min_length_from_context > 0:
-                min_keyword_length = min_length_from_context
-                logger.debug(f"Using custom minimum keyword length: {min_keyword_length}.")
-            else:
-                error_msg = (
-                    f"Invalid 'min_keyword_length' in context for '{self.node_name}'. "
-                    f"Expected a positive integer, but got {type(min_length_from_context).__name__} "
-                    f"with value '{min_length_from_context}'. Please provide a valid positive integer."
-                )
-                logger.error(error_msg)
-                raise ValueError(error_msg)
+        # A robust tokenizer that handles various punctuation and multiple spaces
+        words = re.findall(r'\b\w+\b', text)
 
-        # Basic text cleaning: remove non-alphanumeric characters (except spaces)
-        # and tokenize into words.
-        cleaned_text = re.sub(r'[^\w\s]', '', text)
-        words = cleaned_text.split()
-
-        extracted_keywords: Set[str] = set()  # Use a set to automatically handle duplicates
+        extracted_keywords = set() # Use a set for efficient uniqueness
         for word in words:
-            # Filter words based on stop-word list and minimum length
-            if word not in stop_words and len(word) >= min_keyword_length:
+            if word not in stopwords and len(word) >= min_keyword_length:
                 extracted_keywords.add(word)
 
-        # Convert the set to a list and sort for consistent output
-        final_keywords = sorted(list(extracted_keywords))
-        logger.info(f"Successfully extracted {len(final_keywords)} unique keywords.")
-        logger.debug(f"Extracted keywords: {final_keywords}")
-
-        return final_keywords
+        # Convert back to a sorted list for consistent and predictable output
+        result = sorted(list(extracted_keywords))
+        logger.debug(f"KeywordExtractorNode successfully extracted {len(result)} keywords.")
+        return result
