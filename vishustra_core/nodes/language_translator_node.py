@@ -1,123 +1,133 @@
 import logging
 from typing import Any, Dict, List, Union
 
+# Assuming vishustra_core.nodes.base_node exists in the project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-# A simple, mock translation dictionary for demonstration purposes.
-# In a real scenario, this would interface with a robust translation service.
-_MOCK_TRANSLATIONS: Dict[str, Dict[str, Dict[str, str]]] = {
-    "en": {
-        "hello": {"es": "hola", "fr": "bonjour", "de": "hallo", "it": "ciao"},
-        "world": {"es": "mundo", "fr": "monde", "de": "welt", "it": "mondo"},
-        "goodbye": {"es": "adiós", "fr": "au revoir", "de": "auf wiedersehen", "it": "arrivederci"},
-        "thank you": {"es": "gracias", "fr": "merci", "de": "danke", "it": "grazie"},
-        "how are you": {"es": "¿cómo estás?", "fr": "comment allez-vous?", "de": "wie geht es dir?", "it": "come stai?"},
-    }
-    # Expand with more source languages and phrases as needed for a more comprehensive mock
-}
-
-
 class LanguageTranslatorNode(BaseNode):
     """
-    A Vishustra node designed to translate text from one language to another.
+    A Vishustra processing node designed to translate text content.
 
-    This node expects text data (string or within a dictionary) and a target
-    language in the context. It simulates translation using an internal mock
-    dictionary.
+    This node operates on various data structures:
+    - If the input `data` is a string, it translates the string directly.
+    - If `data` is a dictionary, it identifies common text-bearing keys
+      ('text', 'message', 'content') and translates their string values.
+      Nested dictionaries and lists within these keys are also handled.
+    - If `data` is a list, it iterates through its elements, attempting to
+      translate each string or dictionary item found.
+    - For other data types, a debug message is logged, and the original
+      data is returned without modification.
 
-    Context parameters:
-    - 'target_language' (str): The ISO 639-1 code of the language to translate into (e.g., 'es', 'fr').
-    - 'source_language' (str, optional): The ISO 639-1 code of the source language. Defaults to 'en'.
-    - 'fields_to_translate' (List[str], optional): If data is a dictionary, a list of keys
-      whose string values should be translated. If omitted, and data is a dict,
-      no translation occurs.
+    Translation requires a 'target_language' (e.g., 'es', 'fr', 'de') to
+    be present as a string in the `context` dictionary. The actual translation
+    logic is simulated within this node for demonstration purposes, and would
+    typically interface with an external translation service in a production environment.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """Returns the name of this processing node."""
         return "LanguageTranslator"
 
-    def _translate_text(self, text: str, source_lang: str, target_lang: str) -> str:
+    def _simulate_translation(self, text_content: Union[str, Any], target_language: str) -> Any:
         """
-        Simulates translation of a single text string.
-        """
-        text_lower = text.lower()
-        if source_lang not in _MOCK_TRANSLATIONS:
-            logger.warning(f"Unsupported source language '{source_lang}' for mock translation. Returning original text.")
-            return text
+        Simulates text translation. In a real-world scenario, this method would
+        dispatch a call to an external translation API (e.g., Google Translate, DeepL).
+        For this simulation, it appends a language tag to the text.
 
-        source_dict = _MOCK_TRANSLATIONS[source_lang]
-        if text_lower in source_dict and target_lang in source_dict[text_lower]:
-            translated_text = source_dict[text_lower][target_lang]
-            logger.debug(f"Translated '{text}' from {source_lang} to {target_lang} as '{translated_text}'.")
-            return translated_text
-        else:
-            logger.info(
-                f"No mock translation found for '{text}' from {source_lang} to {target_lang}. "
-                f"Returning original text with a prefix."
+        Args:
+            text_content: The content to be translated. Expected to be a string.
+            target_language: The ISO code of the target language (e.g., 'es', 'fr').
+
+        Returns:
+            The simulated translated string, or the original content if it's not a string
+            and cannot be converted.
+        """
+        if not isinstance(text_content, str):
+            logger.debug(
+                f"Attempted to translate non-string content of type {type(text_content).__name__}. "
+                f"Attempting conversion to string for content: {text_content!r}"
             )
-            # For unmocked phrases, return with a marker to show it passed through
-            return f"[Translated to {target_lang.upper()}]: {text}"
+            try:
+                text_content = str(text_content)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to convert non-string content {text_content!r} to string for translation. "
+                    f"Error: {e}. Returning original content."
+                )
+                return text_content # Return original if conversion fails
+
+        # Simple simulation: just appends a language tag.
+        # This is where an actual API call to a translation service would be made.
+        return f"{text_content} [TRANSLATED_TO_{target_language.upper()}]"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data by translating it to the specified target language.
+        Processes the input data by translating text content based on the
+        'target_language' specified in the context.
 
         Args:
-            data (Any): The input data. Expected to be a string for direct translation,
-                        or a dictionary where specific string values can be translated.
-            context (Dict[str, Any]): A dictionary containing contextual information,
-                                      including 'target_language' and optionally 'source_language'
-                                      or 'fields_to_translate'.
+            data: The input data to be processed. Can be a string, dict, or list.
+            context: A dictionary containing contextual information, expected to
+                     include 'target_language' (e.g., 'es', 'fr', 'de').
 
         Returns:
-            Any: The translated data. Returns original data if translation fails or
-                 is not applicable.
+            The translated data, maintaining the original structure where possible.
 
         Raises:
-            ValueError: If 'target_language' is missing from the context.
+            ValueError: If 'target_language' is missing from the context or is not a string.
+            Exception: Propagates any unexpected errors encountered during processing.
         """
         target_language = context.get("target_language")
-        source_language = context.get("source_language", "en") # Default to English source
 
-        if not target_language:
-            logger.error("LanguageTranslatorNode requires 'target_language' in context for translation.")
-            raise ValueError("Missing 'target_language' in context.")
-
-        if target_language == source_language:
-            logger.info(f"Target language '{target_language}' is the same as source language. Skipping translation.")
-            return data
-
-        if isinstance(data, str):
-            logger.debug(f"Translating string data from {source_language} to {target_language}.")
-            return self._translate_text(data, source_language, target_language)
-
-        elif isinstance(data, dict):
-            fields_to_translate: Union[List[str], None] = context.get("fields_to_translate")
-            if not fields_to_translate:
-                logger.debug("Data is a dictionary but 'fields_to_translate' not specified in context. "
-                             "Returning dictionary unchanged.")
-                return data
-
-            translated_data = data.copy()
-            for field in fields_to_translate:
-                if field in translated_data and isinstance(translated_data[field], str):
-                    logger.debug(f"Translating field '{field}' in dictionary data.")
-                    translated_data[field] = self._translate_text(
-                        translated_data[field], source_language, target_language
-                    )
-                else:
-                    logger.warning(
-                        f"Field '{field}' not found or not a string in dictionary data. Skipping translation for this field."
-                    )
-            return translated_data
-
-        else:
-            logger.warning(
-                f"Unsupported data type for translation: {type(data)}. "
-                f"Expected str or dict. Returning original data."
+        if not isinstance(target_language, str) or not target_language:
+            logger.error(
+                "LanguageTranslatorNode requires 'target_language' (a non-empty string) "
+                f"in context. Received: {target_language!r}. Data will not be translated."
             )
-            return data
+            raise ValueError(
+                "Missing or invalid 'target_language' in context for LanguageTranslatorNode. "
+                "Expected a non-empty string."
+            )
+
+        def _recursive_transform(item: Any) -> Any:
+            """Recursively translates text within nested structures."""
+            if isinstance(item, str):
+                return self._simulate_translation(item, target_language)
+            elif isinstance(item, dict):
+                translated_dict = item.copy()
+                # Common keys that might hold translatable text
+                text_keys = ["text", "message", "content", "description", "title"]
+                for key, value in item.items():
+                    if key in text_keys and isinstance(value, str):
+                        translated_dict[key] = self._simulate_translation(value, target_language)
+                    elif isinstance(value, (dict, list)):
+                        # Recurse into nested dictionaries or lists
+                        translated_dict[key] = _recursive_transform(value)
+                return translated_dict
+            elif isinstance(item, list):
+                # Recurse into list elements
+                return [_recursive_transform(element) for element in item]
+            else:
+                logger.debug(
+                    f"LanguageTranslatorNode encountered non-translatable data type "
+                    f"{type(item).__name__} during recursion. Returning item as is: {item!r}."
+                )
+                return item
+
+        try:
+            translated_data = _recursive_transform(data)
+            logger.info(
+                f"Successfully processed data for translation to '{target_language}'."
+            )
+            return translated_data
+        except Exception as e:
+            logger.exception(
+                f"An unexpected error occurred during translation in LanguageTranslatorNode "
+                f"for input data: {data!r}. Error: {e}"
+            )
+            # Re-raise the exception to indicate a processing failure,
+            # allowing the orchestration framework to handle it.
+            raise
