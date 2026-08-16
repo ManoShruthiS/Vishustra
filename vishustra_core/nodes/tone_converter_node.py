@@ -1,92 +1,140 @@
 import logging
+import re
 from typing import Any, Dict
 
-# Assuming BaseNode is located in vishustra_core.nodes.base_node
+# Assuming BaseNode is available in the specified path.
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class ToneConverterNode(BaseNode):
     """
-    A processing node designed to convert the tone of input text.
-    It expects a string as input data and a 'target_tone' in the context
-    to simulate the desired transformation.
-    """
+    A Vishustra node that converts the tone of a given text.
+    It expects the 'data' to be a string and 'context' to contain
+    'target_tone' specifying the desired output tone.
 
-    def __init__(self):
-        """
-        Initializes the ToneConverterNode. No specific parameters are required
-        for instantiation beyond the base node's capabilities.
-        """
-        super().__init__()
-        logger.debug("ToneConverterNode initialized.")
+    Supported tones include: "formal", "casual", "sarcastic".
+    """
 
     @property
     def node_name(self) -> str:
         """Returns the name of the node."""
         return "ToneConverter"
 
+    def _convert_to_formal(self, text: str) -> str:
+        """
+        Converts text to a formal tone.
+        Ensures the first letter is capitalized and ends with a period.
+        """
+        text = text.strip()
+        if not text:
+            return ""
+        
+        # Capitalize the first letter
+        text = text[0].upper() + text[1:]
+        
+        # Ensure it ends with a period, unless it already ends with common punctuation
+        if not text.endswith(('.', '!', '?')):
+            text += '.'
+        
+        logger.debug("Text converted to formal tone.")
+        return text
+
+    def _convert_to_casual(self, text: str) -> str:
+        """
+        Converts text to a casual tone.
+        Converts to lowercase, removes most punctuation, and appends " lol".
+        """
+        text = text.strip()
+        if not text:
+            return ""
+            
+        # Convert to lowercase and remove non-alphanumeric characters (keep spaces)
+        text = re.sub(r'[^\w\s]', '', text).lower()
+        
+        # Add a casual suffix if not already present
+        if not text.endswith(" lol") and text: # Check text to avoid " lol" for empty string
+            text += " lol"
+            
+        logger.debug("Text converted to casual tone.")
+        return text
+
+    def _convert_to_sarcastic(self, text: str) -> str:
+        """
+        Converts text to a sarcastic tone by alternating the case of characters.
+        """
+        text = text.strip()
+        if not text:
+            return ""
+            
+        converted_chars = []
+        for i, char in enumerate(text):
+            if i % 2 == 0:
+                converted_chars.append(char.upper())
+            else:
+                converted_chars.append(char.lower())
+                
+        logger.debug("Text converted to sarcastic tone.")
+        return "".join(converted_chars)
+
+
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data by converting its tone based on the
-        'target_tone' specified in the context.
+        Processes the input data (expected to be a string) and converts its tone
+        based on the 'target_tone' specified in the context.
 
         Args:
-            data (Any): The input data, expected to be a string representing the text.
-            context (Dict[str, Any]): A dictionary containing contextual information,
-                                      including the required 'target_tone' string.
+            data: The input text data (expected str).
+            context: A dictionary containing processing parameters.
+                     Must include 'target_tone' (str) specifying the desired
+                     tone, e.g., "formal", "casual", "sarcastic".
 
         Returns:
-            Any: The transformed string with the new tone.
+            The text with the converted tone. If the specified 'target_tone'
+            is not supported, the original data is returned after logging a warning.
 
         Raises:
-            TypeError: If the input `data` is not a string.
-            ValueError: If 'target_tone' is missing from `context`, is not a string,
-                        or if the specified 'target_tone' is not supported.
+            TypeError: If 'data' is not a string.
+            ValueError: If 'target_tone' is missing from context or not a string.
         """
         if not isinstance(data, str):
-            error_msg = (
-                f"ToneConverterNode requires string data for processing, "
-                f"but received type '{type(data).__name__}'."
+            logger.error(
+                f"Invalid input data type for ToneConverter. Expected string, "
+                f"got {type(data).__name__}."
             )
-            logger.error(error_msg)
-            raise TypeError(error_msg)
-
-        original_text: str = data
-        logger.debug(f"ToneConverterNode received text (first 50 chars): '{original_text[:50]}...'")
-
-        target_tone_raw = context.get("target_tone")
-        if not target_tone_raw or not isinstance(target_tone_raw, str):
-            error_msg = (
-                "Context dictionary for ToneConverterNode must contain a "
-                "valid 'target_tone' string."
+            raise TypeError(
+                f"ToneConverter expects string data, but received {type(data).__name__}."
             )
-            logger.error(error_msg)
-            raise ValueError(error_msg)
 
-        target_tone: str = target_tone_raw.lower()
-        transformed_text: str = original_text
+        target_tone = context.get("target_tone")
+        if not isinstance(target_tone, str):
+            logger.error(
+                f"Missing or invalid 'target_tone' in context. Expected string, "
+                f"got {type(target_tone).__name__}."
+            )
+            raise ValueError(
+                "Context must contain a string 'target_tone' for ToneConverter."
+            )
 
-        # Simulate tone conversion based on the target_tone
-        if target_tone == "formal":
-            transformed_text = f"Respected reader, {original_text}"
-            logger.debug("Text tone converted to 'formal'.")
-        elif target_tone == "informal":
-            transformed_text = f"Hey there! {original_text}"
-            logger.debug("Text tone converted to 'informal'.")
-        elif target_tone == "sarcastic":
-            transformed_text = f"{original_text} (Oh, how truly fascinating!)"
-            logger.debug("Text tone converted to 'sarcastic'.")
-        elif target_tone == "joyful":
-            transformed_text = f"Yay! {original_text}!!!"
-            logger.debug("Text tone converted to 'joyful'.")
+        logger.info(f"Attempting to convert text to '{target_tone}' tone.")
+        original_data = data # Keep original for logging/fallback
+
+        # Simulate tone conversion based on target_tone
+        lower_target_tone = target_tone.lower()
+        if lower_target_tone == "formal":
+            converted_data = self._convert_to_formal(data)
+        elif lower_target_tone == "casual":
+            converted_data = self._convert_to_casual(data)
+        elif lower_target_tone == "sarcastic":
+            converted_data = self._convert_to_sarcastic(data)
         else:
-            error_msg = (
-                f"Unsupported target tone '{target_tone_raw}' provided for ToneConverterNode. "
-                "Supported tones are 'formal', 'informal', 'sarcastic', 'joyful'."
+            logger.warning(
+                f"Unsupported target_tone: '{target_tone}'. Returning original data."
             )
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            converted_data = data # Return original if tone is not supported
 
-        logger.info(f"Successfully converted text to '{target_tone}' tone.")
-        return transformed_text
+        logger.debug(
+            f"Tone conversion complete. Original: '{original_data[:75]}{'...' if len(original_data) > 75 else ''}' "
+            f"-> Converted: '{converted_data[:75]}{'...' if len(converted_data) > 75 else ''}'"
+        )
+        return converted_data
