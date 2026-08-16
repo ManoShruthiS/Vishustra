@@ -2,84 +2,111 @@ import json
 import logging
 from typing import Any, Dict
 
-# Assuming BaseNode is available at this path for the project context
+# Assuming BaseNode is available at this path as per project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class JSONFormatterNode(BaseNode):
     """
-    A processing node that formats input data into a standardized JSON string.
+    A Vishustra processing node that formats Python objects or JSON strings
+    into a standardized, optionally pretty-printed, JSON string representation.
 
-    This node handles various input types:
-    - If the input is a valid JSON string, it will be parsed and then re-serialized
-      with standard indentation for readability (e.g., `indent=2`).
-    - If the input is a Python dictionary, list, number, boolean, or None,
-      it will be directly serialized to a JSON string with indentation.
-    - If the input is a string that is NOT valid JSON, it will be treated as
-      a literal string value and encased in a JSON string (e.g., "hello" becomes '"hello"').
-    - If the input is an object that cannot be serialized to JSON, an error will be logged
-      and a ValueError will be raised.
+    This node is designed to normalize data into a consistent JSON string format,
+    handling both raw Python objects and existing JSON strings as input.
+    It provides configuration for indentation and key sorting.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
-        return "json_formatter"
+        """Returns the descriptive name of the node."""
+        return "JSONFormatter"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
+    def process(self, data: Any, context: Dict[str, Any]) -> str:
         """
-        Formats the input data into a pretty-printed JSON string.
+        Formats the input data into a JSON string, applying specified formatting options.
+
+        The node first attempts to interpret the input `data`:
+        - If `data` is a string, it tries to parse it as JSON. If successful,
+          the parsed Python object is used. If parsing fails, the original
+          string itself is treated as the object to be serialized (e.g.,
+          the string "hello" would be serialized to '"hello"').
+        - If `data` is not a string, it's directly treated as a Python object
+          to be serialized.
 
         Args:
-            data: The input data to be formatted. Can be any Python type
-                  that is typically JSON-serializable or a JSON string.
-            context: A dictionary containing contextual information for the node.
-                     Not directly used by this node but passed along to adhere to
-                     the BaseNode interface.
+            data: The input data, which can be any Python object (dict, list, str,
+                  int, etc.) or a string potentially containing JSON.
+            context: A dictionary containing additional processing parameters.
+                     Recognized keys:
+                     - 'indent': (int | None, optional) The number of spaces to use
+                                 for indentation. Defaults to 4 for pretty-printing.
+                                 Use `None` for the most compact JSON output.
+                     - 'sort_keys': (bool, optional) If True, output dictionary
+                                    keys will be sorted alphabetically. Defaults to False.
 
         Returns:
-            A string representing the formatted JSON.
+            A formatted JSON string.
 
         Raises:
-            ValueError: If the input data cannot be serialized into a valid JSON string.
+            TypeError: If the final Python object intended for serialization
+                       is not JSON serializable (e.g., a custom class instance
+                       without a `__json__` method or similar serializer).
+            Exception: Catches and re-raises any other unexpected errors during
+                       the JSON processing lifecycle.
         """
-        formatted_json_string: str
+        obj_to_serialize = data
+        
+        # Extract formatting parameters from the context, providing sensible defaults
+        indent = context.get('indent', 4)  # Default to 4 spaces for pretty-printing
+        sort_keys = context.get('sort_keys', False)
+
+        logger.debug(
+            f"[{self.node_name}] Preparing to format data. "
+            f"Indent: {indent}, Sort Keys: {sort_keys}."
+        )
+
+        if isinstance(data, str):
+            try:
+                # Attempt to parse the input string as JSON
+                parsed_data = json.loads(data)
+                obj_to_serialize = parsed_data
+                logger.debug(f"[{self.node_name}] Successfully parsed input string as a JSON object.")
+            except json.JSONDecodeError:
+                # If the string is not valid JSON, we'll serialize the string itself.
+                # E.g., json.dumps("just a string") results in '"just a string"'.
+                logger.warning(
+                    f"[{self.node_name}] Input string is not valid JSON. "
+                    "Proceeding to serialize the string content directly."
+                )
+            except Exception as e:
+                logger.error(
+                    f"[{self.node_name}] An unexpected error occurred while attempting "
+                    f"to parse input string as JSON: {e}", exc_info=True
+                )
+                raise # Re-raise unexpected parsing errors
 
         try:
-            if isinstance(data, str):
-                try:
-                    # Attempt to parse if it's already a JSON string
-                    parsed_data = json.loads(data)
-                    formatted_json_string = json.dumps(parsed_data, indent=2)
-                    logger.debug("Successfully re-formatted valid JSON string input.")
-                except json.JSONDecodeError:
-                    # If it's a string but not valid JSON, treat it as a literal string value
-                    # and serialize it as such. E.g., "hello" -> '"hello"'
-                    formatted_json_string = json.dumps(data) # No indent for literal strings
-                    logger.warning(
-                        f"Input data is a string but not valid JSON. "
-                        f"Serializing as a literal JSON string value. Data preview: {data[:50]}"
-                    )
-            else:
-                # For non-string types (dict, list, int, bool, None, etc.),
-                # directly serialize to JSON with pretty-printing.
-                formatted_json_string = json.dumps(data, indent=2)
-                logger.debug("Successfully formatted non-string data to JSON.")
-
+            # Serialize the (potentially parsed) Python object into a JSON string
+            formatted_json_string = json.dumps(
+                obj_to_serialize,
+                indent=indent,
+                sort_keys=sort_keys
+            )
+            logger.info(f"[{self.node_name}] Data successfully formatted into JSON string.")
+            return formatted_json_string
         except TypeError as e:
-            # Catch errors for types that json.dumps cannot handle (e.g., custom objects without serialization)
+            # This error occurs if `obj_to_serialize` contains non-JSON-serializable types
             logger.error(
-                f"JSONFormatterNode failed to serialize data due to an unsupported type: {type(data)}. "
-                f"Error: {e}. Data preview: {str(data)[:100]}"
+                f"[{self.node_name}] Failed to serialize data of type "
+                f"'{type(obj_to_serialize).__name__}' to JSON: {e}", exc_info=True
             )
-            raise ValueError(f"Data type {type(data)} is not JSON serializable.") from e
+            raise TypeError(
+                f"Input data (or its parsed form) is not JSON serializable: {e}"
+            ) from e
         except Exception as e:
-            # Catch any other unexpected errors during the serialization process
+            # Catch any other unforeseen issues during serialization
             logger.error(
-                f"An unexpected error occurred in JSONFormatterNode during serialization: {e}. "
-                f"Data preview: {str(data)[:100]}"
+                f"[{self.node_name}] An unexpected error occurred during JSON serialization: {e}", exc_info=True
             )
-            raise ValueError(f"Failed to format data to JSON: {e}") from e
-
-        return formatted_json_string
+            raise # Re-raise for upstream handling
