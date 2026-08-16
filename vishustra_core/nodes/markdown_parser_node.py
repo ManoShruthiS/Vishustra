@@ -1,56 +1,95 @@
 import logging
-from typing import Any, Dict, Union
-import markdown
+from typing import Any, Dict
 
-# Assuming BaseNode is available at this path within the Vishustra project structure
+# External library for Markdown parsing.
+# Users would typically install this via `pip install markdown`.
+import markdown 
+
+# Importing the BaseNode from Vishustra's core library.
 from vishustra_core.nodes.base_node import BaseNode
 
+# Set up a logger for this module to ensure all operational messages
+# are captured by the Vishustra logging infrastructure.
 logger = logging.getLogger(__name__)
 
 class MarkdownParserNode(BaseNode):
     """
-    A Vishustra processing node that parses Markdown text into HTML.
+    A Vishustra processing node responsible for parsing Markdown-formatted
+    text and converting it into its corresponding HTML representation.
 
-    This node expects a string containing Markdown formatted text as input
-    and returns a string containing the corresponding HTML.
+    This node is crucial for workflows that involve processing text
+    from various sources (e.g., user input, knowledge bases) and
+    preparing it for display in web interfaces or for further HTML-based
+    transformations.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """
+        Returns the descriptive name of this processing node.
+        """
         return "MarkdownParser"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> str:
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Parses the input data from Markdown to HTML.
+        Processes the input data, expecting a string containing Markdown text,
+        and transforms it into an HTML string.
 
         Args:
-            data: The input data, expected to be a string containing Markdown text.
-            context: A dictionary containing contextual information for processing.
-                     (Not directly used by this specific node, but required by BaseNode interface).
+            data (Any): The input data. This node specifically expects a
+                        string containing Markdown content.
+            context (Dict[str, Any]): A dictionary providing contextual
+                                     information from the orchestration
+                                     pipeline, which might include configuration
+                                     or shared state. (Not used by this node
+                                     for core logic, but passed along).
 
         Returns:
-            A string containing the HTML representation of the input Markdown.
+            Any: The HTML string resulting from the Markdown conversion.
 
         Raises:
-            ValueError: If the input data is not a string.
-            Exception: For any unexpected errors during the Markdown parsing process.
+            TypeError: If the input `data` is not a string, indicating an
+                       invalid input type for Markdown parsing.
+            ValueError: If an unexpected error occurs during the Markdown
+                        parsing process, potentially due to issues with the
+                        parsing library or malformed but syntactically valid
+                        Markdown that causes internal errors.
         """
-        if not isinstance(data, str):
-            error_msg = f"MarkdownParserNode expects a string input, but received type: {type(data).__name__}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+        logger.debug(f"[{self.node_name}] Initiating Markdown parsing process.")
 
+        if not isinstance(data, str):
+            error_msg = (
+                f"[{self.node_name}] Invalid input type for data. "
+                f"Expected a string, but received {type(data).__name__}."
+            )
+            logger.error(error_msg)
+            raise TypeError(error_msg)
+
+        # Handle cases where the input string might be empty or just whitespace.
+        # markdown.markdown("") correctly returns "", but an explicit check
+        # can provide clearer logging for such scenarios.
         if not data.strip():
-            logger.warning("MarkdownParserNode received an empty or whitespace-only string for parsing.")
+            logger.warning(
+                f"[{self.node_name}] Input data is an empty or whitespace-only "
+                "string. Returning an empty HTML string."
+            )
             return ""
 
         try:
-            # Use the markdown library to convert markdown to HTML
-            html_output = markdown.markdown(data)
-            logger.debug("Successfully parsed markdown content to HTML.")
-            return html_output
+            # Perform the Markdown to HTML conversion.
+            # The 'markdown' library provides robust parsing capabilities.
+            # Extensions can be added here if a specific flavour of Markdown
+            # (e.g., GitHub Flavored Markdown) is required, e.g.,
+            # markdown.markdown(data, extensions=['gfm']).
+            parsed_html = markdown.markdown(data)
+            logger.debug(f"[{self.node_name}] Successfully converted Markdown to HTML.")
+            return parsed_html
         except Exception as e:
-            error_msg = f"An unexpected error occurred during Markdown parsing: {e}"
-            logger.exception(error_msg) # Logs the full traceback
-            raise RuntimeError(error_msg) from e
+            # Catching a broad exception to ensure the node is resilient to
+            # any unforeseen issues within the external markdown parsing library.
+            error_msg = (
+                f"[{self.node_name}] Failed to parse Markdown data due to an "
+                f"unexpected error: {e}"
+            )
+            logger.error(error_msg, exc_info=True)
+            raise ValueError(error_msg) from e
