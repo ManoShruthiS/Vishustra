@@ -1,111 +1,119 @@
-
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, Optional
 
+# Assuming BaseNode is located here as per instructions for the import path
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class IntentClassifierNode(BaseNode):
     """
-    A Vishustra processing node responsible for classifying the intent of a given
-    text input. This implementation uses a keyword-based matching strategy for
-    demonstration and initial prototyping.
+    A Vishustra processing node designed to classify the intent of an input text string.
+
+    This node simulates intent classification using a simple keyword-based matching strategy.
+    It identifies an intent by checking if predefined keywords or phrases exist within
+    the input text. For production-grade applications, this would typically be replaced
+    with integration to a more sophisticated Natural Language Understanding (NLU) service
+    or a trained machine learning model.
     """
 
-    def __init__(self, intent_map: Dict[str, List[str]] = None):
+    def __init__(self, intent_mapping: Optional[Dict[str, str]] = None):
         """
-        Initializes the IntentClassifierNode with a predefined set of intent rules.
+        Initializes the IntentClassifierNode.
 
         Args:
-            intent_map (Dict[str, List[str]], optional): A dictionary where keys are intent names
-                                                         and values are lists of keywords associated
-                                                         with that intent. If None, a default map is used.
-                                                         Keywords are case-insensitive.
+            intent_mapping (Optional[Dict[str, str]]): A dictionary where keys are
+                keywords or phrases (case-insensitive for matching) and values are
+                the corresponding intent names (e.g., {"book flight": "book_flight"}).
+                If not provided, a default internal mapping will be used.
         """
-        self._intent_map = intent_map if intent_map is not None else {
-            "greet": ["hello", "hi", "hey", "good morning", "good afternoon", "good evening"],
-            "farewell": ["bye", "goodbye", "see you", "later", "cya"],
-            "ask_balance": ["balance", "account", "funds", "how much money", "what's in my account"],
-            "transfer_money": ["transfer", "send money", "move funds", "pay someone"],
-            "order_status": ["order status", "my order", "where is my package", "tracking"],
-            "customer_service": ["help", "support", "speak to an agent", "contact us"],
+        self._intent_mapping = intent_mapping if intent_mapping is not None else {
+            "hello": "greet",
+            "hi": "greet",
+            "hey": "greet",
+            "book flight": "book_flight",
+            "schedule trip": "book_flight",
+            "weather forecast": "get_weather",
+            "current weather": "get_weather",
+            "cancel my order": "cancel_order",
+            "remove item": "cancel_order",
+            "support": "get_support",
+            "help me": "get_support",
+            "what's up": "chit_chat",
+            "how are you": "chit_chat",
         }
-        logger.debug(f"IntentClassifierNode initialized with intent map: {self._intent_map}")
+        logger.debug(f"[{self.node_name}] Initialized with intent mapping: {self._intent_mapping}")
 
     @property
     def node_name(self) -> str:
         """Returns the descriptive name of the node."""
-        return "IntentClassifierNode"
+        return "IntentClassifier"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
+    def process(self, data: Any, context: Dict[str, Any]) -> str:
         """
-        Classifies the intent of the input text using predefined keyword rules.
+        Processes the input data to determine its intent.
+
+        The `data` input is expected to be a string representing a user query or message.
+        The method converts the input to lowercase and then attempts to match it
+        against the predefined keywords in the `_intent_mapping`. The first matching
+        keyword determines the intent. If no keywords match, "unknown_intent" is returned.
 
         Args:
-            data (Any): The input data, expected to be a string utterance from the user.
-            context (Dict[str, Any]): The processing context, which may contain session-specific
-                                      information or previous node outputs. Not directly
-                                      utilized by this node for classification logic, but
-                                      passed along in the framework.
+            data (Any): The input data to classify, typically a string.
+            context (Dict[str, Any]): A dictionary providing contextual information.
+                                       This node does not actively use the context for
+                                       classification but it's available for orchestration
+                                       or future extensions (e.g., dynamic config, model access).
 
         Returns:
-            Dict[str, Any]: A dictionary containing the classification results, including:
-                            - "original_utterance": The unprocessed input string.
-                            - "classified_intent": The determined intent (e.g., "greet", "fallback").
-                            - "confidence": A numerical confidence score for the classification.
-                            - "processed_by": The name of this node for traceability.
+            str: The identified intent as a string (e.g., "greet", "book_flight",
+                 "unknown_intent").
 
         Raises:
-            TypeError: If the input 'data' is not a string.
-            ValueError: If the input 'data' is an empty string after stripping whitespace.
+            TypeError: If the input `data` is not a string.
+            RuntimeError: For any unexpected operational failures during classification.
         """
         if not isinstance(data, str):
             logger.error(
-                f"[{self.node_name}] Received non-string data: {type(data)}. Expected 'str'."
+                f"[{self.node_name}] Received non-string data of type {type(data)}. Expected a string."
             )
             raise TypeError(
-                f"{self.node_name} expects string input for 'data', but received {type(data)}."
+                f"[{self.node_name}] Input 'data' must be a string, but received {type(data)}."
             )
 
-        utterance = data.strip().lower()
+        query = data.lower()
+        identified_intent = "unknown_intent"
 
-        if not utterance:
-            logger.warning(
-                f"[{self.node_name}] Received an empty or whitespace-only utterance."
-            )
-            raise ValueError(f"{self.node_name} cannot process an empty utterance.")
+        logger.info(f"[{self.node_name}] Attempting to classify intent for query: '{data}'")
 
-        classified_intent = "fallback"
-        confidence = 0.50  # Default low confidence for fallback scenarios
-        
-        # Iterate through defined intents and their keywords to find a match
-        for intent, keywords in self._intent_map.items():
-            for keyword in keywords:
-                if keyword in utterance:
-                    classified_intent = intent
-                    confidence = 0.95  # High confidence for a direct keyword match
+        try:
+            # Iterate through the mapping to find a matching keyword
+            for keyword_phrase, intent_name in self._intent_mapping.items():
+                if keyword_phrase.lower() in query:
+                    identified_intent = intent_name
                     logger.info(
-                        f"[{self.node_name}] Classified intent '{classified_intent}' "
-                        f"for utterance '{data}' based on keyword '{keyword}'."
+                        f"[{self.node_name}] Identified intent '{identified_intent}' "
+                        f"for query: '{data}' (matched on keyword: '{keyword_phrase}')"
                     )
-                    # Once an intent is found, we stop searching.
-                    # For more complex scenarios, one might implement scoring.
-                    break 
-            if classified_intent != "fallback":
-                break # Exit outer loop if an intent was found
+                    break  # Found the first match, return this intent
+            else:
+                logger.info(
+                    f"[{self.node_name}] No specific intent matched for query: '{data}'. "
+                    f"Defaulting to '{identified_intent}'."
+                )
 
-        if classified_intent == "fallback":
-            logger.info(
-                f"[{self.node_name}] No specific intent matched for utterance '{data}'. "
-                f"Falling back to 'fallback' intent."
+        except Exception as e:
+            logger.exception(
+                f"[{self.node_name}] An unexpected error occurred during intent "
+                f"classification for query: '{data}'."
             )
+            # Re-raise as a RuntimeError to signify an operational failure
+            raise RuntimeError(
+                f"[{self.node_name}] Failed to classify intent for query '{data}': {e}"
+            ) from e
 
-        # Append classification results to the context or return a new structure
-        return {
-            "original_utterance": data,
-            "classified_intent": classified_intent,
-            "confidence": confidence,
-            "processed_by": self.node_name,
-        }
+        # The identified intent can also be added to the context for downstream nodes
+        # if the orchestration logic expects it there, but the primary output is the return value.
+        # context['identified_intent'] = identified_intent
 
+        return identified_intent
