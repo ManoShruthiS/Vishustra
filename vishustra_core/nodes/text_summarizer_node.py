@@ -7,94 +7,93 @@ logger = logging.getLogger(__name__)
 
 class TextSummarizerNode(BaseNode):
     """
-    A Vishustra processing node designed to generate a simulated summary
-    of input text.
+    A Vishustra node that performs text summarization.
 
-    This node expects a string as input data and produces a condensed version
-    of the text. The summarization process is configurable via the `context`
-    dictionary, allowing control over the desired summary length.
+    This node takes a string as input and generates a summarized version
+    based on configurable parameters provided in the context. It simulates
+    an abstractive summarization process by intelligently truncating text
+    to a specified maximum length, aiming to preserve word boundaries.
     """
 
     @property
     def node_name(self) -> str:
         """
-        Returns the descriptive name of this processing node.
+        Returns the descriptive name of this node.
         """
-        return "TextSummarizerNode"
+        return "TextSummarizer"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data to produce a simulated summary.
-
-        The node truncates the input text to a specified number of words,
-        acting as a placeholder for more advanced summarization techniques.
+        Processes the input data to generate a text summary.
 
         Args:
-            data (Any): The input data to be summarized. This node expects
-                        a string.
-            context (Dict[str, Any]): A dictionary containing operational
-                                      parameters for the node.
-                                      Expected keys:
-                                      - 'summary_length_words' (int, optional):
-                                        The maximum number of words the
-                                        simulated summary should contain.
-                                        If not provided, or if the value is
-                                        not a positive integer, it defaults
-                                        to 50 words.
+            data (Any): The input data, expected to be a string representing the text to summarize.
+            context (Dict[str, Any]): A dictionary containing parameters for summarization.
+                                       Expected keys:
+                                       - 'max_summary_length' (int, optional): The maximum
+                                         character length of the generated summary. Defaults to 250.
+                                         Must be a positive integer.
+                                       - 'summarization_method' (str, optional): Placeholder for
+                                         future integration with different summarization models
+                                         (e.g., 'abstractive', 'extractive'). Not actively used
+                                         in this simulated version but can be passed.
 
         Returns:
-            Any: A string representing the simulated summary of the input text.
-                 Returns an empty string if the input data is empty or
-                 consists only of whitespace.
+            Any: A string representing the summarized text.
 
         Raises:
-            TypeError: If the input `data` is not of type string.
+            TypeError: If the input 'data' is not a string.
+            ValueError: If 'max_summary_length' in context is not a positive integer.
         """
+        logger.debug(f"[{self.node_name}] Starting process for input data (type: {type(data).__name__}).")
+
         if not isinstance(data, str):
-            logger.error(
-                f"{self.node_name} received non-string data. "
-                f"Expected str, but got {type(data).__name__}."
+            error_msg = (
+                f"[{self.node_name}] Invalid input data type. "
+                f"Expected 'str', but received '{type(data).__name__}'. "
+                f"Cannot summarize non-string data."
             )
-            raise TypeError(
-                f"{self.node_name} expects string input, "
-                f"but received {type(data).__name__}"
-            )
+            logger.error(error_msg)
+            raise TypeError(error_msg)
 
-        stripped_data = data.strip()
-        if not stripped_data:
-            logger.debug(
-                f"{self.node_name} received empty or whitespace-only string, "
-                "returning an empty string as summary."
+        input_text: str = data
+        
+        # Retrieve and validate max_summary_length from context
+        max_summary_length: int = context.get('max_summary_length', 250)
+        
+        if not isinstance(max_summary_length, int) or max_summary_length <= 0:
+            error_msg = (
+                f"[{self.node_name}] Invalid 'max_summary_length' parameter in context. "
+                f"Expected a positive integer, but received '{max_summary_length}' "
+                f"(type: {type(max_summary_length).__name__})."
             )
-            return ""
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
-        # Determine the target summary length from context
-        summary_length_words = context.get('summary_length_words', 50)
-        if not isinstance(summary_length_words, int) or summary_length_words <= 0:
-            logger.warning(
-                f"{self.node_name}: Invalid 'summary_length_words' "
-                f"'{summary_length_words}' provided in context. "
-                "Defaulting to 50 words for summarization."
-            )
-            summary_length_words = 50
+        logger.info(
+            f"[{self.node_name}] Summarizing text of {len(input_text)} characters "
+            f"to a maximum of {max_summary_length} characters."
+        )
 
-        words = stripped_data.split()
-
-        if len(words) <= summary_length_words:
-            # If the original text is already short enough, return it as is.
-            summary = stripped_data
-            logger.debug(
-                f"{self.node_name}: Input text word count ({len(words)}) "
-                "is less than or equal to requested summary length, "
-                "returning original text."
-            )
+        # Simulate abstractive summarization via intelligent truncation
+        if len(input_text) <= max_summary_length:
+            summarized_text = input_text
+            logger.debug(f"[{self.node_name}] Input text length ({len(input_text)}) is within "
+                         f"max_summary_length ({max_summary_length}). No truncation performed.")
         else:
-            # Simulate summarization by truncating and adding an ellipsis.
-            summary_words = words[:summary_length_words]
-            summary = " ".join(summary_words) + "..."
-            logger.debug(
-                f"{self.node_name}: Successfully generated a simulated summary "
-                f"of {len(summary_words)} words."
-            )
+            # Attempt to truncate at the last word boundary before max_summary_length
+            # to avoid cutting words in half.
+            truncated_segment = input_text[:max_summary_length]
+            last_space_index = truncated_segment.rfind(' ')
 
-        return summary
+            if last_space_index != -1 and last_space_index > max_summary_length * 0.75:
+                # Only use the last space if it's not too far back,
+                # preventing very short summaries if the first word is extremely long.
+                summarized_text = truncated_segment[:last_space_index] + "..."
+            else:
+                # Fallback to direct truncation if no suitable space is found
+                summarized_text = truncated_segment + "..."
+            logger.debug(f"[{self.node_name}] Text truncated from {len(input_text)} to {len(summarized_text)} characters.")
+
+        logger.info(f"[{self.node_name}] Text summarization completed. Output length: {len(summarized_text)} characters.")
+        return summarized_text
