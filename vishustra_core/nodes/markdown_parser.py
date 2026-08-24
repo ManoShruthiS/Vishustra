@@ -1,97 +1,95 @@
 import logging
 import re
-from typing import Any, Dict
+from typing import Any, Dict, List
+
 from vishustra_core.nodes.base_node import BaseNode
 
-# Initialize logger for this module
 logger = logging.getLogger(__name__)
-
-class NodeProcessingError(Exception):
-    """Custom exception for errors encountered during node processing."""
-    pass
 
 class MarkdownParserNode(BaseNode):
     """
-    A processing node designed to parse Markdown text and convert common
-    Markdown elements into a simplified HTML-like string representation.
-    This node serves as an example of text transformation within the Vishustra framework.
+    A Vishustra processing node that parses Markdown text into a structured list of elements.
+    It identifies and extracts block-level elements like headers and paragraphs, and
+    also extracts inline elements such as links from within the text.
     """
 
     @property
     def node_name(self) -> str:
         """Returns the descriptive name of the node."""
-        return "MarkdownParser"
+        return "markdown_parser"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
+    def process(self, data: Any, context: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Processes the input data, which is expected to be a Markdown string,
-        and transforms common Markdown elements into simplified HTML-like tags.
+        Processes the input data, expecting a Markdown string, and returns a list of
+        dictionaries representing the parsed Markdown elements.
+
+        This node performs a light-weight parsing to extract key structural and
+        informational elements.
+
+        Supported elements and their structure in the output list:
+        - Headers:   `{'type': 'header', 'level': int, 'text': str}`
+                     e.g., `{'type': 'header', 'level': 1, 'text': 'Main Title'}`
+        - Links:     `{'type': 'link', 'text': str, 'url': str}`
+                     e.g., `{'type': 'link', 'text': 'Google', 'url': 'https://google.com'}`
+                     (Links are extracted from paragraphs and added as distinct elements).
+        - Paragraphs: `{'type': 'paragraph', 'text': str}`
+                     e.g., `{'type': 'paragraph', 'text': 'This is some text.'}`
 
         Args:
-            data: The input data, anticipated to be a string containing Markdown.
-            context: A dictionary providing runtime context information
-                     (e.g., global variables, configuration).
+            data: The input Markdown string to be parsed.
+            context: A dictionary containing contextual information for the node's operation.
+                     (Not directly used by this specific node, but available for extensions).
 
         Returns:
-            A string where recognized Markdown elements have been converted
-            to simplified HTML-like tags.
+            A `List` of `Dict`s, where each dictionary represents a parsed Markdown element.
 
         Raises:
-            NodeProcessingError: If the input data is not a string, or if an
-                                 unexpected issue occurs during the parsing process.
+            TypeError: If the input `data` is not a string, indicating an invalid input type.
         """
+        logger.info("MarkdownParserNode received data for processing.")
+
         if not isinstance(data, str):
             logger.error(
-                "MarkdownParserNode received invalid input type. Expected 'str', got '%s'.",
-                type(data).__name__
+                f"Invalid input type for MarkdownParserNode. Expected 'str', "
+                f"but received '{type(data).__name__}'. Aborting process."
             )
-            raise NodeProcessingError(
-                f"Invalid input type for MarkdownParserNode. Expected 'str', got '{type(data).__name__}'."
+            raise TypeError(
+                f"MarkdownParserNode expects 'str' input, but received '{type(data).__name__}'."
             )
 
-        logger.info("Starting Markdown parsing for input data (length: %d characters).", len(data))
-        processed_content = data
+        parsed_elements: List[Dict[str, Any]] = []
+        lines = data.split('\n')
 
-        try:
-            # Simulate parsing and conversion of Markdown elements
+        # Regex patterns for common Markdown elements
+        header_pattern = re.compile(r"^(#{1,6})\s+(.*)$") # Matches H1-H6 headers
+        link_pattern = re.compile(r"\[([^\]]+?)\]\((.+?)\)") # Matches [text](url) links
 
-            # Convert headers (H1, H2, H3)
-            processed_content = self._replace_header_tags(processed_content)
+        for line_num, line in enumerate(lines, start=1):
+            stripped_line = line.strip()
 
-            # Convert bold text: **text** -> <strong>text</strong>
-            processed_content = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', processed_content, flags=re.DOTALL)
+            if not stripped_line:
+                # Skip entirely empty or whitespace-only lines
+                continue
 
-            # Convert italic text: *text* -> <em>text</em>
-            # This regex is intentionally simple and might not handle all edge cases
-            # (e.g., asterisks within code blocks) without more sophisticated parsing.
-            processed_content = re.sub(r'\*(.*?)\*', r'<em>\1</em>', processed_content, flags=re.DOTALL)
-
-            logger.info("Successfully processed Markdown content. Output length: %d characters.", len(processed_content))
-            return processed_content
-        except Exception as e:
-            logger.exception("An unexpected error occurred during Markdown parsing within MarkdownParserNode.")
-            raise NodeProcessingError(f"Failed to parse Markdown content: {e}") from e
-
-    def _replace_header_tags(self, text: str) -> str:
-        """
-        Helper method to replace Markdown header syntax (#, ##, ###) with
-        corresponding simplified HTML-like header tags (<h1>, <h2>, <h3>).
-
-        Args:
-            text: The input string potentially containing Markdown headers.
-
-        Returns:
-            The string with header syntax replaced.
-        """
-        lines = text.split('\n')
-        processed_lines = []
-        for line in lines:
-            if line.startswith('### '):
-                processed_lines.append(f"<h3>{line[4:].strip()}</h3>")
-            elif line.startswith('## '):
-                processed_lines.append(f"<h2>{line[3:].strip()}</h2>")
-            elif line.startswith('# '):
-                processed_lines.append(f"<h1>{line[2:].strip()}</h1>")
+            # Attempt to parse headers
+            header_match = header_pattern.match(stripped_line)
+            if header_match:
+                level = len(header_match.group(1))
+                text = header_match.group(2).strip()
+                parsed_elements.append({'type': 'header', 'level': level, 'text': text})
+                logger.debug(f"L{line_num}: Parsed header (level {level}): '{text}'")
             else:
-                processed_lines.append(line)
-        return '\n'.join(processed_lines)
+                # If not a header, treat the line as a potential paragraph.
+                # The raw text of the line is kept for the paragraph.
+                parsed_elements.append({'type': 'paragraph', 'text': stripped_line})
+                logger.debug(f"L{line_num}: Parsed paragraph: '{stripped_line}'")
+
+                # Additionally, extract any links found within this paragraph line
+                for link_match in link_pattern.finditer(stripped_line):
+                    link_text = link_match.group(1)
+                    link_url = link_match.group(2)
+                    parsed_elements.append({'type': 'link', 'text': link_text, 'url': link_url})
+                    logger.debug(f"L{line_num}: Extracted link: text='{link_text}', url='{link_url}'")
+
+        logger.info(f"MarkdownParserNode completed processing. Total {len(parsed_elements)} elements parsed.")
+        return parsed_elements
