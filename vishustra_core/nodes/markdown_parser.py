@@ -1,95 +1,97 @@
 import logging
-import re
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from vishustra_core.nodes.base_node import BaseNode
 
+# It is standard practice for a backend engineer to leverage existing robust libraries
+# for well-defined tasks like Markdown parsing. The 'markdown' library is a widely
+# adopted and efficient choice for this purpose.
+try:
+    import markdown
+except ImportError:
+    # Log an informative error if the dependency is missing, and provide guidance.
+    # This prevents runtime errors only when the node is instantiated or processed.
+    logging.critical(
+        "The 'markdown' library is required for MarkdownParserNode. "
+        "Please install it using 'pip install markdown'."
+    )
+    # Define a dummy markdown object to allow the class to be defined,
+    # but actual processing will fail robustly.
+    markdown = None
+
+
 logger = logging.getLogger(__name__)
+
 
 class MarkdownParserNode(BaseNode):
     """
-    A Vishustra processing node that parses Markdown text into a structured list of elements.
-    It identifies and extracts block-level elements like headers and paragraphs, and
-    also extracts inline elements such as links from within the text.
+    A Vishustra processing node that converts Markdown text into HTML.
+
+    This node expects the input 'data' to be a string containing Markdown
+    and will transform it into an HTML string. It leverages the 'markdown'
+    Python library for robust and feature-rich parsing.
     """
 
     @property
     def node_name(self) -> str:
         """Returns the descriptive name of the node."""
-        return "markdown_parser"
+        return "MarkdownParserNode"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, expecting a Markdown string, and returns a list of
-        dictionaries representing the parsed Markdown elements.
+        Processes the input Markdown data and returns the resulting HTML string.
 
-        This node performs a light-weight parsing to extract key structural and
-        informational elements.
-
-        Supported elements and their structure in the output list:
-        - Headers:   `{'type': 'header', 'level': int, 'text': str}`
-                     e.g., `{'type': 'header', 'level': 1, 'text': 'Main Title'}`
-        - Links:     `{'type': 'link', 'text': str, 'url': str}`
-                     e.g., `{'type': 'link', 'text': 'Google', 'url': 'https://google.com'}`
-                     (Links are extracted from paragraphs and added as distinct elements).
-        - Paragraphs: `{'type': 'paragraph', 'text': str}`
-                     e.g., `{'type': 'paragraph', 'text': 'This is some text.'}`
+        This method first validates that the input `data` is a string.
+        It then attempts to convert the Markdown content to HTML using the
+        `markdown` library. Robust error handling is included to catch
+        potential issues during parsing or if the required dependency is missing.
 
         Args:
-            data: The input Markdown string to be parsed.
-            context: A dictionary containing contextual information for the node's operation.
-                     (Not directly used by this specific node, but available for extensions).
+            data: The input data, expected to be a string containing Markdown content.
+            context: A dictionary containing contextual information. This node
+                     does not currently utilize the context, but it is available
+                     for future extensions (e.g., passing markdown extensions).
 
         Returns:
-            A `List` of `Dict`s, where each dictionary represents a parsed Markdown element.
+            A string containing the HTML representation of the input Markdown.
 
         Raises:
-            TypeError: If the input `data` is not a string, indicating an invalid input type.
+            TypeError: If the input 'data' is not a string.
+            RuntimeError: If the 'markdown' library is not installed or if
+                          an unexpected error occurs during the parsing process.
         """
-        logger.info("MarkdownParserNode received data for processing.")
+        logger.debug(f"[{self.node_name}] Initiating process for data type: {type(data)}")
+
+        if markdown is None:
+            logger.error(f"[{self.node_name}] 'markdown' library is not installed. Cannot process.")
+            raise RuntimeError(
+                f"Node '{self.node_name}' requires the 'markdown' library, "
+                "which is not installed. Please install it (`pip install markdown`)."
+            )
 
         if not isinstance(data, str):
             logger.error(
-                f"Invalid input type for MarkdownParserNode. Expected 'str', "
-                f"but received '{type(data).__name__}'. Aborting process."
+                f"[{self.node_name}] Invalid input data type. Expected 'str', "
+                f"received '{type(data).__name__}'."
             )
             raise TypeError(
-                f"MarkdownParserNode expects 'str' input, but received '{type(data).__name__}'."
+                f"Node '{self.node_name}' expects input 'data' to be a string, "
+                f"but received type '{type(data).__name__}'."
             )
 
-        parsed_elements: List[Dict[str, Any]] = []
-        lines = data.split('\n')
-
-        # Regex patterns for common Markdown elements
-        header_pattern = re.compile(r"^(#{1,6})\s+(.*)$") # Matches H1-H6 headers
-        link_pattern = re.compile(r"\[([^\]]+?)\]\((.+?)\)") # Matches [text](url) links
-
-        for line_num, line in enumerate(lines, start=1):
-            stripped_line = line.strip()
-
-            if not stripped_line:
-                # Skip entirely empty or whitespace-only lines
-                continue
-
-            # Attempt to parse headers
-            header_match = header_pattern.match(stripped_line)
-            if header_match:
-                level = len(header_match.group(1))
-                text = header_match.group(2).strip()
-                parsed_elements.append({'type': 'header', 'level': level, 'text': text})
-                logger.debug(f"L{line_num}: Parsed header (level {level}): '{text}'")
-            else:
-                # If not a header, treat the line as a potential paragraph.
-                # The raw text of the line is kept for the paragraph.
-                parsed_elements.append({'type': 'paragraph', 'text': stripped_line})
-                logger.debug(f"L{line_num}: Parsed paragraph: '{stripped_line}'")
-
-                # Additionally, extract any links found within this paragraph line
-                for link_match in link_pattern.finditer(stripped_line):
-                    link_text = link_match.group(1)
-                    link_url = link_match.group(2)
-                    parsed_elements.append({'type': 'link', 'text': link_text, 'url': link_url})
-                    logger.debug(f"L{line_num}: Extracted link: text='{link_text}', url='{link_url}'")
-
-        logger.info(f"MarkdownParserNode completed processing. Total {len(parsed_elements)} elements parsed.")
-        return parsed_elements
+        try:
+            # Context could be used here to pass `extensions`, `extension_configs`,
+            # or `output_format` to the markdown.markdown function if needed.
+            # Example: html_output = markdown.markdown(data, extensions=context.get('markdown_extensions', []))
+            html_output = markdown.markdown(data)
+            logger.info(f"[{self.node_name}] Successfully parsed Markdown to HTML.")
+            return html_output
+        except Exception as e:
+            # Catching a broad exception to ensure no parsing-related issue goes unhandled.
+            logger.exception(
+                f"[{self.node_name}] An unexpected error occurred during Markdown to HTML conversion."
+            )
+            # Re-raise a more specific runtime error for upstream handling.
+            raise RuntimeError(
+                f"Failed to convert Markdown to HTML in '{self.node_name}': {e}"
+            ) from e
