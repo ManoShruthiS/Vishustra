@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Any, Dict, List, Union
+from typing import Any, Dict
 
 from vishustra_core.nodes.base_node import BaseNode
 
@@ -8,144 +8,87 @@ logger = logging.getLogger(__name__)
 
 class PIIRedactorNode(BaseNode):
     """
-    A processing node designed to redact Personally Identifiable Information (PII)
-    from text data using configurable regular expressions.
+    A Vishustra processing node that redacts Personal Identifiable Information (PII)
+    from string data. This node identifies common PII patterns like email addresses
+    and phone numbers and replaces them with a `[REDACTED_PII]` placeholder.
 
-    This node is capable of redacting common PII patterns such as email addresses,
-    phone numbers, and US Social Security Numbers. It provides a flexible
-    mechanism to customize or extend the default PII detection patterns and
-    their corresponding replacement strings.
-
-    Supported input data types for redaction are:
-    - `str`: The string itself is redacted.
-    - `list[str]`: Each string item within the list is redacted.
-    - `dict[str, str]`: String values within the dictionary are redacted;
-      non-string values are passed through unmodified with a warning.
+    The current implementation uses predefined regex patterns. Future enhancements
+    could allow for configurable patterns via the `context` or constructor.
     """
 
-    DEFAULT_PII_PATTERNS = {
-        "email": {
-            "regex": r'\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b',
-            "replacement": "[EMAIL_REDACTED]"
-        },
-        "phone": {
-            "regex": r'\b(?:\+?\d{1,3}[-. ]?)?\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}\b',
-            "replacement": "[PHONE_REDACTED]"
-        },
-        "ssn": {
-            "regex": r'\b\d{3}[- ]?\d{2}[- ]?\d{4}\b',  # US Social Security Number pattern
-            "replacement": "[SSN_REDACTED]"
-        },
-        "ip_address": {
-            "regex": r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b',
-            "replacement": "[IP_REDACTED]"
-        },
-        # Additional common PII patterns can be added here
-        # Example: Credit Card numbers (simplified, might need more specific validation)
-        # "credit_card": {
-        #     "regex": r'\b(?:\d[ -]*?){13,16}\b',
-        #     "replacement": "[CC_REDACTED]"
-        # },
+    _PII_PATTERNS = {
+        "email": r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
+        "phone": r"\b(?:\+?1[\s-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b",
+        # Note: More complex PII (e.g., names, addresses without clear delimiters)
+        # often requires NLP models or specific entity recognition, which is
+        # beyond the scope of this regex-based node.
     }
-
-    def __init__(self, pii_patterns: Dict[str, Dict[str, str]] = None):
-        """
-        Initializes the PIIRedactorNode with specific PII patterns.
-
-        Args:
-            pii_patterns: An optional dictionary where keys represent PII categories
-                          (e.g., "email", "phone") and values are dictionaries.
-                          Each inner dictionary must contain a "regex" string and
-                          a "replacement" string. If provided, these patterns
-                          will override or extend the node's default patterns.
-        """
-        self._pii_patterns = self.DEFAULT_PII_PATTERNS.copy()
-        if pii_patterns:
-            self._pii_patterns.update(pii_patterns)
-        
-        # Compile all regex patterns upon initialization for improved performance
-        self._compiled_patterns = [
-            (re.compile(pattern_def["regex"]), pattern_def["replacement"])
-            for pattern_def in self._pii_patterns.values()
-        ]
-        logger.debug(f"PIIRedactorNode initialized with {len(self._compiled_patterns)} patterns.")
+    _REDACTION_PLACEHOLDER = "[REDACTED_PII]"
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of the node.
-        """
-        return "PII Redactor"
-
-    def _redact_string(self, text: str) -> str:
-        """
-        Applies all configured redaction patterns to a single string.
-
-        Args:
-            text: The input string to be redacted.
-
-        Returns:
-            The string with all identified PII redacted.
-        """
-        redacted_text = text
-        for pattern, replacement in self._compiled_patterns:
-            redacted_text = pattern.sub(replacement, redacted_text)
-        return redacted_text
+        """Returns the name of the node."""
+        return "PIIRedactorNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data to detect and redact PII.
+        Processes the input data to identify and redact PII.
 
-        The method supports `str`, `list[str]`, and `dict[str, str]` as input types.
-        For lists, all items must be strings. For dictionaries, only string values
-        are redacted. Unsupported data types will result in a `TypeError`.
+        If the input `data` is a string, it will be scanned for predefined PII
+        patterns. Identified PII will be replaced with `[REDACTED_PII]`.
+        If the input `data` is not a string, it is returned unchanged, and a
+        warning is logged.
 
         Args:
-            data: The input data, expected to be a string, a list of strings,
-                  or a dictionary with string values.
-            context: A dictionary containing contextual information relevant
-                     to the current processing operation.
+            data (Any): The input data to be processed. Expected to be a string
+                        containing potentially sensitive information.
+            context (Dict[str, Any]): A dictionary containing contextual information
+                                       for the processing operation. Not directly
+                                       used for configuration in this version,
+                                       but available for future extensions.
 
         Returns:
-            The data with PII redacted, maintaining its original structure.
-
-        Raises:
-            TypeError: If the input data type is not supported for redaction,
-                       or if a list contains non-string items.
+            Any: The processed data, with PII redacted if it was a string.
+                 Returns the original data if it was not a string.
         """
-        logger.debug(f"PIIRedactorNode received data of type: {type(data).__name__}.")
-
-        if isinstance(data, str):
-            return self._redact_string(data)
-        elif isinstance(data, list):
-            redacted_list: List[str] = []
-            for item in data:
-                if isinstance(item, str):
-                    redacted_list.append(self._redact_string(item))
-                else:
-                    error_msg = (
-                        f"PIIRedactorNode encountered a non-string item (type: '{type(item).__name__}') "
-                        f"within a list. All list items must be strings for redaction."
-                    )
-                    logger.error(error_msg)
-                    raise TypeError(error_msg)
-            return redacted_list
-        elif isinstance(data, dict):
-            redacted_dict: Dict[str, Any] = {}
-            for key, value in data.items():
-                if isinstance(value, str):
-                    redacted_dict[key] = self._redact_string(value)
-                else:
-                    logger.warning(
-                        f"PIIRedactorNode: Dictionary value for key '{key}' is of type "
-                        f"'{type(value).__name__}', not a string. Skipping redaction for this value."
-                    )
-                    redacted_dict[key] = value  # Retain non-string values as-is
-            return redacted_dict
-        else:
-            error_msg = (
-                f"PIIRedactorNode received unsupported data type '{type(data).__name__}'. "
-                "This node only processes strings, lists of strings, or dictionaries with string values."
+        if not isinstance(data, str):
+            logger.warning(
+                f"[{self.node_name}] Received non-string data of type {type(data).__name__}. "
+                "PII redaction only applies to strings. Returning data unchanged."
             )
-            logger.error(error_msg)
-            raise TypeError(error_msg)
+            return data
+
+        redacted_data = str(data) # Start with a mutable copy of the string
+        found_pii_count = 0
+
+        for pii_type, pattern in self._PII_PATTERNS.items():
+            try:
+                # Find all occurrences of the PII pattern
+                matches = re.findall(pattern, redacted_data, re.IGNORECASE)
+                if matches:
+                    logger.debug(
+                        f"[{self.node_name}] Found {len(matches)} potential '{pii_type}' PII instances. Redacting..."
+                    )
+                    # Replace all occurrences with the placeholder
+                    redacted_data = re.sub(pattern, self._REDACTION_PLACEHOLDER, redacted_data, flags=re.IGNORECASE)
+                    found_pii_count += len(matches)
+            except re.error as e:
+                logger.error(
+                    f"[{self.node_name}] Regex error encountered for pattern '{pii_type}': {e}. "
+                    "Skipping this pattern."
+                )
+            except Exception as e:
+                logger.error(
+                    f"[{self.node_name}] An unexpected error occurred during PII redaction for pattern '{pii_type}': {e}. "
+                    "Returning potentially unredacted data."
+                )
+                return data # Return original data on critical failure
+
+        if found_pii_count > 0:
+            logger.info(
+                f"[{self.node_name}] Successfully redacted {found_pii_count} PII instances."
+            )
+        else:
+            logger.debug(f"[{self.node_name}] No PII found in the input data.")
+
+        return redacted_data
