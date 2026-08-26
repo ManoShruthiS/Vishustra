@@ -1,18 +1,18 @@
 import logging
 from typing import Any, Dict
 
+# Assuming BaseNode is correctly importable from this path
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class SentimentAnalyzerNode(BaseNode):
     """
-    A Vishustra processing node that performs sentiment analysis on input text.
-    It identifies whether the sentiment of the text is positive, negative, or neutral.
-    
-    This implementation uses a simple keyword-based heuristic for demonstration.
-    In a production environment, this would typically integrate with an NLP library
-    or a dedicated sentiment analysis service.
+    A Vishustra processing node that simulates sentiment analysis on input text.
+
+    This node takes a string as input and returns a dictionary containing
+    the original text, a simulated sentiment label (positive, negative, neutral),
+    and a corresponding sentiment score.
     """
 
     @property
@@ -24,63 +24,87 @@ class SentimentAnalyzerNode(BaseNode):
         """
         Processes the input data to determine its sentiment.
 
-        Args:
-            data (Any): The input data, expected to be a string containing text
-                        for sentiment analysis.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                      for the node's operation.
+        Expected `data` type: str
+        Expected `context` type: Dict[str, Any] (not used in this simulation)
 
         Returns:
-            Dict[str, Any]: A dictionary containing the original text, the detected
-                            sentiment ("positive", "negative", "neutral"), and a
-                            corresponding sentiment score.
+            Dict[str, Any]: A dictionary with 'original_text', 'sentiment', and 'score'.
+                            Example: {'original_text': 'I love this!', 'sentiment': 'positive', 'score': 0.9}
 
         Raises:
-            TypeError: If the input `data` is not a string.
+            ValueError: If the input data is not a string.
         """
-        logger.debug("SentimentAnalyzerNode received data for processing.")
-
         if not isinstance(data, str):
-            error_msg = (
-                f"SentimentAnalyzerNode expects string input for sentiment analysis, "
-                f"but received type: {type(data).__name__}. Data: {data!r}"
-            )
+            error_msg = f"SentimentAnalyzerNode received non-string data. Expected str, got {type(data).__name__}."
             logger.error(error_msg)
-            raise TypeError(error_msg)
-        
-        text_input = data.strip()
-        if not text_input:
-            logger.warning("SentimentAnalyzerNode received an empty or whitespace-only string. Returning neutral sentiment.")
-            return {"text": data, "sentiment": "neutral", "score": 0.0, "reason": "empty_input"}
+            raise ValueError(error_msg)
 
+        text = data.lower()
         sentiment = "neutral"
         score = 0.0
 
-        # Simple keyword-based heuristic for sentiment analysis simulation
-        text_lower = text_input.lower()
-        
-        positive_keywords = ["good", "great", "excellent", "positive", "happy", "love", "awesome", "fantastic", "amazing"]
-        negative_keywords = ["bad", "terrible", "horrible", "negative", "sad", "hate", "awful", "poor", "unpleasant"]
-
-        if any(word in text_lower for word in positive_keywords):
+        # Simulate sentiment analysis based on keywords
+        if any(keyword in text for keyword in ["great", "awesome", "love", "excellent", "happy", "positive", "wonderful"]):
             sentiment = "positive"
-            score = 0.85  # Arbitrary positive score
-        elif any(word in text_lower for word in negative_keywords):
+            score = 0.85
+        elif any(keyword in text for keyword in ["bad", "terrible", "hate", "awful", "unhappy", "negative", "horrible"]):
             sentiment = "negative"
-            score = -0.85 # Arbitrary negative score
+            score = -0.75
         else:
             sentiment = "neutral"
             score = 0.0
 
+        if score != 0.0: # Add some variance for non-zero scores
+            score += (text.count('!') * 0.05) if sentiment == "positive" else -(text.count('!') * 0.05)
+            score = max(-1.0, min(1.0, score)) # Clamp score between -1 and 1
+
         result = {
-            "text": data,
+            "original_text": data,
             "sentiment": sentiment,
             "score": score
         }
-        
-        log_message_text = data[:75] + "..." if len(data) > 75 else data
-        logger.info(
-            f"Sentiment analyzed for text: '{log_message_text}' -> "
-            f"Sentiment: '{sentiment}', Score: {score:.2f}"
-        )
+
+        logger.info(f"Analyzed sentiment for '{data[:50]}...' -> {sentiment} (score: {score:.2f})")
         return result
+
+# Optional: Example usage (for testing purposes, not part of Vishustra execution flow)
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+    analyzer = SentimentAnalyzerNode()
+    dummy_context = {}
+
+    try:
+        # Test cases
+        print(f"Node Name: {analyzer.node_name}")
+        
+        text1 = "This is a great product, I love it!"
+        result1 = analyzer.process(text1, dummy_context)
+        print(f"Text: '{text1}' -> {result1}")
+
+        text2 = "I am quite disappointed, this is terrible."
+        result2 = analyzer.process(text2, dummy_context)
+        print(f"Text: '{text2}' -> {result2}")
+
+        text3 = "The weather today is neither good nor bad."
+        result3 = analyzer.process(text3, dummy_context)
+        print(f"Text: '{text3}' -> {result3}")
+
+        text4 = "An amazing experience!!!!"
+        result4 = analyzer.process(text4, dummy_context)
+        print(f"Text: '{text4}' -> {result4}")
+        
+        # Test error handling
+        try:
+            analyzer.process(123, dummy_context)
+        except ValueError as e:
+            print(f"Caught expected error: {e}")
+
+        try:
+            analyzer.process(None, dummy_context)
+        except ValueError as e:
+            print(f"Caught expected error: {e}")
+
+    except Exception as e:
+        logger.exception("An unexpected error occurred during example usage.")
+        print(f"An unexpected error occurred: {e}")
