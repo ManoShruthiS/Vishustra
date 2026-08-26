@@ -1,136 +1,152 @@
 import logging
-import re
-from typing import Any, Dict, List
+import string
+from typing import Any, Dict, List, Set
 
+# Assuming this path exists in the Vishustra project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-class KeywordExtractorNode(BaseNode):
+
+class KeywordExtractor(BaseNode):
     """
-    A processing node designed to extract keywords from a given text string.
+    A Vishustra processing node that extracts keywords from text data.
 
-    This node implements a simulated keyword extraction mechanism by tokenizing
-    the input text, filtering out common stop words and short terms, and
-    returning a curated list of unique, potentially significant terms.
-
-    Configuration parameters can be passed via the 'context' dictionary to
-    customize the extraction process:
-    - 'max_keywords' (int): The maximum number of keywords to return.
-      Defaults to 5 if not provided or invalid.
-    - 'min_word_length' (int): The minimum length a word must have to be
-      considered a keyword. Defaults to 3 if not provided or invalid.
-    - 'stop_words' (List[str]): A list of custom stop words to exclude
-      from the extracted keywords. If not provided, a default set of common
-      English stop words is used. Custom stop words are added to the default set.
+    This node tokenizes input text, filters out common stop words and short words,
+    and returns a unique list of potential keywords.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the programmatic name of the node."""
+        """Returns the name of the node."""
         return "KeywordExtractor"
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Processes the input data to extract relevant keywords.
+        Extracts keywords from the input text.
+
+        The `data` input is expected to be a string.
+        The `context` can optionally provide:
+        - 'stop_words' (Set[str] or List[str]): A collection of words to ignore.
+          Defaults to common English stop words if not provided.
+        - 'min_keyword_length' (int): Minimum length for a word to be considered a keyword.
+          Defaults to 3.
+        - 'remove_punctuation' (bool): Whether to remove punctuation before tokenizing.
+          Defaults to True.
+        - 'case_sensitive' (bool): Whether keyword extraction should be case-sensitive.
+          Defaults to False.
 
         Args:
-            data (Any): The input data, which is expected to be a string
-                        containing the text from which to extract keywords.
-            context (Dict[str, Any]): A dictionary containing runtime context
-                                      and configuration parameters for the node.
+            data: The input text as a string.
+            context: A dictionary containing configuration for keyword extraction.
 
         Returns:
-            List[str]: A list of extracted keywords. Returns an empty list
-                       if the input data is invalid, empty, or no keywords
-                       meet the criteria.
+            A list of unique keywords extracted from the text, preserving their original
+            order of first appearance.
 
         Raises:
-            TypeError: If the input 'data' is not a string, indicating an
-                       incorrect data flow or upstream node issue.
+            TypeError: If the input data is not a string.
+            ValueError: If context parameters are of an incorrect type or value.
         """
         if not isinstance(data, str):
             logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected 'str', received '{type(data).__name__}'."
+                "KeywordExtractor expects 'data' to be a string, but received type: %s",
+                type(data).__name__,
             )
             raise TypeError(
-                f"Input data for {self.node_name} must be a string, but received {type(data).__name__}."
+                f"KeywordExtractor: Input 'data' must be a string, but got {type(data).__name__}"
             )
 
-        if not data.strip():
-            logger.info(f"[{self.node_name}] Received empty or whitespace-only input text. Returning empty list.")
-            return []
-
-        text = data.lower()
-        
-        # --- Configuration Retrieval and Validation ---
-        max_keywords_raw = context.get('max_keywords', 5)
-        min_word_length_raw = context.get('min_word_length', 3)
-        custom_stop_words_raw = context.get('stop_words', [])
-
-        # Default common English stop words
-        default_stop_words = {
-            "a", "an", "the", "is", "are", "was", "were", "and", "or", "but", "for",
-            "nor", "so", "at", "by", "with", "from", "of", "on", "in", "to", "as",
-            "it", "he", "she", "they", "we", "you", "i", "me", "him", "her", "us",
-            "them", "my", "your", "his", "its", "our", "their", "this", "that",
-            "these", "those", "can", "will", "would", "should", "has", "have",
-            "had", "do", "does", "did", "be", "been", "being", "not", "no", "yes",
-            "etc", "etc.", "what", "where", "when", "why", "how", "which", "who", "whom"
+        # Default configurations
+        default_stop_words: Set[str] = {
+            "a", "an", "the", "is", "are", "was", "were", "and", "or", "but", "for", "nor", "so", "yet",
+            "in", "on", "at", "to", "from", "of", "with", "as", "by", "that", "this", "it", "he", "she",
+            "we", "you", "they", "i", "me", "him", "her", "us", "them", "my", "your", "his", "its", "our",
+            "their", "what", "who", "when", "where", "why", "how", "all", "any", "both", "each", "few",
+            "more", "most", "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than",
+            "too", "very", "s", "t", "can", "will", "just", "don", "should", "now", "would", "could", "about",
+            "above", "after", "again", "against", "ain", "am", "among", "an", "and", "any", "are", "aren",
+            "around", "as", "at", "be", "because", "been", "before", "being", "below", "between", "both",
+            "but", "by", "can", "couldn", "d", "did", "didn", "do", "does", "doesn", "doing", "don", "down",
+            "during", "each", "few", "for", "from", "further", "had", "hadn", "has", "hasn", "have", "haven",
+            "having", "he", "her", "here", "hers", "herself", "him", "himself", "his", "how", "i", "if", "in",
+            "into", "is", "isn", "it", "its", "itself", "just", "ll", "m", "ma", "me", "mightn", "more", "most",
+            "mustn", "my", "myself", "needn", "no", "nor", "not", "now", "o", "of", "off", "on", "once", "only",
+            "or", "other", "our", "ours", "ourselves", "out", "over", "own", "re", "s", "same", "shan", "she",
+            "should", "shouldn", "so", "some", "such", "t", "than", "that", "the", "their", "theirs", "them",
+            "themselves", "then", "there", "these", "they", "this", "those", "through", "to", "too", "under",
+            "until", "up", "ve", "very", "was", "wasn", "we", "were", "weren", "what", "when", "where", "which",
+            "while", "who", "whom", "why", "will", "with", "won", "wouldn", "y", "you", "your", "yours", "yourself",
+            "yourselves"
         }
-        
-        # Validate max_keywords
-        max_keywords = 5
-        if isinstance(max_keywords_raw, int) and max_keywords_raw > 0:
-            max_keywords = max_keywords_raw
-        else:
-            logger.warning(
-                f"[{self.node_name}] Invalid 'max_keywords' in context. Expected a positive integer, received '{max_keywords_raw}'. Using default of {max_keywords}."
-            )
-        
-        # Validate min_word_length
-        min_word_length = 3
-        if isinstance(min_word_length_raw, int) and min_word_length_raw > 0:
-            min_word_length = min_word_length_raw
-        else:
-            logger.warning(
-                f"[{self.node_name}] Invalid 'min_word_length' in context. Expected a positive integer, received '{min_word_length_raw}'. Using default of {min_word_length}."
-            )
-            
-        # Validate custom_stop_words
-        processed_custom_stop_words = set()
-        if isinstance(custom_stop_words_raw, list):
-            for sw in custom_stop_words_raw:
-                if isinstance(sw, str):
-                    processed_custom_stop_words.add(sw.lower())
-                else:
-                    logger.warning(
-                        f"[{self.node_name}] 'stop_words' list in context contains non-string element '{sw}'. Ignoring this entry."
-                    )
-        else:
-            logger.warning(
-                f"[{self.node_name}] Invalid 'stop_words' in context. Expected a list of strings, received '{type(custom_stop_words_raw).__name__}'. Using only default stop words."
-            )
-        
-        # Combine default and custom stop words
-        stop_words = default_stop_words.union(processed_custom_stop_words)
 
-        # --- Keyword Extraction Logic ---
-        # Tokenize the text, keeping only alphanumeric sequences
-        # This regex ensures we only get "words" composed of letters and numbers
-        words = re.findall(r'\b[a-z0-9]+\b', text)
-        
+        min_keyword_length: int = context.get("min_keyword_length", 3)
+        remove_punctuation: bool = context.get("remove_punctuation", True)
+        case_sensitive: bool = context.get("case_sensitive", False)
+
+        # Validate context parameters
+        if not isinstance(min_keyword_length, int) or min_keyword_length < 0:
+            logger.error(
+                "KeywordExtractor: 'min_keyword_length' must be a non-negative integer. Got: %s",
+                min_keyword_length,
+            )
+            raise ValueError("'min_keyword_length' must be a non-negative integer.")
+        if not isinstance(remove_punctuation, bool):
+            logger.error(
+                "KeywordExtractor: 'remove_punctuation' must be a boolean. Got: %s",
+                remove_punctuation,
+            )
+            raise ValueError("'remove_punctuation' must be a boolean.")
+        if not isinstance(case_sensitive, bool):
+            logger.error(
+                "KeywordExtractor: 'case_sensitive' must be a boolean. Got: %s",
+                case_sensitive,
+            )
+            raise ValueError("'case_sensitive' must be a boolean.")
+
+        # Get stop words from context or use default
+        stop_words_raw = context.get("stop_words", default_stop_words)
+        if not isinstance(stop_words_raw, (set, list, tuple)):
+            logger.error(
+                "KeywordExtractor: 'stop_words' must be a set, list, or tuple. Got: %s",
+                type(stop_words_raw).__name__,
+            )
+            raise ValueError(
+                f"'stop_words' must be a set, list, or tuple. Got: {type(stop_words_raw).__name__}"
+            )
+        try:
+            stop_words: Set[str] = set(stop_words_raw)
+            if isinstance(stop_words_raw, (list, tuple)):
+                logger.debug("KeywordExtractor: 'stop_words' provided as a list/tuple. Converted to set.")
+        except TypeError as e:
+            logger.error("KeywordExtractor: Could not convert 'stop_words' to a set. Error: %s", e)
+            raise ValueError(f"'stop_words' must contain hashable elements. Error: {e}")
+
+        processed_text = data
+        if not case_sensitive:
+            processed_text = processed_text.lower()
+            # Ensure all stop words are also lowercased for case-insensitive comparison
+            stop_words = {word.lower() for word in stop_words}
+
+        if remove_punctuation:
+            # Create a translation table to remove all punctuation characters
+            translator = str.maketrans('', '', string.punctuation)
+            processed_text = processed_text.translate(translator)
+
+        # Split text into words, handling multiple spaces
+        words = processed_text.split()
         extracted_keywords: List[str] = []
-        seen_words = set()
+        seen_keywords: Set[str] = set()
 
         for word in words:
-            # Filter criteria: not a stop word, meets minimum length, and is unique
-            if word not in stop_words and len(word) >= min_word_length and word not in seen_words:
-                extracted_keywords.append(word)
-                seen_words.add(word)
-                if len(extracted_keywords) >= max_keywords:
-                    logger.debug(f"[{self.node_name}] Reached max_keywords limit ({max_keywords}). Stopping extraction.")
-                    break
-        
-        logger.info(f"[{self.node_name}] Successfully extracted {len(extracted_keywords)} keywords from the input text.")
+            # Check if word is not empty, not a stop word, and meets minimum length
+            if word and word not in stop_words and len(word) >= min_keyword_length:
+                if word not in seen_keywords:
+                    extracted_keywords.append(word)
+                    seen_keywords.add(word)
+
+        logger.info(
+            "KeywordExtractor processed text and extracted %d unique keywords.",
+            len(extracted_keywords),
+        )
         return extracted_keywords
