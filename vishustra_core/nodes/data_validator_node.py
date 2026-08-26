@@ -1,157 +1,197 @@
 import logging
-from typing import Any, Dict, List, Union, Callable, Type, Optional
+import re
+from typing import Any, Dict, List, Union, Callable
 
+# Assuming the project structure places BaseNode in vishustra_core.nodes.base_node
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-class DataValidationError(ValueError):
-    """Custom exception raised when data validation fails within the node."""
+class ValidationError(Exception):
+    """Custom exception raised for data validation failures within the Vishustra framework."""
     pass
 
 class DataValidatorNode(BaseNode):
     """
-    A processing node responsible for validating input data against a predefined schema
-    and a list of required keys.
+    A Vishustra processing node responsible for validating input data against
+    a set of predefined rules specified in the execution context.
 
-    This node ensures data integrity and conformity to expected structures before
-    further processing, preventing downstream issues.
+    This node is critical for maintaining data integrity and consistency
+    early in the pipeline, preventing malformed or invalid data from
+    propagating to downstream processes and causing unexpected errors.
 
-    Validation rules are specified during the node's initialization:
-    - `required_keys`: A list of string keys that must be present in the input data
-                       if the data is a dictionary.
-    - `schema`: A dictionary mapping data keys to their expected types or more complex
-                validation rules. A rule can be a direct type (e.g., `int`) or a
-                dictionary with `type` and an optional `validator` (a callable).
-                Example:
-                {"field_name": int,
-                 "another_field": {"type": str, "validator": lambda x: len(x) > 0}}
+    Validation rules are highly configurable via the 'validation_config'
+    key in the context dictionary.
     """
-
-    def __init__(
-        self,
-        node_id: str,
-        required_keys: Optional[List[str]] = None,
-        schema: Optional[Dict[str, Union[Type, Dict[str, Any]]]] = None,
-        raise_on_failure: bool = True
-    ):
-        """
-        Initializes the DataValidatorNode with specific validation rules.
-
-        Args:
-            node_id: A unique identifier for this specific instance of the validator node.
-                     Used in the `node_name` property and for logging.
-            required_keys: An optional list of string keys that must exist in the input data.
-                           This check is applied if the input `data` is a dictionary.
-            schema: An optional dictionary defining the expected types for data fields
-                    and/or custom validation logic. Keys are data field names, and values
-                    are either a Python type (e.g., `str`, `int`) or a dictionary.
-                    If a dictionary, it must contain a 'type' key and can optionally
-                    include a 'validator' key, which is a callable that accepts the
-                    field's value and returns `True` for valid, `False` for invalid.
-            raise_on_failure: If True, a `DataValidationError` is raised immediately
-                              upon the first validation failure. If False, the node
-                              logs the error and returns `None`, allowing the pipeline
-                              to potentially handle failures gracefully without halting.
-        """
-        self._node_id = node_id
-        self._required_keys = required_keys if required_keys is not None else []
-        self._schema = schema if schema is not None else {}
-        self._raise_on_failure = raise_on_failure
-        logger.debug(f"DataValidatorNode '{self._node_id}' initialized with "
-                     f"required_keys: {self._required_keys}, schema: {self._schema}.")
 
     @property
     def node_name(self) -> str:
-        """Returns the unique and descriptive name of this validator node instance."""
-        return f"DataValidatorNode_{self._node_id}"
+        """Returns the descriptive name of this processing node."""
+        return "DataValidator"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Validates the input data against the configured `required_keys` and `schema`.
+        Processes the input data by validating it against rules defined in the
+        'validation_config' within the provided context.
+
+        The 'validation_config' dictionary can specify various rules:
+        - 'required_keys': `List[str]` - Keys that must be present if `data` is a dictionary.
+        - 'schema': `Dict[str, Dict[str, Any]]` - Defines expected types and optional
+          constraints for specific keys in a dictionary (e.g., 'type', 'min_value',
+          'max_value', 'min_length', 'max_length', 'regex', 'validator').
+        - 'allow_extra_keys': `bool` - If False (default), raises an error if `data`
+          (if a dict) contains keys not specified in 'schema' or 'required_keys'.
+        - 'type_check': `type` - A general type check for the entire `data` object
+          if it's not a dictionary, or if no schema/required_keys are provided.
 
         Args:
-            data: The input data to be validated. Expected to be a dictionary for
-                  effective application of `required_keys` and `schema` rules.
-            context: A dictionary containing contextual information relevant to the
-                     current orchestration run (not directly used for validation rules
-                     in this specific node, but part of the standard `BaseNode` signature).
+            data: The input data to be validated. Can be of any type.
+            context: A dictionary containing operational context, crucially including
+                     the 'validation_config' for this node.
 
         Returns:
-            The original, validated `data` if all checks pass.
+            The original data, unmodified, if it passes all specified validation rules.
 
         Raises:
-            DataValidationError: If `raise_on_failure` is True and any validation check fails.
-                                 This includes type mismatches, missing required keys, or
-                                 failures of custom validator functions.
+            ValidationError: If the data fails to meet any of the specified
+                             validation requirements.
         """
-        logger.info(f"[{self.node_name}] Starting data validation for incoming data.")
+        validation_config = context.get("validation_config")
 
-        # Ensure data is a dictionary for schema and required_keys checks
-        if not isinstance(data, dict):
-            error_msg = (f"[{self.node_name}] Input data must be a dictionary for "
-                         f"schema validation. Received type: {type(data).__name__}.")
-            logger.error(error_msg)
-            if self._raise_on_failure:
-                raise DataValidationError(error_msg)
-            return None
+        if not validation_config:
+            logger.warning(
+                f"[{self.node_name}] No 'validation_config' found in context. "
+                "Data will be passed through without validation, which may lead to downstream issues."
+            )
+            return data
 
-        # 1. Validate for required keys
-        missing_keys = [key for key in self._required_keys if key not in data]
-        if missing_keys:
-            error_msg = (f"[{self.node_name}] Validation failed: Missing required keys: "
-                         f"{', '.join(missing_keys)}.")
-            logger.error(error_msg)
-            if self._raise_on_failure:
-                raise DataValidationError(error_msg)
-            return None
+        logger.debug(f"[{self.node_name}] Initiating data validation with config: {validation_config}")
 
-        # 2. Validate against schema rules (type checking and custom validators)
-        for key, rule in self._schema.items():
-            if key not in data:
-                logger.debug(f"[{self.node_name}] Key '{key}' defined in schema but "
-                             f"not present in data. Skipping schema validation for it.")
-                continue # Only validate keys that are actually present
+        # --- General Type Check (if not a dict or no dict-specific rules) ---
+        general_type_check = validation_config.get("type_check")
+        if general_type_check and not isinstance(data, dict):
+            if not isinstance(data, general_type_check):
+                raise ValidationError(
+                    f"[{self.node_name}] Data has incorrect type. "
+                    f"Expected {general_type_check.__name__}, but received {type(data).__name__}."
+                )
 
-            value = data[key]
-            expected_type: Optional[Type] = None
-            custom_validator: Optional[Callable[[Any], bool]] = None
+        # --- Dictionary-specific Validations ---
+        if isinstance(data, dict):
+            # Rule 1: Check for required keys
+            required_keys = validation_config.get("required_keys", [])
+            missing_keys = [key for key in required_keys if key not in data]
+            if missing_keys:
+                raise ValidationError(
+                    f"[{self.node_name}] Data is missing one or more required keys: "
+                    f"{', '.join(missing_keys)}."
+                )
 
-            if isinstance(rule, dict):
-                expected_type = rule.get('type')
-                custom_validator = rule.get('validator')
-            else: # Rule is assumed to be a direct type
-                expected_type = rule
+            # Rule 2: Validate against schema for key types and values
+            schema = validation_config.get("schema")
+            if schema:
+                for key, rules in schema.items():
+                    if key not in data:
+                        # If a key is in schema but not required_keys, it's optional, so skip.
+                        # If it was required, it would have been caught by required_keys check.
+                        continue
 
-            # Type validation
-            if expected_type and not isinstance(value, expected_type):
-                error_msg = (f"[{self.node_name}] Validation failed for key '{key}': "
-                             f"Expected type {getattr(expected_type, '__name__', str(expected_type))}, "
-                             f"got {type(value).__name__} with value '{value}'.")
-                logger.error(error_msg)
-                if self._raise_on_failure:
-                    raise DataValidationError(error_msg)
-                return None
+                    value = data[key]
+                    expected_type = rules.get("type")
 
-            # Custom validator function execution
-            if custom_validator:
-                try:
-                    if not callable(custom_validator):
-                        raise TypeError(f"Custom validator for key '{key}' must be a callable.")
-                    if not custom_validator(value):
-                        error_msg = (f"[{self.node_name}] Validation failed for key '{key}': "
-                                     f"Custom validator returned False for value '{value}'.")
-                        logger.error(error_msg)
-                        if self._raise_on_failure:
-                            raise DataValidationError(error_msg)
-                        return None
-                except Exception as e:
-                    error_msg = (f"[{self.node_name}] Custom validator for key '{key}' "
-                                 f"raised an unexpected exception during execution: {type(e).__name__}: {e}")
-                    logger.exception(error_msg) # Log full traceback for diagnostic purposes
-                    if self._raise_on_failure:
-                        raise DataValidationError(error_msg) from e
-                    return None
+                    # Type check for specific key
+                    if expected_type and not isinstance(value, expected_type):
+                        raise ValidationError(
+                            f"[{self.node_name}] Key '{key}' has an incorrect type. "
+                            f"Expected {expected_type.__name__}, but received {type(value).__name__}."
+                        )
 
-        logger.info(f"[{self.node_name}] Data successfully validated against all rules.")
+                    # Value constraints for numeric types
+                    if expected_type in (int, float):
+                        min_value = rules.get("min_value")
+                        if min_value is not None and value < min_value:
+                            raise ValidationError(
+                                f"[{self.node_name}] Key '{key}' value ({value}) is below "
+                                f"the minimum allowed ({min_value})."
+                            )
+                        max_value = rules.get("max_value")
+                        if max_value is not None and value > max_value:
+                            raise ValidationError(
+                                f"[{self.node_name}] Key '{key}' value ({value}) is above "
+                                f"the maximum allowed ({max_value})."
+                            )
+                    # Length and regex constraints for string types
+                    elif expected_type is str:
+                        min_length = rules.get("min_length")
+                        if min_length is not None and len(value) < min_length:
+                            raise ValidationError(
+                                f"[{self.node_name}] Key '{key}' string length ({len(value)}) is "
+                                f"below the minimum allowed ({min_length})."
+                            )
+                        max_length = rules.get("max_length")
+                        if max_length is not None and len(value) > max_length:
+                            raise ValidationError(
+                                f"[{self.node_name}] Key '{key}' string length ({len(value)}) is "
+                                f"above the maximum allowed ({max_length})."
+                            )
+                        regex_pattern = rules.get("regex")
+                        if regex_pattern:
+                            try:
+                                if not re.match(regex_pattern, value):
+                                    raise ValidationError(
+                                        f"[{self.node_name}] Key '{key}' value ('{value}') does not "
+                                        f"match the required regex pattern: '{regex_pattern}'."
+                                    )
+                            except re.error as e:
+                                logger.error(
+                                    f"[{self.node_name}] Invalid regex pattern provided for key '{key}': "
+                                    f"'{regex_pattern}'. Error: {e}", exc_info=True
+                                )
+                                raise ValidationError(
+                                    f"[{self.node_name}] Configuration error: Invalid regex pattern "
+                                    f"specified for key '{key}'."
+                                ) from e
+
+                    # Custom validator function
+                    custom_validator: Callable[[Any], bool] = rules.get("validator")
+                    if custom_validator:
+                        try:
+                            if not callable(custom_validator):
+                                raise TypeError("Custom validator must be a callable function.")
+                            if not custom_validator(value):
+                                raise ValidationError(
+                                    f"[{self.node_name}] Key '{key}' failed custom validation."
+                                )
+                        except ValidationError: # Re-raise custom ValidationErrors directly
+                            raise
+                        except Exception as e:
+                            logger.error(
+                                f"[{self.node_name}] Custom validator for key '{key}' "
+                                f"encountered an unexpected error: {e}", exc_info=True
+                            )
+                            raise ValidationError(
+                                f"[{self.node_name}] Custom validation for key '{key}' failed "
+                                f"due to an internal error."
+                            ) from e
+
+            # Rule 3: Check for extra keys if not allowed
+            allow_extra_keys = validation_config.get("allow_extra_keys", False)
+            if not allow_extra_keys:
+                defined_keys = set(schema.keys() if schema else []).union(set(required_keys))
+                extra_keys = [key for key in data if key not in defined_keys]
+                if extra_keys:
+                    raise ValidationError(
+                        f"[{self.node_name}] Data contains unsupported extra keys: "
+                        f"{', '.join(extra_keys)}. To allow them, set 'allow_extra_keys' to True "
+                        f"in the validation configuration."
+                    )
+        elif validation_config.get("schema") or validation_config.get("required_keys"):
+            # If schema or required_keys are provided, but data is not a dict
+            raise ValidationError(
+                f"[{self.node_name}] Validation configuration expects dictionary data "
+                f"(due to 'schema' or 'required_keys' rules), but received data of type "
+                f"'{type(data).__name__}'."
+            )
+
+        logger.info(f"[{self.node_name}] Data successfully validated against all specified rules.")
         return data
