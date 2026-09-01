@@ -1,134 +1,116 @@
 import logging
-from typing import Any, Dict, Callable, List, Optional
+from typing import Any, Dict, Callable
 
+# Assuming the base_node is located at vishustra_core/nodes/base_node.py
 from vishustra_core.nodes.base_node import BaseNode
 
-# Initialize logger for this module
 logger = logging.getLogger(__name__)
+
 
 class DataValidationException(ValueError):
     """
-    Custom exception raised when data fails one or more validation rules within the
-    DataValidatorNode.
-
-    This exception can collect multiple error messages if the node is configured
-    not to fail on the first error.
+    Custom exception raised when data validation fails within the DataValidatorNode.
+    Encapsulates the underlying validation error for clearer debugging.
     """
-    def __init__(self, message: str, errors: Optional[List[str]] = None):
-        super().__init__(message)
-        self.errors = errors if errors is not None else []
-        logger.error(f"DataValidationException raised: {message}. Errors: {self.errors}")
+    pass
+
 
 class DataValidatorNode(BaseNode):
     """
-    A Vishustra processing node that performs data validation based on a list
-    of configurable rules.
+    A Vishustra processing node designed to validate input data against
+    a set of predefined rules.
 
-    Each validation rule is a callable that takes the data and context, and
-    raises a ValueError (or a subclass) if the data is invalid for that rule.
-    If all rules pass, the original data is returned.
+    This node takes a dictionary of validation rules during initialization. Each
+    rule is a callable function that receives the input data and is expected
+    to raise an exception (e.g., ValueError, TypeError, or DataValidationException)
+    if the data fails that specific validation check. If a rule determines the
+    data is valid, it should simply return `None` or not raise an exception.
+
+    If any configured validation rule fails, the node logs the error, and raises
+    a `DataValidationException`, effectively stopping the processing flow
+    for invalid data. If all rules pass successfully, the original input data
+    is returned unmodified, indicating it meets all required criteria.
     """
 
-    def __init__(self, validation_rules: List[Callable[[Any, Dict[str, Any]], None]], fail_on_first_error: bool = True):
+    def __init__(self, validation_rules: Dict[str, Callable[[Any], None]]):
         """
-        Initializes the DataValidatorNode with a set of validation rules.
-
-        Each validation rule is expected to be a callable with the signature:
-        `def rule_function(data: Any, context: Dict[str, Any]) -> None:`
-
-        If a rule finds an issue with the data, it should raise a `ValueError`
-        (or a more specific subclass of `ValueError`) with a descriptive
-        message. If the data passes the rule, the callable should simply return.
+        Initializes the DataValidatorNode with a collection of validation rules.
 
         Args:
-            validation_rules: A list of callable validation functions.
-            fail_on_first_error: If True, the node stops processing rules and
-                                 raises `DataValidationException` immediately
-                                 upon the first validation failure. If False,
-                                 it attempts to run all rules and collects all
-                                 error messages before raising a single
-                                 `DataValidationException`.
-
+            validation_rules (Dict[str, Callable[[Any], None]]):
+                A dictionary where keys are descriptive names for each validation
+                rule (e.g., "check_schema", "verify_field_presence"), and values
+                are callable functions. Each callable function must accept the
+                `data` (Any) as its sole argument. It should raise an exception
+                if the data is invalid according to that rule, or simply return
+                if the data is valid.
+        
         Raises:
-            TypeError: If `validation_rules` is not a list or contains non-callable elements.
+            TypeError: If `validation_rules` is not a dictionary, or if any
+                       value in the dictionary is not a callable.
         """
-        if not isinstance(validation_rules, list):
-            raise TypeError("`validation_rules` must be a list of callables.")
-        if not all(callable(rule) for rule in validation_rules):
-            raise TypeError("All elements in `validation_rules` must be callable.")
+        if not isinstance(validation_rules, dict):
+            raise TypeError("The 'validation_rules' argument must be a dictionary.")
+        if not all(isinstance(k, str) and callable(v) for k, v in validation_rules.items()):
+            raise TypeError(
+                "All keys in 'validation_rules' must be strings, and all values must be callable functions."
+            )
 
         self._validation_rules = validation_rules
-        self._fail_on_first_error = fail_on_first_error
         logger.debug(
-            f"DataValidatorNode initialized with {len(validation_rules)} rules. "
-            f"Fail on first error: {fail_on_first_error}"
+            f"[{self.node_name}] Initialized with {len(self._validation_rules)} validation rules."
         )
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
-        return "DataValidator"
+        """Returns the descriptive name of this node."""
+        return "DataValidatorNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data by applying all configured validation rules.
+        Executes all configured validation rules against the input data.
 
-        If any rule fails, a `DataValidationException` is raised, potentially
-        containing details about all failed validations if `fail_on_first_error`
-        is set to False.
+        If any rule raises an exception, this method catches it, logs the failure,
+        and re-raises it as a `DataValidationException`. If all rules pass
+        without raising exceptions, the original input data is returned.
 
         Args:
-            data: The input data to be validated.
-            context: A dictionary containing contextual information for the node,
-                     which can be used by validation rules.
+            data (Any): The data payload to be validated.
+            context (Dict[str, Any]): A dictionary containing contextual information
+                                       relevant to the current processing flow.
+                                       (Not directly used by the validator rules
+                                       themselves, but available for potential
+                                       future extensions).
 
         Returns:
-            The original `data` if all validations pass successfully.
+            Any: The original input `data` if it passes all validation checks.
 
         Raises:
-            DataValidationException: If the data fails one or more validation rules.
+            DataValidationException: If any of the configured validation rules
+                                     fail for the input data.
         """
-        node_id = context.get('node_id', self.node_name)
-        logger.info(f"Node '{node_id}' ({self.node_name}) starting data validation.")
+        logger.info(f"[{self.node_name}] Initiating data validation for incoming data.")
 
-        failed_validations: List[str] = []
-        
-        for i, rule in enumerate(self._validation_rules):
+        if not self._validation_rules:
+            logger.warning(
+                f"[{self.node_name}] No validation rules are configured. "
+                "Data will pass through without any checks."
+            )
+            return data
+
+        for rule_name, validate_func in self._validation_rules.items():
             try:
-                rule(data, context)
-                logger.debug(f"Rule {i+1}/{len(self._validation_rules)} passed for node '{node_id}'.")
-            except ValueError as e:
-                # Catch specific validation errors raised by the rules
-                error_msg = f"Validation rule {i+1} failed for node '{node_id}': {e}"
-                logger.warning(error_msg)
-                failed_validations.append(error_msg)
-                if self._fail_on_first_error:
-                    logger.error(
-                        f"Validation for node '{node_id}' stopped due to 'fail_on_first_error' policy."
-                    )
-                    raise DataValidationException(f"Data validation failed: {error_msg}") from e
+                logger.debug(f"[{self.node_name}] Applying rule '{rule_name}'...")
+                validate_func(data)
+                logger.debug(f"[{self.node_name}] Rule '{rule_name}' passed successfully.")
             except Exception as e:
-                # Catch any unexpected errors during rule execution (e.g., programming errors in rules)
-                error_msg = (f"An unexpected error occurred during validation rule {i+1} "
-                             f"for node '{node_id}': {type(e).__name__}: {e}")
-                logger.exception(error_msg) # Log with full traceback for unexpected exceptions
-                failed_validations.append(error_msg)
-                if self._fail_on_first_error:
-                    logger.error(
-                        f"Validation for node '{node_id}' stopped due to unexpected error and "
-                        f"'fail_on_first_error' policy."
-                    )
-                    raise DataValidationException(f"Data validation failed unexpectedly: {error_msg}") from e
+                logger.error(
+                    f"[{self.node_name}] Validation rule '{rule_name}' failed for data: {data!r}. "
+                    f"Error type: {e.__class__.__name__}, Message: {e}"
+                )
+                raise DataValidationException(
+                    f"Validation failed by rule '{rule_name}': {e}"
+                ) from e
 
-        if failed_validations:
-            full_error_message = (
-                f"Data validation failed for node '{node_id}' with {len(failed_validations)} error(s)."
-            )
-            logger.error(
-                f"Validation for node '{node_id}' completed with errors. "
-                f"Total failures: {len(failed_validations)}"
-            )
-            raise DataValidationException(full_error_message, errors=failed_validations)
-
-        logger.info(f"Node '{node_id}' ({self.node_name}) successfully validated data.")
+        logger.info(f"[{self.node_name}] All validation rules passed. Data is considered valid.")
         return data
