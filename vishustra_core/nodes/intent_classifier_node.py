@@ -1,112 +1,122 @@
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List
 
-# Assuming this path from the project context
+# Assuming vishustra_core is the package root and base_node.py is located at vishustra_core/nodes/base_node.py
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
+
 class IntentClassifierNode(BaseNode):
     """
-    A processing node that simulates intent classification for user queries.
-    It identifies a primary intent from a predefined set based on keywords or
-    delegates to a configured model.
+    A Vishustra processing node that simulates intent classification for text input.
+
+    This node takes a string (typically a user utterance) and attempts to classify
+    its intent based on a set of predefined keyword patterns. It serves as a
+    demonstrative and testing component within the framework, simulating an
+    intent detection service.
     """
 
-    def __init__(self, model_identifier: str = "dummy-keyword-classifier"):
+    # Predefined keyword patterns for intent simulation. In a real system,
+    # this would involve NLP models, external APIs, or more sophisticated matching.
+    _intent_patterns: Dict[str, List[str]] = {
+        "BookFlight": ["book flight", "fly to", "flight from", "travel to"],
+        "CheckWeather": ["weather in", "how's the weather", "temperature in", "forecast for"],
+        "OrderFood": ["order food", "pizza delivery", "hungry for", "delivery from"],
+        "PlayMusic": ["play music", "start song", "music by", "listen to"],
+        "GetNews": ["latest news", "news about", "tell me news", "current events"],
+    }
+
+    def __init__(self, fallback_intent: str = "unknown", min_confidence: float = 0.5):
         """
-        Initializes the IntentClassifierNode.
+        Initializes the IntentClassifierNode with configuration options.
 
         Args:
-            model_identifier (str): A string identifying the classification model to use.
-                                    In a production environment, this would dictate
-                                    which specific NLP model (e.g., a fine-tuned transformer)
-                                    is loaded and utilized. For this simulation, it's a label.
+            fallback_intent: The intent label to assign if no specific intent
+                             is confidently detected. Defaults to "unknown".
+            min_confidence: A simulated confidence threshold. If the detected
+                            intent's confidence is below this, the fallback
+                            intent is returned. (In this simulation, confidence
+                            is either 1.0 for a match or 0.0).
         """
-        self._model_identifier = model_identifier
-        logger.info(f"IntentClassifierNode initialized with model: {self._model_identifier}")
+        self._fallback_intent = fallback_intent
+        self._min_confidence = min_confidence
+        logger.info(
+            f"IntentClassifierNode initialized. Fallback intent: '{fallback_intent}', "
+            f"Min confidence threshold: {min_confidence:.2f}"
+        )
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """Returns the descriptive name of the node."""
         return "IntentClassifier"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input data (assumed to be a string query) to classify its intent.
-
-        This method simulates the classification process by analyzing keywords within
-        the input query. In a real-world scenario, this would involve calling a
-        machine learning model's inference endpoint or local model.
+        Processes the input data to classify its intent based on predefined patterns.
 
         Args:
-            data (Any): The input data, expected to be a string containing the user query.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                       relevant for processing, which might include
-                                       session data, user preferences, etc.
-                                       (Not directly used in this simulation, but important for signature).
+            data: The input utterance as a string that needs intent classification.
+            context: A dictionary containing contextual information relevant to the
+                     orchestration. This node does not directly use context for
+                     classification but is part of the standard node interface.
 
         Returns:
-            Dict[str, Any]: A dictionary containing the classified intent, a simulated
-                            confidence score, the original query, and the model identifier used.
-                            Example: {"intent": "order_status", "confidence": 0.95, "query": "track my order"}
-                            If no clear intent is found, it defaults to "unknown" with a lower confidence.
+            A dictionary containing the classified 'intent' and a simulated 'confidence' score.
+            Example: `{'intent': 'BookFlight', 'confidence': 1.0}`
+                     `{'intent': 'unknown', 'confidence': 0.0}`
 
         Raises:
-            ValueError: If the input data is not a string, as this node specifically
-                        expects textual input for classification.
-            Exception: For any unexpected errors that occur during the classification logic.
+            TypeError: If the input `data` is not a string.
+            ValueError: If the input `data` is an empty string after stripping whitespace.
         """
         if not isinstance(data, str):
             logger.error(
-                f"IntentClassifierNode received non-string data type: {type(data)}. "
-                "Expected a string query for intent classification."
+                f"IntentClassifierNode received invalid data type. Expected 'str', "
+                f"but got '{type(data).__name__}'."
             )
-            raise ValueError(f"Input data for '{self.node_name}' must be a string, but got {type(data).__name__}.")
-
-        query: str = data.lower().strip()
-        classified_intent: str = "unknown"
-        confidence: float = 0.5  # Default confidence for 'unknown' intent
-
-        try:
-            # --- Simulated Intent Classification Logic ---
-            # This section would typically involve calling an external NLP service
-            # or a loaded local ML model for inference.
-            if any(phrase in query for phrase in ["order status", "track my order", "where is my package"]):
-                classified_intent = "order_status"
-                confidence = 0.95
-            elif any(phrase in query for phrase in ["make a reservation", "book a table", "reserve a spot", "book an appointment"]):
-                classified_intent = "make_reservation"
-                confidence = 0.92
-            elif any(phrase in query for phrase in ["contact support", "help me", "technical issue", "talk to an agent"]):
-                classified_intent = "contact_support"
-                confidence = 0.90
-            elif any(phrase in query for phrase in ["greeting", "hello", "hi", "hey"]):
-                classified_intent = "greeting"
-                confidence = 0.85
-            elif any(phrase in query for phrase in ["thanks", "thank you", "appreciate"]):
-                classified_intent = "gratitude"
-                confidence = 0.80
-            else:
-                logger.debug(f"No specific predefined intent found for query: '{query}'. Defaulting to 'unknown'.")
-                # Confidence remains default 0.5 for 'unknown'
-
-        except Exception as e:
-            logger.exception(
-                f"An unexpected error occurred during intent classification for query: '{query}' "
-                f"using model: '{self._model_identifier}'."
+            raise TypeError(
+                f"IntentClassifierNode expects string input for 'data', "
+                f"but received {type(data).__name__}."
             )
-            # Re-raise the exception to propagate the error up the orchestration chain
-            raise
 
-        result = {
-            "intent": classified_intent,
-            "confidence": confidence,
-            "query": data,  # Preserve the original casing of the query
-            "model_identifier_used": self._model_identifier,
-        }
-        logger.debug(
-            f"Query: '{query}' classified as intent: '{classified_intent}' "
-            f"with simulated confidence: {confidence:.2f} using model '{self._model_identifier}'."
+        utterance = data.strip().lower()
+
+        if not utterance:
+            logger.warning("IntentClassifierNode received an empty or whitespace-only utterance.")
+            raise ValueError("IntentClassifierNode cannot classify an empty string utterance.")
+
+        detected_intent: str = self._fallback_intent
+        confidence: float = 0.0
+
+        for intent_name, keywords in self._intent_patterns.items():
+            for keyword in keywords:
+                if keyword in utterance:
+                    detected_intent = intent_name
+                    confidence = 1.0  # Simulate high confidence for a direct keyword match
+                    logger.debug(
+                        f"Matched keyword '{keyword}' for intent '{intent_name}' "
+                        f"in utterance: '{utterance}'"
+                    )
+                    break  # Found a match, no need to check other keywords for this intent
+            if confidence == 1.0:
+                break  # Found a definitive intent, no need to check other intents
+
+        # Apply the confidence threshold. In this simulation, if we found a match,
+        # confidence is 1.0. If not, it's 0.0. This check ensures the fallback
+        # logic is applied if 0.0 is below _min_confidence.
+        if confidence < self._min_confidence:
+            detected_intent = self._fallback_intent
+            confidence = 0.0
+            logger.info(
+                f"Detected intent's simulated confidence ({confidence:.2f}) is below "
+                f"threshold ({self._min_confidence:.2f}). Falling back to "
+                f"'{self._fallback_intent}'."
+            )
+
+        result = {"intent": detected_intent, "confidence": confidence}
+        logger.info(
+            f"Classified utterance '{utterance[:75]}{'...' if len(utterance) > 75 else ''}' "
+            f"to: {result}"
         )
         return result
