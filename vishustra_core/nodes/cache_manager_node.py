@@ -1,163 +1,177 @@
-
 import logging
 import time
-from collections import OrderedDict
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
-from vishustra_core.nodes.base_node import BaseNode
+# Assuming this path from the project context
+from vishustra_core.nodes.base_node import BaseNode 
 
 logger = logging.getLogger(__name__)
 
 class CacheManagerNode(BaseNode):
     """
-    A processing node for managing an in-memory, LRU (Least Recently Used) cache
-    with optional Time-To-Live (TTL) functionality.
+    A Vishustra processing node that manages a shared in-memory cache
+    within the orchestration context.
 
-    This node provides 'get', 'set', 'invalidate', and 'clear' operations
-    driven by the `context` dictionary.
+    This node provides functionality to perform standard cache operations:
+    GET, SET, DELETE, and CLEAR. It also supports Time-To-Live (TTL)
+    for cached items. The actual cache data structure is expected to be
+    a dictionary stored under the 'cache_store' key within the
+    processing `context` dictionary, allowing for a shared cache across nodes
+    within an orchestration.
     """
 
-    def __init__(self, capacity: int = 128, ttl_seconds: Optional[int] = None):
+    def __init__(self):
         """
-        Initializes the CacheManagerNode with a specified capacity and optional TTL.
-        The cache uses an LRU eviction policy if capacity is exceeded.
-        If ttl_seconds is provided, entries expire after that duration.
-
-        Args:
-            capacity (int): The maximum number of items the cache can hold. Must be positive.
-                            Defaults to 128.
-            ttl_seconds (Optional[int]): Time-to-live for cache entries in seconds.
-                                         If None, entries do not expire.
-        Raises:
-            ValueError: If cache capacity is not a positive integer.
+        Initializes the CacheManagerNode. This node does not maintain
+        an instance-level cache; it operates exclusively on the cache
+        provided or initialized within the `context`.
         """
-        if not isinstance(capacity, int) or capacity <= 0:
-            raise ValueError("Cache capacity must be a positive integer.")
-
-        # Cache stores (value, timestamp) tuples for TTL management.
-        # OrderedDict maintains insertion order, allowing LRU eviction by popping the first item.
-        self._cache: OrderedDict[Any, Tuple[Any, float]] = OrderedDict()
-        self._capacity = capacity
-        self._ttl_seconds = ttl_seconds
-        logger.info(
-            f"CacheManagerNode initialized with capacity={capacity}, "
-            f"ttl_seconds={ttl_seconds if ttl_seconds is not None else 'infinite'}."
-        )
+        logger.debug("CacheManagerNode initialized.")
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
-        return "CacheManagerNode"
+        """Returns the descriptive name of the node."""
+        return "CacheManager"
 
-    def _is_expired(self, timestamp: float) -> bool:
-        """Checks if a cache entry has expired based on its timestamp and TTL."""
-        if self._ttl_seconds is None:
-            return False
-        return (time.time() - timestamp) > self._ttl_seconds
-
-    def _cleanup_expired_entries(self) -> None:
-        """Removes expired entries from the cache to keep it fresh."""
-        keys_to_remove = []
-        # Iterate over a copy of items to allow deletion during iteration
-        for key, (_, timestamp) in list(self._cache.items()):
-            if self._is_expired(timestamp):
-                keys_to_remove.append(key)
-        for key in keys_to_remove:
-            del self._cache[key]
-        if keys_to_remove:
-            logger.debug(f"Cleaned up {len(keys_to_remove)} expired cache entries.")
-
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
+    def _get_expiry_timestamp(self, ttl_seconds: Optional[int]) -> Optional[float]:
         """
-        Manages cache operations based on the provided data and context.
-        The `data` input's role depends on the `cache_action`.
-
-        Expected `context` keys:
-        - 'cache_action': str (required) - Specifies the operation: 'get', 'set', 'invalidate', 'clear'.
-        - 'cache_key': Any (required for 'get', 'set', 'invalidate') - The key for the cache operation.
-                       If not provided for 'get' or 'invalidate', `data` will be used as the key.
-        - 'cache_value': Any (optional for 'set') - The value to store. If not provided,
-                         `data` will be used as the value for 'set' operations.
+        Calculates the absolute expiry timestamp based on the given Time-To-Live
+        in seconds.
 
         Args:
-            data (Any): The primary input data. Its specific role varies by `cache_action`:
-                        - 'get': Used as `cache_key` if `context['cache_key']` is absent.
-                        - 'set': Used as `cache_value` if `context['cache_value']` is absent.
-                        - 'invalidate': Used as `cache_key` if `context['cache_key']` is absent.
-                        - 'clear': Ignored.
-            context (Dict[str, Any]): A dictionary containing parameters for the cache operation.
+            ttl_seconds (Optional[int]): The Time-To-Live in seconds.
+                                         If None or non-positive, the item
+                                         is considered to never expire.
 
         Returns:
-            Any: The result of the cache operation:
-                 - 'get': The cached value if found and not expired, otherwise `None`.
-                 - 'set': The value that was stored.
-                 - 'invalidate': `None`.
-                 - 'clear': `None`.
+            Optional[float]: The Unix timestamp at which the item expires,
+                             or None if it should not expire.
+        """
+        if ttl_seconds is None or ttl_seconds <= 0:
+            return None  # No expiry
+        return time.time() + ttl_seconds
+
+    def _is_expired(self, expiry_timestamp: Optional[float]) -> bool:
+        """
+        Checks if a cached item, identified by its expiry timestamp, has expired.
+
+        Args:
+            expiry_timestamp (Optional[float]): The Unix timestamp of expiry,
+                                                or None if the item does not expire.
+
+        Returns:
+            bool: True if the item has expired, False otherwise.
+        """
+        if expiry_timestamp is None:
+            return False  # No expiry specified, so never expires
+        return time.time() >= expiry_timestamp
+
+    def process(self, data: Dict[str, Any], context: Dict[str, Any]) -> Any:
+        """
+        Executes cache operations on the shared 'cache_store' within the context.
+
+        The `data` input dictionary must specify the operation and its parameters.
+        Supported operations are:
+
+        - **SET**: `{"operation": "SET", "key": Any, "value": Any, "ttl": Optional[int]}`
+          Stores `value` under `key`. `ttl` is optional (in seconds).
+          Returns `True` on success.
+        - **GET**: `{"operation": "GET", "key": Any}`
+          Retrieves the `value` associated with `key`.
+          Returns the cached `value` or `None` if not found or expired.
+        - **DELETE**: `{"operation": "DELETE", "key": Any}`
+          Removes the entry associated with `key`.
+          Returns `True` if deleted, `False` if the key was not found.
+        - **CLEAR**: `{"operation": "CLEAR"}`
+          Empties the entire cache.
+          Returns `True`.
+
+        Args:
+            data (Dict[str, Any]): A dictionary defining the cache operation
+                                    and its arguments.
+            context (Dict[str, Any]): The shared processing context. This dictionary
+                                      is expected to contain, or will be initialized
+                                      with, a mutable 'cache_store' dictionary.
+
+        Returns:
+            Any: The result of the cache operation, which can be the retrieved
+                 value, a boolean indicating success, or None.
 
         Raises:
-            ValueError: If 'cache_action' is missing or unknown.
-            KeyError: If 'cache_key' is required but not provided in context (e.g., for 'set')
-                      and `data` cannot implicitly serve as the key.
+            ValueError: If the 'operation' is invalid or mandatory parameters
+                        are missing for a specific operation.
+            Exception: For any other unexpected errors during cache processing.
         """
-        self._cleanup_expired_entries() # Perform cleanup before any operation
+        # Ensure 'cache_store' exists in the context and is a dictionary
+        if "cache_store" not in context or not isinstance(context["cache_store"], dict):
+            logger.info("Initializing 'cache_store' in context as it was not found or not a dict.")
+            context["cache_store"] = {}
+        
+        cache_store: Dict[Any, Dict[str, Any]] = context["cache_store"]
 
-        cache_action = context.get('cache_action')
-        if not cache_action:
-            logger.error("Missing 'cache_action' in context for CacheManagerNode.")
-            raise ValueError("Cache action must be specified in context.")
+        operation: str = data.get("operation", "").upper()
+        key: Any = data.get("key")
+        value: Any = data.get("value") # Note: 'value' might genuinely be None
+        ttl: Optional[int] = data.get("ttl")
 
-        if cache_action == 'get':
-            cache_key = context.get('cache_key', data) # Use 'data' as key if 'cache_key' not explicit
-            if cache_key in self._cache:
-                value, timestamp = self._cache[cache_key]
-                if not self._is_expired(timestamp):
-                    # Move to end to signify recent use (LRU)
-                    self._cache.move_to_end(cache_key)
-                    logger.debug(f"Cache hit for key: '{cache_key}'.")
-                    return value
+        logger.debug(f"CacheManagerNode received operation: {operation} for key: {key if key is not None else 'N/A'}")
+
+        try:
+            if operation == "SET":
+                if key is None:
+                    raise ValueError("SET operation requires a 'key'.")
+                # Explicitly check for 'value' key existence as its content could be None
+                if "value" not in data:
+                    raise ValueError("SET operation requires a 'value' parameter.")
+                
+                expiry = self._get_expiry_timestamp(ttl)
+                cache_store[key] = {"value": value, "expiry": expiry}
+                logger.info(f"Set cache entry for key '{key}'. Expires: {time.ctime(expiry) if expiry else 'Never'}")
+                return True
+
+            elif operation == "GET":
+                if key is None:
+                    raise ValueError("GET operation requires a 'key'.")
+                
+                entry = cache_store.get(key)
+                if entry is None:
+                    logger.debug(f"Cache miss for key '{key}'.")
+                    return None
+                
+                if self._is_expired(entry.get("expiry")):
+                    logger.info(f"Cache entry for key '{key}' has expired. Deleting it from cache.")
+                    del cache_store[key]
+                    return None
+                
+                logger.debug(f"Cache hit for key '{key}'.")
+                return entry["value"]
+
+            elif operation == "DELETE":
+                if key is None:
+                    raise ValueError("DELETE operation requires a 'key'.")
+                
+                if key in cache_store:
+                    del cache_store[key]
+                    logger.info(f"Deleted cache entry for key '{key}'.")
+                    return True
                 else:
-                    del self._cache[cache_key] # Remove expired entry
-                    logger.debug(f"Cache miss (expired) for key: '{cache_key}'.")
-            logger.debug(f"Cache miss for key: '{cache_key}'.")
-            return None
+                    logger.debug(f"Attempted to delete non-existent cache entry for key '{key}'.")
+                    return False
 
-        elif cache_action == 'set':
-            cache_key = context.get('cache_key')
-            if cache_key is None:
-                # 'data' is a suitable default for value, but not always for key in a set.
-                # Enforce explicit 'cache_key' for clarity when setting.
-                logger.error("Missing 'cache_key' in context for 'set' action.")
-                raise KeyError("A 'cache_key' must be specified in context for 'set' action.")
+            elif operation == "CLEAR":
+                initial_size = len(cache_store)
+                cache_store.clear()
+                logger.info(f"Cleared cache. Removed {initial_size} entries.")
+                return True
 
-            cache_value = context.get('cache_value', data) # Use 'data' as value if 'cache_value' not explicit
-            self._cache[cache_key] = (cache_value, time.time())
-            self._cache.move_to_end(cache_key) # Mark as recently used
-
-            # Evict LRU entry if capacity exceeded
-            while len(self._cache) > self._capacity:
-                lru_key = next(iter(self._cache)) # Get the first (LRU) key
-                del self._cache[lru_key]
-                logger.debug(f"Cache evicted LRU entry for key: '{lru_key}'.")
-
-            logger.debug(f"Cache set for key: '{cache_key}'.")
-            return cache_value
-
-        elif cache_action == 'invalidate':
-            cache_key = context.get('cache_key', data) # Use 'data' as key if 'cache_key' not explicit
-            if cache_key in self._cache:
-                del self._cache[cache_key]
-                logger.debug(f"Cache invalidated for key: '{cache_key}'.")
             else:
-                logger.debug(f"Attempted to invalidate non-existent key: '{cache_key}'.")
-            return None
+                raise ValueError(f"Unknown or unsupported cache operation: '{operation}'. "
+                                 "Expected 'GET', 'SET', 'DELETE', or 'CLEAR'.")
 
-        elif cache_action == 'clear':
-            self._cache.clear()
-            logger.debug("Cache cleared.")
-            return None
-
-        else:
-            logger.error(f"Unknown cache action: '{cache_action}'.")
-            raise ValueError(f"Unknown cache action: '{cache_action}'. "
-                             "Expected 'get', 'set', 'invalidate', or 'clear'.")
-
+        except ValueError as e:
+            logger.error(f"Validation error in CacheManagerNode for operation '{operation}' (key: '{key}'): {e}")
+            raise # Re-raise to propagate the error up the chain for handling by the orchestration framework
+        except Exception as e:
+            logger.error(f"An unexpected error occurred in CacheManagerNode during operation '{operation}' "
+                         f"for key '{key}': {e}", exc_info=True)
+            raise # Re-raise unexpected errors to ensure they are not silently swallowed
