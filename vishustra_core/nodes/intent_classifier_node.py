@@ -1,83 +1,112 @@
 import logging
 from typing import Any, Dict
+
+# Assuming this path from the project context
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class IntentClassifierNode(BaseNode):
     """
-    A Vishustra node that classifies the intent of a given text input.
-
-    This node simulates intent classification based on a set of predefined keyword rules.
-    In a production Vishustra setup, this node would typically integrate with
-    an actual NLU service or a fine-tuned machine learning model to provide
-    more robust and accurate intent detection.
+    A processing node that simulates intent classification for user queries.
+    It identifies a primary intent from a predefined set based on keywords or
+    delegates to a configured model.
     """
 
-    # Defines simple keyword-based rules for intent classification.
-    # Keys are intent names, values are lists of keywords associated with that intent.
-    _intent_rules = {
-        "get_weather": ["weather", "forecast", "temperature", "climate"],
-        "place_order": ["buy", "order", "purchase", "add to cart", "checkout"],
-        "check_status": ["status", "track", "delivery", "where is my"],
-        "book_appointment": ["book", "schedule", "appointment", "meeting", "reserve"],
-        "customer_support": ["help", "support", "contact", "issue"],
-    }
-    # Default intent to return if no specific intent is matched by the rules.
-    _default_intent = "general_query"
+    def __init__(self, model_identifier: str = "dummy-keyword-classifier"):
+        """
+        Initializes the IntentClassifierNode.
+
+        Args:
+            model_identifier (str): A string identifying the classification model to use.
+                                    In a production environment, this would dictate
+                                    which specific NLP model (e.g., a fine-tuned transformer)
+                                    is loaded and utilized. For this simulation, it's a label.
+        """
+        self._model_identifier = model_identifier
+        logger.info(f"IntentClassifierNode initialized with model: {self._model_identifier}")
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """Returns the name of the node."""
         return "IntentClassifier"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input data (expected to be a string query) to classify its intent.
+        Processes the input data (assumed to be a string query) to classify its intent.
 
-        The method iterates through predefined rules to find a matching intent.
-        It returns a dictionary containing the classified intent and a simulated confidence score.
+        This method simulates the classification process by analyzing keywords within
+        the input query. In a real-world scenario, this would involve calling a
+        machine learning model's inference endpoint or local model.
 
         Args:
-            data: The input data, expected to be a string representing a user query.
-            context: A dictionary containing contextual information relevant to the processing.
-                     (Currently not used in this simulation but maintained for interface compatibility).
+            data (Any): The input data, expected to be a string containing the user query.
+            context (Dict[str, Any]): A dictionary containing contextual information
+                                       relevant for processing, which might include
+                                       session data, user preferences, etc.
+                                       (Not directly used in this simulation, but important for signature).
 
         Returns:
-            A dictionary containing the classified 'intent' (str) and 'confidence' (float).
-            Example: {"intent": "get_weather", "confidence": 0.95}
+            Dict[str, Any]: A dictionary containing the classified intent, a simulated
+                            confidence score, the original query, and the model identifier used.
+                            Example: {"intent": "order_status", "confidence": 0.95, "query": "track my order"}
+                            If no clear intent is found, it defaults to "unknown" with a lower confidence.
 
         Raises:
-            ValueError: If the input `data` is not a string or is empty after stripping whitespace.
+            ValueError: If the input data is not a string, as this node specifically
+                        expects textual input for classification.
+            Exception: For any unexpected errors that occur during the classification logic.
         """
         if not isinstance(data, str):
-            logger.error(f"Invalid input data type for '{self.node_name}'. Expected string, but received {type(data)}.")
-            raise ValueError(f"'{self.node_name}' expects string input, but received {type(data)}.")
+            logger.error(
+                f"IntentClassifierNode received non-string data type: {type(data)}. "
+                "Expected a string query for intent classification."
+            )
+            raise ValueError(f"Input data for '{self.node_name}' must be a string, but got {type(data).__name__}.")
 
-        query_stripped = data.strip()
-        if not query_stripped:
-            logger.warning(f"Received empty string for intent classification in '{self.node_name}'. Returning default intent.")
-            return {"intent": self._default_intent, "confidence": 0.0}
+        query: str = data.lower().strip()
+        classified_intent: str = "unknown"
+        confidence: float = 0.5  # Default confidence for 'unknown' intent
 
-        query_lower = query_stripped.lower()
-        classified_intent = self._default_intent
-        confidence = 0.2  # Default low confidence for fallback intents
+        try:
+            # --- Simulated Intent Classification Logic ---
+            # This section would typically involve calling an external NLP service
+            # or a loaded local ML model for inference.
+            if any(phrase in query for phrase in ["order status", "track my order", "where is my package"]):
+                classified_intent = "order_status"
+                confidence = 0.95
+            elif any(phrase in query for phrase in ["make a reservation", "book a table", "reserve a spot", "book an appointment"]):
+                classified_intent = "make_reservation"
+                confidence = 0.92
+            elif any(phrase in query for phrase in ["contact support", "help me", "technical issue", "talk to an agent"]):
+                classified_intent = "contact_support"
+                confidence = 0.90
+            elif any(phrase in query for phrase in ["greeting", "hello", "hi", "hey"]):
+                classified_intent = "greeting"
+                confidence = 0.85
+            elif any(phrase in query for phrase in ["thanks", "thank you", "appreciate"]):
+                classified_intent = "gratitude"
+                confidence = 0.80
+            else:
+                logger.debug(f"No specific predefined intent found for query: '{query}'. Defaulting to 'unknown'.")
+                # Confidence remains default 0.5 for 'unknown'
 
-        logger.debug(f"Attempting to classify intent for query: '{query_lower}' in node '{self.node_name}'")
+        except Exception as e:
+            logger.exception(
+                f"An unexpected error occurred during intent classification for query: '{query}' "
+                f"using model: '{self._model_identifier}'."
+            )
+            # Re-raise the exception to propagate the error up the orchestration chain
+            raise
 
-        # Simulate intent classification based on keyword presence
-        for intent, keywords in self._intent_rules.items():
-            for keyword in keywords:
-                if keyword in query_lower:
-                    classified_intent = intent
-                    # Simple heuristic: longer queries matching more specific keywords might have higher confidence
-                    # This is purely for simulation purposes.
-                    confidence = min(0.9 + (len(keyword) / len(query_lower)) * 0.05, 1.0)
-                    logger.debug(f"Matched keyword '{keyword}' for intent '{intent}'.")
-                    break  # Found a match for this intent, move to the next intent category
-            if classified_intent != self._default_intent:
-                break  # A specific intent was found, no need to check further rules
-
-        result = {"intent": classified_intent, "confidence": round(confidence, 2)}
-        logger.info(f"Classified intent for query '{data[:75]}{'...' if len(data) > 75 else ''}' as '{result['intent']}' with confidence {result['confidence']}.")
+        result = {
+            "intent": classified_intent,
+            "confidence": confidence,
+            "query": data,  # Preserve the original casing of the query
+            "model_identifier_used": self._model_identifier,
+        }
+        logger.debug(
+            f"Query: '{query}' classified as intent: '{classified_intent}' "
+            f"with simulated confidence: {confidence:.2f} using model '{self._model_identifier}'."
+        )
         return result
