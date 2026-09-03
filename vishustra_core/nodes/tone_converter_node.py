@@ -1,92 +1,91 @@
 import logging
 from typing import Any, Dict
 
+# Assuming this path exists in the Vishustra project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
+
 class ToneConverterNode(BaseNode):
     """
-    A processing node designed to simulate the conversion of input text to a specified tone.
-    This node expects a string `data` and a `target_tone` within the context dictionary.
+    A Vishustra processing node designed to simulate the conversion of text tone.
+
+    This node takes an input string and a 'target_tone' specified in the context,
+    then attempts to return a string reflecting the desired tone.
+    It includes robust validation for input data and context parameters.
     """
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of this node.
-        """
+        """Returns the descriptive name of the node."""
         return "ToneConverter"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, attempting to convert its tone based on the
-        'target_tone' specified in the context.
+        Processes the input data, transforming its tone based on the 'target_tone'
+        provided in the context dictionary.
 
         Args:
-            data (Any): The input data, expected to be a string representing text.
-            context (Dict[str, Any]): A dictionary containing contextual information,
-                                      expected to have a 'target_tone' key with a string value.
+            data (Any): The input content to be tone-converted. Expected to be a string.
+            context (Dict[str, Any]): A dictionary containing processing parameters.
+                                       Must include the 'target_tone' (str) key,
+                                       specifying the desired output tone.
 
         Returns:
-            Any: The processed text with the simulated tone applied. If conversion
-                 is not possible or `target_tone` is missing/unsupported, the
-                 original data or a modified version with a warning is returned.
+            Any: A new string with the simulated tone applied.
 
         Raises:
-            TypeError: If the input `data` is not a string or if `target_tone`
+            TypeError: If the input `data` is not a string, or if 'target_tone'
                        in context is not a string.
+            KeyError: If the 'target_tone' key is missing from the `context`.
+            ValueError: If the specified 'target_tone' is not recognized or supported.
         """
+        logger.info("ToneConverterNode: Initiating text tone conversion process.")
+
         if not isinstance(data, str):
-            logger.error(
-                f"ToneConverterNode received non-string data. Expected a string for tone conversion, "
-                f"but got type: {type(data).__name__}. Data: {data!r}"
-            )
-            raise TypeError(
-                f"Invalid input data type for ToneConverterNode: Expected string, got {type(data).__name__}"
-            )
+            logger.error(f"ToneConverterNode: Invalid input data type. Expected 'str', but received '{type(data).__name__}'.")
+            raise TypeError(f"Input data for ToneConverterNode must be a string, but received '{type(data).__name__}'.")
 
-        target_tone = context.get("target_tone")
+        try:
+            target_tone_raw = context.get('target_tone')
+            if target_tone_raw is None:
+                raise KeyError("'target_tone' key is missing")
+            if not isinstance(target_tone_raw, str):
+                logger.error(f"ToneConverterNode: 'target_tone' in context must be a string, but received '{type(target_tone_raw).__name__}'.")
+                raise TypeError(f"Context parameter 'target_tone' must be a string, but received '{type(target_tone_raw).__name__}'.")
+            target_tone = target_tone_raw.lower()
+        except KeyError as e:
+            logger.error(f"ToneConverterNode: Required context key missing: {e}. 'target_tone' is essential for this node.")
+            raise KeyError(f"Context missing required key for ToneConverterNode: {e}. Please provide a 'target_tone'.")
+        except TypeError as e:
+            raise e # Re-raise TypeErrors specific to context params
+        except Exception as e:
+            logger.exception(f"ToneConverterNode: An unexpected error occurred while retrieving 'target_tone' from context.")
+            raise RuntimeError(f"Failed to process 'target_tone' from context: {e}")
 
-        if target_tone is None:
-            logger.warning(
-                "ToneConverterNode context is missing the 'target_tone' key. "
-                "Returning original data without modification."
-            )
-            return data
+        converted_text = str(data)  # Ensure we're working with a mutable copy if needed, though str is immutable
+        original_text_snippet = data[:70] + "..." if len(data) > 70 else data
 
-        if not isinstance(target_tone, str):
-            logger.error(
-                f"ToneConverterNode 'target_tone' in context must be a string. "
-                f"Got type: {type(target_tone).__name__}. Context: {context}"
-            )
-            raise TypeError(
-                f"Invalid 'target_tone' type in context: Expected string, got {type(target_tone).__name__}"
-            )
-
-        processed_text = data
-        lower_target_tone = target_tone.lower()
-
-        # Simulate tone conversion based on common tones
-        if lower_target_tone == "formal":
-            processed_text = f"FORMAL: {data}"
-            logger.debug(f"ToneConverterNode converted text to formal tone. Original: '{data[:50]}...'")
-        elif lower_target_tone == "casual":
-            processed_text = f"CASUAL: {data}"
-            logger.debug(f"ToneConverterNode converted text to casual tone. Original: '{data[:50]}...'")
-        elif lower_target_tone == "humorous":
-            processed_text = f"{data} (LOL)"
-            logger.debug(f"ToneConverterNode converted text to humorous tone. Original: '{data[:50]}...'")
-        elif lower_target_tone == "professional":
-            processed_text = f"[Professional Note]: {data}"
-            logger.debug(f"ToneConverterNode converted text to professional tone. Original: '{data[:50]}...'")
+        # Simulate tone conversion based on target_tone
+        if target_tone == 'formal':
+            converted_text = converted_text.replace("don't", "do not").replace("can't", "cannot")
+            converted_text = "It is requested that " + converted_text.replace("hi", "greetings").replace("hello", "greetings")
+            logger.debug(f"ToneConverterNode: Applying 'formal' tone transformation to text starting with: '{original_text_snippet}'.")
+        elif target_tone == 'casual':
+            converted_text = converted_text.replace("do not", "don't").replace("cannot", "can't")
+            converted_text = "Hey there! " + converted_text.replace("greetings", "hi").replace("it is requested that", "please")
+            logger.debug(f"ToneConverterNode: Applying 'casual' tone transformation to text starting with: '{original_text_snippet}'.")
+        elif target_tone == 'sarcastic':
+            converted_text = f"Oh, how truly fascinating. ({converted_text}) I'm *certain* this will prove to be an invaluable contribution."
+            logger.debug(f"ToneConverterNode: Applying 'sarcastic' tone transformation to text starting with: '{original_text_snippet}'.")
+        elif target_tone == 'professional':
+            converted_text = "Regarding the matter: " + converted_text.replace("hi", "hello").replace("hey", "hello").replace("greetings", "hello")
+            converted_text = converted_text.replace("just ", "").replace("maybe", "potentially").replace("I think", "It is my understanding that")
+            logger.debug(f"ToneConverterNode: Applying 'professional' tone transformation to text starting with: '{original_text_snippet}'.")
         else:
-            logger.warning(
-                f"ToneConverterNode encountered an unsupported 'target_tone': '{target_tone}'. "
-                f"Returning original data without specific tone modification."
-            )
-            # For unsupported tones, we could optionally append a disclaimer or leave as is
-            # For this simulation, we'll return original data for unknown tones
-            pass # processed_text remains `data`
+            logger.warning(f"ToneConverterNode: Unrecognized 'target_tone' specified: '{target_tone}'. Supported tones include 'formal', 'casual', 'sarcastic', 'professional'.")
+            raise ValueError(f"Unsupported 'target_tone': '{target_tone}'. Please choose from 'formal', 'casual', 'sarcastic', 'professional'.")
 
-        return processed_text
+        logger.info(f"ToneConverterNode: Successfully converted tone for text (original snippet: '{original_text_snippet}') to '{target_tone}'.")
+        return converted_text
