@@ -1,107 +1,86 @@
 import logging
+import re
 from typing import Any, Dict
 
-# Assuming BaseNode is in this path relative to the project root
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class TextSummarizerNode(BaseNode):
     """
-    A Vishustra processing node that simulates text summarization.
+    A processing node that simulates text summarization.
 
-    This node is designed to take a string as input and return a summarized version.
-    For the current implementation, it simulates summarization by truncating the
-    text based on a configurable maximum word count or a ratio of the original text
-    length, appending an ellipsis to indicate truncation.
+    This node takes a string as input and returns a summarized version
+    by extracting the first N sentences. The number of sentences can be
+    configured via the context.
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """Returns the name of the node."""
         return "TextSummarizer"
 
     def process(self, data: Any, context: Dict[str, Any]) -> str:
         """
-        Processes the input data to generate a simulated summary.
-
-        This method expects a string as input `data`. It truncates the text
-        to simulate summarization. The length of the summary can be controlled
-        via the `context` dictionary.
+        Processes the input text to generate a summary.
 
         Args:
             data (Any): The input data, expected to be a string containing the text to summarize.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                       and configuration parameters for summarization.
-                                       Recognized keys:
-                                       - 'summary_max_words' (int): Maximum number of words for the summary.
-                                                                    Defaults to 100.
-                                       - 'summary_ratio' (float): Ratio of original text words to keep (e.g., 0.25 for 25%).
-                                                                  Defaults to 0.25.
-                                       The effective summary length will be the minimum of these two settings.
+            context (Dict[str, Any]): A dictionary containing additional runtime information.
+                                      Can include 'summarizer_sentences' (int) to specify
+                                      the desired number of sentences in the summary.
 
         Returns:
-            str: A simulated summarized version of the input text. If the input is
-                 an empty string, an empty string is returned.
+            str: The summarized text.
 
         Raises:
-            ValueError: If the input data is not a string.
+            TypeError: If the input 'data' is not a string.
+            ValueError: If 'summarizer_sentences' in context is invalid.
         """
         if not isinstance(data, str):
-            error_msg = (
-                f"Invalid input type for TextSummarizerNode. "
-                f"Expected str, but received {type(data).__name__}. Data: {data!r}"
+            logger.error(
+                "TextSummarizerNode received non-string data. Expected 'str', but got '%s'.",
+                type(data).__name__
             )
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            raise TypeError(
+                f"TextSummarizerNode expects string data, but received {type(data).__name__}"
+            )
 
         if not data.strip():
-            logger.info("Received an empty or whitespace-only string for summarization. Returning an empty string.")
+            logger.info("TextSummarizerNode received empty or whitespace-only string, returning it as is.")
             return ""
 
-        # --- Configuration for summarization length ---
-        # Default maximum words for the summary
-        default_max_words = 100
-        # Default ratio of original text words to keep
-        default_summary_ratio = 0.25  # 25% of the original text
-
-        max_words = context.get('summary_max_words', default_max_words)
-        summary_ratio = context.get('summary_ratio', default_summary_ratio)
-
-        if not isinstance(max_words, int) or max_words <= 0:
+        # Determine the number of sentences for the summary from context, default to 3.
+        # Ensure it's a positive integer.
+        num_sentences = context.get("summarizer_sentences", 3)
+        if not isinstance(num_sentences, int) or num_sentences <= 0:
             logger.warning(
-                f"Invalid 'summary_max_words' in context ({max_words}). "
-                f"Falling back to default: {default_max_words}."
+                "Invalid 'summarizer_sentences' in context: '%s'. "
+                "Expected a positive integer. Defaulting to 3 sentences.",
+                num_sentences
             )
-            max_words = default_max_words
+            num_sentences = 3
 
-        if not isinstance(summary_ratio, (float, int)) or not (0 < summary_ratio <= 1):
-            logger.warning(
-                f"Invalid 'summary_ratio' in context ({summary_ratio}). "
-                f"Falling back to default: {default_summary_ratio}."
-            )
-            summary_ratio = default_summary_ratio
+        # Simple sentence splitting using regex.
+        # A more robust solution might use an NLP library (e.g., NLTK, spaCy).
+        sentences = re.split(r'(?<=[.!?])\s+', data.strip())
 
-        words = data.split()
-        num_original_words = len(words)
+        if not sentences:
+            logger.debug("No sentences found in the input text after splitting.")
+            return ""
 
-        # Calculate target length based on ratio and absolute maximum
-        target_word_count = min(int(num_original_words * summary_ratio), max_words)
-
-        if num_original_words <= target_word_count:
-            # If the text is already short enough, return it as is (after stripping leading/trailing whitespace)
-            summarized_text = ' '.join(words)
+        if len(sentences) <= num_sentences:
             logger.debug(
-                f"Input text already short enough ({num_original_words} words) "
-                f"or shorter than target ({target_word_count} words). Returning original."
+                "Input text has %d sentences, which is less than or equal to the "
+                "requested summary length of %d sentences. Returning full text.",
+                len(sentences), num_sentences
             )
-            return summarized_text.strip()
-        else:
-            # Simulate summarization by truncating and appending an ellipsis
-            summarized_words = words[:target_word_count]
-            summarized_text = ' '.join(summarized_words) + "..."
-            logger.debug(
-                f"Summarized text from {num_original_words} words to "
-                f"{len(summarized_words)} words plus ellipsis."
-            )
-            return summarized_text.strip()
+            return data.strip()
+
+        # Join the first 'num_sentences' sentences to form the summary
+        summary = " ".join(sentences[:num_sentences])
+        logger.info(
+            "Successfully summarized text from %d sentences to %d sentences.",
+            len(sentences), num_sentences
+        )
+        return summary
