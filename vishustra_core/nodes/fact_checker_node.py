@@ -1,183 +1,128 @@
-
 import logging
-import datetime
-from typing import Any, Dict, List, Union
-
+from typing import Any, Dict, Union
 from vishustra_core.nodes.base_node import BaseNode
 
-# Initialize logger for this module
 logger = logging.getLogger(__name__)
 
 class FactCheckerNode(BaseNode):
     """
-    A processing node that simulates fact-checking for input claims.
+    A processing node designed to simulate fact-checking a given textual statement.
 
-    This node takes a claim (as a string, or within a dictionary) or a list of claims
-    and returns a simulated fact-checking verdict along with supporting information.
-    It's designed to be a placeholder for integration with real-world fact-checking
-    APIs or knowledge bases.
+    This node expects the input `data` to be a string representing a statement.
+    It attempts to verify the factual accuracy of this statement against a set
+    of known facts. These facts can be provided via the `context` dictionary
+    or defaults to a basic internal knowledge base for demonstration purposes.
+
+    The fact-checking mechanism is a simple string matching lookup. For a real-world
+    application, this would involve sophisticated NLP, knowledge graph lookups,
+    or external API calls.
     """
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of the node.
-        """
-        return "FactCheckerNode"
+        """Returns the descriptive name of the node."""
+        return "FactChecker"
 
-    def _check_single_claim(self, claim: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Union[str, bool, None]]:
         """
-        Simulates the fact-checking process for a single claim.
-        In a production environment, this method would integrate with external fact-checking
-        services, databases, or sophisticated NLP models to determine veracity.
+        Processes the input data, treating it as a statement to be fact-checked.
+
+        The node prioritizes 'known_facts' provided in the `context` dictionary.
+        If not present or invalid, it falls back to an internal mock knowledge base.
 
         Args:
-            claim (str): The specific claim text to be fact-checked.
-            context (Dict[str, Any]): Contextual information which might include
-                                       parameters for the fact-checking logic.
+            data: The statement to be fact-checked, expected to be a string.
+            context: A dictionary that may optionally contain a 'known_facts' key.
+                     'known_facts' should be a dictionary where keys are statements (str)
+                     and values are their corresponding boolean truth values.
 
         Returns:
-            Dict[str, Any]: A dictionary containing the original claim, a verdict,
-                            confidence score, and simulated evidence.
-        """
-        verdict: str = "NEEDS_MORE_INFO"
-        evidence: List[str] = []
-        confidence: float = 0.5  # Scale from 0.0 (low confidence) to 1.0 (high confidence)
-
-        lower_claim = claim.lower()
-
-        # --- Simple Keyword-Based Simulation Logic ---
-        # This section simulates how a fact-checker might determine a verdict.
-        # In reality, this would be much more complex, involving data retrieval,
-        # natural language understanding, and evidence synthesis.
-
-        if "sun is hot" in lower_claim or "earth revolves around sun" in lower_claim:
-            verdict = "TRUE"
-            evidence.append("Common knowledge and scientific consensus.")
-            confidence = 0.95
-        elif "moon is made of cheese" in lower_claim or "pigs can fly" in lower_claim:
-            verdict = "FALSE"
-            evidence.append("Empirical and scientific evidence disproves this claim.")
-            confidence = 0.98
-        elif "water is wet" in lower_claim: # A common semantic debate point
-            verdict = "TRUE"
-            evidence.append("Standard definition of 'wetness' implies being covered or saturated with liquid.")
-            confidence = 0.85
-        elif "cats are dogs" in lower_claim:
-            verdict = "FALSE"
-            evidence.append("Biological classification distinguishes between Felidae and Canidae families.")
-            confidence = 1.0
-        else:
-            # Simulate influence from context parameters
-            if context.get("assume_positive_for_unverified", False):
-                verdict = "PLAUSIBLE"
-                evidence.append("No immediate disproving evidence found; contextual setting suggests positive assumption.")
-                confidence = 0.6
-            elif context.get("source_reliability", 0.0) > 0.8:
-                 verdict = "LIKELY_TRUE"
-                 evidence.append("Claim originates from a generally reliable source, but not independently verified here.")
-                 confidence = 0.75
-            else:
-                verdict = "NEEDS_MORE_INFO"
-                evidence.append("Insufficient data or clear evidence available to confirm or deny this claim.")
-                confidence = 0.5
-
-        logger.debug(
-            f"Fact-checked claim '{claim[:70]}{'...' if len(claim) > 70 else ''}': "
-            f"Verdict='{verdict}' (Confidence: {confidence:.2f})"
-        )
-
-        return {
-            "original_claim": claim,
-            "verdict": verdict,
-            "confidence": confidence,
-            "evidence": evidence,
-            "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z"
-        }
-
-    def process(self, data: Any, context: Dict[str, Any]) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
-        """
-        Processes the input data, attempting to fact-check contained claims.
-
-        Args:
-            data (Any): The input data for fact-checking. Expected types are:
-                        - A `str` representing a single claim.
-                        - A `dict` expected to contain a claim under keys like 'claim', 'text', or 'content'.
-                        - A `list` of `str` or `dict`, where each item is a claim to be processed.
-            context (Dict[str, Any]): A dictionary containing contextual information or
-                                       configuration for the node, such as API keys,
-                                       source reliability thresholds, or flags for assumptions.
-
-        Returns:
-            Union[Dict[str, Any], List[Dict[str, Any]]]:
-                - If the input `data` was a single `str` or `dict`, returns a single
-                  dictionary containing the fact-checking results, potentially merged
-                  with the original dictionary data.
-                - If the input `data` was a `list`, returns a list of result dictionaries.
+            A dictionary containing:
+            - 'original_statement': The statement that was provided for checking.
+            - 'is_factual': True if the statement is determined to be factual,
+                            False if it's determined to be non-factual, or
+                            None if its factuality could not be determined.
+            - 'explanation': A string providing details about the fact-checking outcome.
 
         Raises:
-            ValueError: If the input `data` type is unsupported or if a `dict`
-                        does not contain a recognizable claim.
+            ValueError: If the input 'data' is not a string, indicating an invalid input type.
+            Exception: Catches and logs any unexpected errors during the fact-checking process.
         """
-        if isinstance(data, str):
-            logger.info(f"Processing single string claim: '{data[:70]}{'...' if len(data) > 70 else ''}'")
-            return self._check_single_claim(data, context)
+        if not isinstance(data, str):
+            logger.error(f"FactCheckerNode received invalid data type. Expected 'str', got '{type(data).__name__}'.")
+            raise ValueError(f"Input data for FactCheckerNode must be a string. Got '{type(data).__name__}'.")
 
-        elif isinstance(data, dict):
-            claim_keys = ["claim", "text", "content"]
-            claim_text = None
-            found_key = None
+        statement_to_check = data.strip()
+        logger.debug(f"FactCheckerNode initiated processing for statement: '{statement_to_check}'")
 
-            for key in claim_keys:
-                if key in data and isinstance(data[key], str):
-                    claim_text = data[key]
-                    found_key = key
-                    break
-            
-            if claim_text is not None:
-                logger.info(
-                    f"Processing dictionary claim found under key '{found_key}': "
-                    f"'{claim_text[:70]}{'...' if len(claim_text) > 70 else ''}'"
-                )
-                result = self._check_single_claim(claim_text, context)
-                # Merge original dictionary data with the fact-checking results
-                return {**data, **result}
-            else:
-                error_msg = (
-                    f"Input dictionary does not contain a recognizable claim "
-                    f"in expected keys: {', '.join(claim_keys)}. "
-                    f"Keys found: {list(data.keys())}."
-                )
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-
-        elif isinstance(data, list):
-            logger.info(f"Processing a list of {len(data)} potential claims.")
-            results = []
-            for i, item in enumerate(data):
-                try:
-                    # Recursively call process for each item to handle mixed list content (str or dict)
-                    item_result = self.process(item, context)
-                    results.append(item_result)
-                except ValueError as e:
-                    logger.warning(
-                        f"Skipping item at index {i} due to processing error in FactCheckerNode: {e}. "
-                        f"Original item: {item!r}"
-                    )
-                    # Append an error indicator for the failed item
-                    results.append({
-                        "original_item": item,
-                        "status": "failed_to_process",
-                        "error_message": str(e),
-                        "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z"
-                    })
-            return results
-
-        else:
-            error_msg = (
-                f"Unsupported data type for FactCheckerNode: '{type(data).__name__}'. "
-                f"Expected 'str', 'dict', or 'list'."
+        # --- Knowledge Base Simulation ---
+        # Prioritize 'known_facts' from the context, ensuring it's a dictionary.
+        context_known_facts = context.get("known_facts", {})
+        if not isinstance(context_known_facts, dict):
+            logger.warning(
+                "Context key 'known_facts' was found but is not a dictionary. "
+                "Ignoring context-provided facts and falling back to internal mock facts."
             )
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            context_known_facts = {}
 
+        # Basic internal mock knowledge base for demonstration.
+        # In a production system, this would be replaced by actual data sources or APIs.
+        internal_mock_facts = {
+            "the sun is a star": True,
+            "water boils at 100 degrees celsius": True,
+            "birds can fly": True,
+            "fish can climb trees": False,
+            "mount everest is the highest mountain": True,
+            "humans have three hearts": False,
+            "the earth is flat": False,
+            "cats are mammals": True,
+            "a triangle has three sides": True,
+            "the capital of france is berlin": False, # Example of a false fact
+            "dogs lay eggs": False,
+        }
+        
+        # Merge internal mock facts with context-provided facts.
+        # Context facts take precedence in case of conflicts.
+        # All keys are converted to lower case for case-insensitive matching.
+        merged_facts = {k.lower(): v for k, v in internal_mock_facts.items()}
+        merged_facts.update({k.lower(): v for k, v in context_known_facts.items()})
+
+        # Initialize the result structure
+        result: Dict[str, Union[str, bool, None]] = {
+            "original_statement": statement_to_check,
+            "is_factual": None,
+            "explanation": "Factuality could not be determined."
+        }
+
+        try:
+            # Simple case-insensitive exact match for demonstration purposes.
+            # Real-world fact-checking involves complex NLP, semantic understanding,
+            # and potentially multiple corroborating sources.
+            lower_statement = statement_to_check.lower()
+
+            if lower_statement in merged_facts:
+                is_true = merged_facts[lower_statement]
+                result["is_factual"] = is_true
+                result["explanation"] = (
+                    f"Based on available knowledge, this statement is "
+                    f"{'factual' if is_true else 'not factual'}."
+                )
+                logger.info(f"Statement '{statement_to_check}' fact-checked as {is_true}.")
+            else:
+                logger.info(
+                    f"Statement '{statement_to_check}' was not found in the available knowledge base. "
+                    f"Factuality undetermined."
+                )
+                result["explanation"] = (
+                    "The statement could not be directly verified against the available knowledge base. "
+                    "Consider expanding the 'known_facts' in the context."
+                )
+
+        except Exception as e:
+            logger.exception(
+                f"An unexpected error occurred during fact-checking for statement: '{statement_to_check}'."
+            )
+            result["explanation"] = f"An internal error prevented fact-checking: {type(e).__name__}: {str(e)}"
+            # is_factual remains None, indicating an error state
+
+        return result
