@@ -1,4 +1,5 @@
 import logging
+import json
 from typing import Any, Dict, Callable, Optional
 
 from vishustra_core.nodes.base_node import BaseNode
@@ -7,124 +8,162 @@ logger = logging.getLogger(__name__)
 
 class CacheManagerNode(BaseNode):
     """
-    A Vishustra processing node designed to manage data caching operations.
+    A Vishustra processing node that manages a data cache.
 
-    This node provides functionality to:
-    1.  **Lookup and Compute (default mode):** Retrieve a value from a cache based on a key.
-        If the value is not found (cache miss), it can optionally use a provided
-        `cache_miss_handler` to compute the value, store it in the cache, and then return it.
-    2.  **Store:** Explicitly store a key-value pair into the cache.
+    This node primarily serves two functions within a Vishustra pipeline:
+    1.  **Cache Read (via `process` method):**
+        -   When `process` is called, it attempts to retrieve a value from the cache
+            using a key derived from the input `data`.
+        -   If a **cache hit** occurs, the node returns the cached value directly.
+            This action effectively short-circuits subsequent expensive computations
+            in the pipeline for this specific data path. The `context` is updated
+            with `context['cache_hit'] = True`.
+        -   If a **cache miss** occurs, the node passes the original `data` through
+            to allow subsequent nodes to perform the necessary computation. The `context`
+            is updated with `context['cache_hit'] = False` and the derived
+            `cache_key` is stored in `context['cache_key']` for potential later use.
 
-    The mode of operation (`lookup` or `store`) is determined by the 'cache_action'
-    key within the `context` dictionary.
+    2.  **Cache Write (via `store` method):**
+        -   The `store` method can be explicitly invoked (e.g., by the orchestration
+            framework or another "writer" node) to save a computed result into the cache.
+            This is typically done after a cache miss has led to a successful computation.
 
-    Context Requirements:
-    -   `'cache_store'`: (REQUIRED) A mutable dictionary-like object that serves as the cache.
-                          This should typically be shared across relevant nodes.
-    -   `'cache_action'`: (OPTIONAL, defaults to 'lookup') Specifies the action: 'lookup' or 'store'.
-
-    Specific to 'lookup' mode:
-    -   Input `data`: The key (any hashable type) to look up in the cache.
-    -   `'cache_miss_handler'`: (OPTIONAL) A callable `(key: Any, context: Dict[str, Any]) -> Any`
-                                  function that will be invoked if a cache miss occurs.
-                                  It should compute and return the desired value.
-                                  If not provided, a cache miss will result in `None` being returned
-                                  by this node, along with a warning log.
-
-    Specific to 'store' mode:
-    -   Input `data`: A dictionary `{'key': Any, 'value': Any}` containing the key
-                      under which the value should be stored.
+    The cache itself can be an internal dictionary managed by the node, or an
+    externally provided dictionary, enabling shared caching across multiple nodes.
+    A custom key extraction function can be supplied, otherwise a robust default
+    extractor is used to handle various data types.
     """
+
+    _node_name: str = "CacheManager"
+
+    def __init__(
+        self,
+        cache_store: Optional[Dict[Any, Any]] = None,
+        cache_key_extractor: Optional[Callable[[Any], Any]] = None,
+    ):
+        """
+        Initializes the CacheManagerNode.
+
+        Args:
+            cache_store (Optional[Dict[Any, Any]]): An optional dictionary to use as
+                the cache backing store. If `None`, an internal dictionary will be
+                initialized and used. This allows for sharing a cache instance across
+                multiple `CacheManagerNode` instances or for external cache management.
+            cache_key_extractor (Optional[Callable[[Any], Any]]): A callable that
+                takes the input `data` (Any) and returns a hashable key (Any) suitable
+                for caching. If `None`, a robust default extractor will be used, which
+                handles strings, numbers, and consistently serializes dictionaries.
+        """
+        self._cache_store: Dict[Any, Any] = cache_store if cache_store is not None else {}
+
+        if cache_key_extractor is None:
+            self._cache_key_extractor: Callable[[Any], Any] = self._default_key_extractor
+        elif not callable(cache_key_extractor):
+            logger.error(
+                f"{self.node_name}: Provided 'cache_key_extractor' is not a callable. "
+                "Falling back to default key extraction mechanism."
+            )
+            self._cache_key_extractor = self._default_key_extractor
+        else:
+            self._cache_key_extractor = cache_key_extractor
+
+        logger.debug(f"{self.node_name} initialized. Using cache_store type: {type(self._cache_store)}")
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
-        return "CacheManagerNode"
+        """Returns the descriptive name of the node."""
+        return self._node_name
+
+    def _default_key_extractor(self, data: Any) -> Any:
+        """
+        A robust default method to extract a cache key from input data.
+        It handles common data types for consistent key generation.
+        """
+        if isinstance(data, (str, int, float, bool)):
+            return data
+        if isinstance(data, dict):
+            try:
+                # Sort dictionary keys to ensure a consistent JSON string representation
+                # regardless of insertion order, which is crucial for cache key consistency.
+                return json.dumps(data, sort_keys=True)
+            except TypeError:
+                logger.warning(
+                    f"{self.node_name}: Could not JSON-serialize dictionary data for cache key. "
+                    f"Falling back to 'repr()'. Data type: {type(data)}"
+                )
+                return repr(data)
+        # Fallback for other complex types or objects that are not JSON serializable.
+        try:
+            return repr(data)
+        except Exception as e:
+            logger.error(
+                f"{self.node_name}: Failed to generate cache key using 'repr()' for data type "
+                f"{type(data)}: {e}. Using 'str()' as a final fallback, which may not guarantee uniqueness."
+            )
+            return str(data)
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Executes the cache management operation based on the 'cache_action' in context.
+        Processes the input data by attempting to retrieve it from the cache.
+
+        If a cache hit, the cached value is returned. If a cache miss, the original
+        data is returned, and context is updated to indicate the miss.
 
         Args:
-            data (Any):
-                - For 'lookup' action: The cache key to retrieve.
-                - For 'store' action: A dictionary `{'key': Any, 'value': Any}`.
-            context (Dict[str, Any]):
-                The operational context, containing:
-                - 'cache_store': The dictionary-like cache object.
-                - 'cache_action': The desired action ('lookup' or 'store').
-                - 'cache_miss_handler': (Optional) Callable for cache misses.
+            data (Any): The input data that needs to be processed or retrieved from cache.
+            context (Dict[str, Any]): A mutable dictionary for sharing state, metadata,
+                                      and flags across nodes in the pipeline.
+                                      This method will update `context['cache_hit']` (bool)
+                                      and `context['cache_key']` (Any).
 
         Returns:
-            Any:
-                - For 'lookup' action: The cached value, the resolved value from the handler,
-                                       or `None` if not found and no handler.
-                - For 'store' action: The value that was stored.
-
-        Raises:
-            ValueError: If 'cache_store' is missing or invalid, or if 'cache_action'
-                        is unknown, or if 'data' is malformed for 'store' action.
-            RuntimeError: If a 'cache_miss_handler' fails during execution.
+            Any: The cached value if a hit; otherwise, the original `data` is returned
+                 to allow subsequent pipeline nodes to compute the result.
         """
-        cache_store = context.get('cache_store')
-        if not isinstance(cache_store, dict):
-            logger.error(f"[{self.node_name}] Context must provide a valid 'cache_store' (dict-like object). Found type: {type(cache_store)}")
-            raise ValueError("Context must contain a 'cache_store' (dict-like object).")
+        cache_key = None
+        try:
+            cache_key = self._cache_key_extractor(data)
+        except Exception as e:
+            logger.error(
+                f"{self.node_name}: Error extracting cache key for data type {type(data)}: {e}. "
+                "Proceeding as if a cache miss and setting cache_key to None in context."
+            )
+            context["cache_hit"] = False
+            context["cache_key"] = None  # Indicate key extraction failure
+            return data
 
-        cache_action = context.get('cache_action', 'lookup')
+        context["cache_key"] = cache_key
 
-        if cache_action == 'lookup':
-            key = data
-            # Basic check for hashability. Full check requires attempting to use it as a key.
-            if not isinstance(key, (str, int, float, bool, tuple, frozenset, type(None))):
-                logger.debug(f"[{self.node_name}] Attempting to lookup with potentially unhashable key type: {type(key)}. Proceeding with caution.")
-            
-            try:
-                if key in cache_store:
-                    logger.debug(f"[{self.node_name}] Cache hit for key: '{key}'")
-                    return cache_store[key]
-                else:
-                    logger.debug(f"[{self.node_name}] Cache miss for key: '{key}'. Attempting to resolve via handler.")
-                    cache_miss_handler: Optional[Callable[[Any, Dict[str, Any]], Any]] = context.get('cache_miss_handler')
-
-                    if callable(cache_miss_handler):
-                        try:
-                            resolved_value = cache_miss_handler(key, context)
-                            cache_store[key] = resolved_value
-                            logger.info(f"[{self.node_name}] Resolved and cached value for key: '{key}'")
-                            return resolved_value
-                        except Exception as e:
-                            logger.error(f"[{self.node_name}] Error calling 'cache_miss_handler' for key '{key}': {e}", exc_info=True)
-                            raise RuntimeError(f"Failed to resolve value for key '{key}' via handler.") from e
-                    else:
-                        logger.warning(
-                            f"[{self.node_name}] Cache miss for key '{key}' and no callable "
-                            "'cache_miss_handler' provided in context. Returning None."
-                        )
-                        return None # Indicate that the value was not found and not resolved
-            except TypeError as e:
-                logger.error(f"[{self.node_name}] TypeError encountered with key '{key}'. Is it hashable? Error: {e}", exc_info=True)
-                raise ValueError(f"Invalid key type for lookup: {type(key)}. Key must be hashable.") from e
-
-        elif cache_action == 'store':
-            if not isinstance(data, dict) or 'key' not in data or 'value' not in data:
-                logger.error(f"[{self.node_name}] Invalid data for 'store' action. Expected dict with 'key' and 'value'. Got: {data}")
-                raise ValueError("For 'store' action, 'data' must be a dict containing 'key' and 'value'.")
-            
-            key_to_store = data['key']
-            value_to_store = data['value']
-
-            if not isinstance(key_to_store, (str, int, float, bool, tuple, frozenset, type(None))):
-                logger.debug(f"[{self.node_name}] Attempting to store with potentially unhashable key type: {type(key_to_store)}. Proceeding with caution.")
-            
-            try:
-                cache_store[key_to_store] = value_to_store
-                logger.info(f"[{self.node_name}] Stored value for key: '{key_to_store}'")
-                return value_to_store # Return the stored value
-            except TypeError as e:
-                logger.error(f"[{self.node_name}] TypeError encountered when storing key '{key_to_store}'. Is it hashable? Error: {e}", exc_info=True)
-                raise ValueError(f"Invalid key type for storage: {type(key_to_store)}. Key must be hashable.") from e
-
+        if cache_key in self._cache_store:
+            cached_value = self._cache_store[cache_key]
+            context["cache_hit"] = True
+            logger.debug(f"{self.node_name}: Cache hit for key '{cache_key}'. Returning cached value.")
+            return cached_value
         else:
-            logger.error(f"[{self.node_name}] Invalid 'cache_action' specified in context: '{cache_action}'. Expected 'lookup' or 'store'.")
-            raise ValueError(f"Invalid 'cache_action': '{cache_action}'.")
+            context["cache_hit"] = False
+            logger.debug(f"{self.node_name}: Cache miss for key '{cache_key}'. Passing data through.")
+            return data
+
+    def store(self, key: Any, value: Any) -> None:
+        """
+        Explicitly stores a value in the cache under the given key.
+
+        This method is designed to be called externally (e.g., by the orchestration
+        layer or another specialized "writer" node) after a computation has been
+        successfully performed following a cache miss.
+
+        Args:
+            key (Any): The unique key under which the `value` should be stored.
+                       This key should ideally be the same one generated by the
+                       `_cache_key_extractor` for the original input `data`.
+            value (Any): The computed result or data to be cached.
+        """
+        if key is None:
+            logger.warning(f"{self.node_name}: Attempted to store value with a None key. Store operation skipped.")
+            return
+
+        try:
+            self._cache_store[key] = value
+            logger.debug(f"{self.node_name}: Stored value for key '{key}'.")
+        except Exception as e:
+            logger.error(f"{self.node_name}: Failed to store value for key '{key}': {e}")
