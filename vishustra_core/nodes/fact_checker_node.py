@@ -1,128 +1,133 @@
 import logging
-from typing import Any, Dict, Union
+from typing import Any, Dict
+
+# Assuming vishustra_core exists at the root of the project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class FactCheckerNode(BaseNode):
     """
-    A processing node designed to simulate fact-checking a given textual statement.
-
-    This node expects the input `data` to be a string representing a statement.
-    It attempts to verify the factual accuracy of this statement against a set
-    of known facts. These facts can be provided via the `context` dictionary
-    or defaults to a basic internal knowledge base for demonstration purposes.
-
-    The fact-checking mechanism is a simple string matching lookup. For a real-world
-    application, this would involve sophisticated NLP, knowledge graph lookups,
-    or external API calls.
+    A processing node designed to simulate fact-checking of input statements.
+    It verifies statements against a mock knowledge base and provides a verdict
+    along with a rationale.
     """
+
+    def __init__(self):
+        """
+        Initializes the FactCheckerNode with a mock knowledge base.
+        In a real-world scenario, this would interface with a dedicated
+        fact-checking API, database, or a more sophisticated NLP model.
+        """
+        self._mock_knowledge_base: Dict[str, Dict[str, str]] = {
+            "The Earth is flat.": {"verdict": "FALSE", "rationale": "Scientific consensus and satellite imagery confirm the Earth is an oblate spheroid."},
+            "Water boils at 100 degrees Celsius at sea level.": {"verdict": "TRUE", "rationale": "This is a fundamental physical property of water at standard atmospheric pressure."},
+            "The capital of France is Paris.": {"verdict": "TRUE", "rationale": "Paris is the official capital and largest city of France."},
+            "Humans can breathe underwater indefinitely.": {"verdict": "FALSE", "rationale": "Humans are terrestrial mammals and require atmospheric oxygen to breathe."},
+            "All birds can fly.": {"verdict": "FALSE", "rationale": "Many species of birds, such as penguins and ostriches, are flightless."},
+            "The sun revolves around the Earth.": {"verdict": "FALSE", "rationale": "The Earth and other planets revolve around the Sun; this is known as heliocentrism."}
+        }
+        logger.info("FactCheckerNode initialized with mock knowledge base.")
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """
+        Returns the descriptive name of the node.
+        """
         return "FactChecker"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Union[str, bool, None]]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, treating it as a statement to be fact-checked.
+        Processes the input data to perform a simulated fact-check.
 
-        The node prioritizes 'known_facts' provided in the `context` dictionary.
-        If not present or invalid, it falls back to an internal mock knowledge base.
+        Expected `data` input:
+        A dictionary containing at least a 'statement' key with the string
+        to be fact-checked.
+        e.g., {"statement": "The Earth is flat."}
 
-        Args:
-            data: The statement to be fact-checked, expected to be a string.
-            context: A dictionary that may optionally contain a 'known_facts' key.
-                     'known_facts' should be a dictionary where keys are statements (str)
-                     and values are their corresponding boolean truth values.
+        Expected `context` input:
+        Optional, could contain parameters like 'confidence_threshold' or
+        'api_key' for a real implementation, but not used in this simulation.
 
         Returns:
-            A dictionary containing:
-            - 'original_statement': The statement that was provided for checking.
-            - 'is_factual': True if the statement is determined to be factual,
-                            False if it's determined to be non-factual, or
-                            None if its factuality could not be determined.
-            - 'explanation': A string providing details about the fact-checking outcome.
+        A dictionary containing the original statement, the fact-check verdict,
+        and a rationale.
+        e.g., {
+            "statement": "The Earth is flat.",
+            "verdict": "FALSE",
+            "rationale": "Scientific consensus and satellite imagery confirm the Earth is an oblate spheroid."
+        }
 
         Raises:
-            ValueError: If the input 'data' is not a string, indicating an invalid input type.
-            Exception: Catches and logs any unexpected errors during the fact-checking process.
+            ValueError: If the input `data` is not a dictionary or lacks a 'statement' key.
+            TypeError: If the 'statement' value is not a string.
         """
-        if not isinstance(data, str):
-            logger.error(f"FactCheckerNode received invalid data type. Expected 'str', got '{type(data).__name__}'.")
-            raise ValueError(f"Input data for FactCheckerNode must be a string. Got '{type(data).__name__}'.")
+        logger.debug(f"[{self.node_name}] Starting process for data: {data}")
 
-        statement_to_check = data.strip()
-        logger.debug(f"FactCheckerNode initiated processing for statement: '{statement_to_check}'")
+        if not isinstance(data, dict):
+            logger.error(f"[{self.node_name}] Invalid input data type. Expected dict, got {type(data)}.")
+            raise ValueError(f"Input data for FactCheckerNode must be a dictionary, but received {type(data)}.")
 
-        # --- Knowledge Base Simulation ---
-        # Prioritize 'known_facts' from the context, ensuring it's a dictionary.
-        context_known_facts = context.get("known_facts", {})
-        if not isinstance(context_known_facts, dict):
-            logger.warning(
-                "Context key 'known_facts' was found but is not a dictionary. "
-                "Ignoring context-provided facts and falling back to internal mock facts."
-            )
-            context_known_facts = {}
+        statement = data.get("statement")
+        if statement is None:
+            logger.error(f"[{self.node_name}] Missing 'statement' key in input data: {data}")
+            raise ValueError("Input dictionary must contain a 'statement' key for fact-checking.")
 
-        # Basic internal mock knowledge base for demonstration.
-        # In a production system, this would be replaced by actual data sources or APIs.
-        internal_mock_facts = {
-            "the sun is a star": True,
-            "water boils at 100 degrees celsius": True,
-            "birds can fly": True,
-            "fish can climb trees": False,
-            "mount everest is the highest mountain": True,
-            "humans have three hearts": False,
-            "the earth is flat": False,
-            "cats are mammals": True,
-            "a triangle has three sides": True,
-            "the capital of france is berlin": False, # Example of a false fact
-            "dogs lay eggs": False,
-        }
-        
-        # Merge internal mock facts with context-provided facts.
-        # Context facts take precedence in case of conflicts.
-        # All keys are converted to lower case for case-insensitive matching.
-        merged_facts = {k.lower(): v for k, v in internal_mock_facts.items()}
-        merged_facts.update({k.lower(): v for k, v in context_known_facts.items()})
+        if not isinstance(statement, str):
+            logger.error(f"[{self.node_name}] Invalid 'statement' type. Expected str, got {type(statement)}.")
+            raise TypeError(f"Value for 'statement' must be a string, but received {type(statement)}.")
 
-        # Initialize the result structure
-        result: Dict[str, Union[str, bool, None]] = {
-            "original_statement": statement_to_check,
-            "is_factual": None,
-            "explanation": "Factuality could not be determined."
+        if not statement.strip():
+            logger.warning(f"[{self.node_name}] Received an empty or whitespace-only statement.")
+            return {
+                "statement": statement,
+                "verdict": "UNVERIFIABLE",
+                "rationale": "The statement provided was empty or contained only whitespace."
+            }
+
+        result = self._mock_knowledge_base.get(statement, {
+            "verdict": "UNVERIFIABLE",
+            "rationale": "Statement not found in mock knowledge base. Cannot provide a definitive fact-check at this time."
+        })
+
+        output_data = {
+            "statement": statement,
+            "verdict": result["verdict"],
+            "rationale": result["rationale"]
         }
 
+        logger.info(f"[{self.node_name}] Fact-checked statement: '{statement}' -> Verdict: {result['verdict']}")
+        logger.debug(f"[{self.node_name}] Process completed. Output: {output_data}")
+        return output_data
+
+if __name__ == '__main__':
+    # Basic usage example and testing
+    logging.basicConfig(level=logging.INFO) # Set to DEBUG for more verbose output
+
+    fact_checker = FactCheckerNode()
+
+    # Test cases
+    test_statements = [
+        {"statement": "The Earth is flat."},
+        {"statement": "Water boils at 100 degrees Celsius at sea level."},
+        {"statement": "The capital of Germany is Berlin."}, # Not in mock DB
+        {"statement": "Humans can breathe underwater indefinitely."},
+        {"statement": ""}, # Empty statement
+        {"text": "This is not a statement key."}, # Missing key
+        "This is not a dict.", # Wrong type
+        {"statement": 123}, # Wrong type for statement value
+        {"statement": "   "} # Whitespace-only statement
+    ]
+
+    for i, test_data in enumerate(test_statements):
+        print(f"\n--- Test Case {i+1} ---")
         try:
-            # Simple case-insensitive exact match for demonstration purposes.
-            # Real-world fact-checking involves complex NLP, semantic understanding,
-            # and potentially multiple corroborating sources.
-            lower_statement = statement_to_check.lower()
-
-            if lower_statement in merged_facts:
-                is_true = merged_facts[lower_statement]
-                result["is_factual"] = is_true
-                result["explanation"] = (
-                    f"Based on available knowledge, this statement is "
-                    f"{'factual' if is_true else 'not factual'}."
-                )
-                logger.info(f"Statement '{statement_to_check}' fact-checked as {is_true}.")
-            else:
-                logger.info(
-                    f"Statement '{statement_to_check}' was not found in the available knowledge base. "
-                    f"Factuality undetermined."
-                )
-                result["explanation"] = (
-                    "The statement could not be directly verified against the available knowledge base. "
-                    "Consider expanding the 'known_facts' in the context."
-                )
-
+            processed_data = fact_checker.process(test_data, {})
+            print(f"Input: {test_data}")
+            print(f"Output: {processed_data}")
+        except (ValueError, TypeError) as e:
+            print(f"Input: {test_data}")
+            print(f"Error: {e}")
         except Exception as e:
-            logger.exception(
-                f"An unexpected error occurred during fact-checking for statement: '{statement_to_check}'."
-            )
-            result["explanation"] = f"An internal error prevented fact-checking: {type(e).__name__}: {str(e)}"
-            # is_factual remains None, indicating an error state
-
-        return result
+            print(f"Input: {test_data}")
+            print(f"An unexpected error occurred: {e}")
