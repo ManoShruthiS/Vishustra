@@ -1,129 +1,99 @@
 import logging
-import re
 from typing import Any, Dict
 
+# External dependency for markdown parsing.
+# Please ensure the 'markdown' library is installed (e.g., pip install markdown).
+import markdown
+
+# This is where BaseNode would be imported from in the Vishustra framework.
+# For the purpose of this standalone file, we'll assume this path is correct.
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class MarkdownParserNode(BaseNode):
     """
-    A processing node designed to parse Markdown text into a simplified HTML string.
-    This node implements basic Markdown-to-HTML conversion for common elements
-    like headers, paragraphs, lists, bold, and italic text.
+    A Vishustra processing node that parses Markdown text into HTML.
+
+    This node leverages the 'markdown' Python library to convert
+    Markdown formatted strings into their corresponding HTML representation.
+    It supports configurable Markdown extensions, allowing for flexible
+    parsing based on context requirements.
     """
+
+    def __init__(self):
+        """
+        Initializes the MarkdownParserNode.
+        No specific configuration is required at initialization, as
+        parsing options (like extensions) are provided via the context
+        in the process method, ensuring dynamic behavior.
+        """
+        super().__init__()
+        logger.debug("MarkdownParserNode initialized.")
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """
+        Returns the descriptive name of this node.
+        """
         return "MarkdownParser"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> str:
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, which is expected to be a Markdown string,
-        and converts it into a simplified HTML string.
+        Processes the input data, parsing Markdown content into HTML.
+
+        This method expects the 'data' parameter to be a string containing
+        Markdown formatted text. It uses the `markdown` library to perform
+        the conversion, optionally applying specified extensions and their
+        configurations from the 'context' dictionary.
 
         Args:
-            data: The input data, expected to be a string containing Markdown.
-            context: A dictionary providing runtime context. This node does
-                     not currently utilize the context, but it is required by
-                     the BaseNode interface.
+            data (Any): The input data, which must be a string containing Markdown.
+            context (Dict[str, Any]): A dictionary containing additional runtime information.
+                Expected keys in context:
+                - 'extensions' (optional, list[str]): A list of Markdown extension names
+                  to enable (e.g., ['fenced_code', 'tables']). Defaults to an empty list.
+                - 'extension_configs' (optional, dict): A dictionary mapping extension
+                  names to their configuration dictionaries. Defaults to an empty dict.
 
         Returns:
-            A string representing the processed HTML.
+            Any: A string containing the HTML representation of the input Markdown.
 
         Raises:
-            TypeError: If the input data is not a string.
-            ValueError: If an unrecoverable issue occurs during the parsing process.
+            TypeError: If the input 'data' is not a string, as Markdown parsing
+                       requires string input.
+            RuntimeError: If an unexpected error occurs during the Markdown parsing
+                          process. This typically indicates an issue with the
+                          `markdown` library or its interaction with the input.
         """
-        logger.info(f"[{self.node_name}] Starting Markdown parsing process for incoming data.")
-
         if not isinstance(data, str):
-            logger.error(
-                f"[{self.node_name}] Invalid input data type. Expected string, "
-                f"but received {type(data).__name__}. Aborting parsing."
+            error_msg = (
+                f"MarkdownParserNode received invalid input type. "
+                f"Expected 'str' for Markdown content, but got '{type(data).__name__}'."
             )
-            raise TypeError(f"Input data for {self.node_name} must be a string, got {type(data).__name__}.")
+            logger.error(error_msg)
+            raise TypeError(error_msg)
+
+        # Retrieve contextual parameters for markdown parsing
+        extensions = context.get('extensions', [])
+        extension_configs = context.get('extension_configs', {})
+
+        logger.info(
+            f"Attempting to parse markdown content with extensions: {extensions} "
+            f"and extension configurations: {extension_configs}."
+        )
 
         try:
-            markdown_text = data
-            html_lines = []
-            in_list = False
-            line_num = 0
-
-            # Normalize newlines for consistent splitting and process line by line
-            processed_lines = markdown_text.replace('\r\n', '\n').split('\n')
-
-            for line_num, line in enumerate(processed_lines):
-                stripped_line = line.strip()
-
-                if not stripped_line:
-                    # If we were in a list, close it before processing empty lines
-                    if in_list:
-                        html_lines.append('</ul>')
-                        in_list = False
-                    continue # Skip empty lines
-
-                # Headers (e.g., # H1, ## H2, ### H3, etc.)
-                header_match = re.match(r'^(#+)\s+(.*)$', stripped_line)
-                if header_match:
-                    if in_list: # Close any open list before a new block element
-                        html_lines.append('</ul>')
-                        in_list = False
-                    level = len(header_match.group(1))
-                    content = header_match.group(2).strip()
-                    html_lines.append(f"<h{level}>{content}</h{level}>")
-                    continue
-
-                # List items (unordered, e.g., - Item, * Item)
-                list_item_match = re.match(r'^[*-]\s+(.*)$', stripped_line)
-                if list_item_match:
-                    if not in_list:
-                        html_lines.append('<ul>')
-                        in_list = True
-                    content = list_item_match.group(1).strip()
-                    # Apply inline formatting within list items
-                    content = self._apply_inline_formatting(content)
-                    html_lines.append(f"<li>{content}</li>")
-                    continue
-
-                # If not a header or list item, it's treated as a paragraph
-                if in_list: # Close any open list before a new block element
-                    html_lines.append('</ul>')
-                    in_list = False
-
-                # Apply inline formatting (bold, italic) to paragraph content
-                formatted_line = self._apply_inline_formatting(stripped_line)
-                html_lines.append(f"<p>{formatted_line}</p>")
-
-            # Ensure any outstanding list is closed at the very end of the document
-            if in_list:
-                html_lines.append('</ul>')
-
-            result_html = "\n".join(html_lines)
-            
-            logger.info(f"[{self.node_name}] Successfully parsed Markdown into simplified HTML.")
-            return result_html
-        except Exception as e:
-            logger.critical(
-                f"[{self.node_name}] An unexpected error occurred during Markdown parsing at line {line_num}: {e}",
-                exc_info=True
+            # The 'markdown' library is imported at the module level.
+            # If it's not installed, an ImportError would occur during module loading.
+            html_output = markdown.markdown(
+                text=data,
+                extensions=extensions,
+                extension_configs=extension_configs
             )
-            raise ValueError(f"Failed to parse Markdown due to an internal error: {e}") from e
-
-    def _apply_inline_formatting(self, text: str) -> str:
-        """
-        Applies basic inline formatting (bold, italic) to a given string using regex.
-        This simplified implementation handles common patterns but does not attempt
-        to resolve nested or complex Markdown edge cases.
-        """
-        # Bold: **text** -> <strong>text</strong>
-        # Uses a non-greedy match (.*?) to correctly handle multiple bold instances on one line.
-        text = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', text)
-        
-        # Italic: *text* -> <em>text</em>
-        # Uses negative lookarounds to ensure it only matches single asterisks,
-        # distinguishing them from double asterisks used for bold.
-        text = re.sub(r'(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)', r'<em>\1</em>', text)
-        
-        return text
+            logger.debug("Successfully parsed markdown content to HTML.")
+            return html_output
+        except Exception as e:
+            error_msg = f"Failed to parse markdown content due to an unexpected error: {e}"
+            logger.exception(error_msg)  # Log with full traceback for debugging
+            raise RuntimeError(error_msg) from e
