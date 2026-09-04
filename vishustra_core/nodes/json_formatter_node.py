@@ -1,84 +1,103 @@
+
 import json
 import logging
 from typing import Any, Dict
 
-# Assuming BaseNode will be available via this import path in the Vishustra framework
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-
-class JSONFormatterNode(BaseNode):
+class JsonFormatterNode(BaseNode):
     """
-    A Vishustra processing node designed to format input data into a
-    JSON-compatible Python object (dictionary or list).
+    A Vishustra node that formats input data into a JSON string with customizable options.
 
-    This node primarily handles two scenarios:
-    1. Parsing a raw JSON string into its corresponding Python object.
-    2. Passing through an already existing Python dictionary or list,
-       effectively validating it as JSON-compatible.
+    This node takes any Python object that is serializable to JSON
+    (e.g., dict, list, int, string, etc.) and converts it into a
+    JSON string. If the input data is already a string, it attempts
+    to parse it as JSON first. If successful, it then re-serializes
+    the parsed object with the specified formatting options. If the
+    string cannot be parsed as valid JSON, it logs a warning and
+    returns the original string, as its structure cannot be formatted.
+
+    JSON formatting options such as `indent`, `sort_keys`, `separators`, etc.,
+    can be provided via the `context` dictionary under the key
+    `'formatter_options'`. Only valid `json.dumps` keyword arguments
+    will be utilized.
     """
-
-    def __init__(self):
-        """
-        Initializes the JSONFormatterNode.
-        No specific configuration parameters are required for its core functionality.
-        """
-        logger.debug("JSONFormatterNode initialized.")
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of this node.
-        """
-        return "JSONFormatterNode"
+        """Returns the name of the node."""
+        return "JsonFormatterNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, attempting to convert it into a JSON-compatible
-        Python object.
-
-        - If `data` is a string, it attempts to parse it as JSON.
-        - If `data` is already a dictionary or list, it is returned as is,
-          as it's already in a JSON-compatible Python format.
-        - For any other data types, a `TypeError` is raised, as they cannot be
-          directly formatted into a JSON object by this node without further
-          serialization instructions.
+        Formats the input data into a JSON string using options from context.
 
         Args:
-            data: The input data. Expected to be either a JSON string, a Python
-                  dictionary, or a Python list.
-            context: A dictionary containing contextual information relevant to the
-                     current processing pipeline. This node does not modify or
-                     directly use the context for its formatting logic.
+            data: The input data, which can be any JSON-serializable Python object.
+                  If a string, it will attempt to parse as JSON first to allow
+                  re-formatting of existing JSON structures.
+            context: A dictionary containing operational context, including
+                     optional 'formatter_options' for `json.dumps` arguments
+                     (e.g., {'indent': 2, 'sort_keys': True}).
 
         Returns:
-            The parsed Python object (a dictionary or a list) if `data` was a
-            JSON string, or the original dictionary/list if it was already one.
+            A JSON formatted string, or the original data if formatting fails
+            because the input was a non-JSON string.
 
         Raises:
-            ValueError: If `data` is a string but fails JSON parsing due to invalid syntax.
-            TypeError: If `data` is neither a string, dictionary, nor a list,
-                       indicating an unsupported input type for this formatter.
+            TypeError: If the input data (or its parsed form) is not JSON serializable.
+            Exception: For other unexpected errors during JSON serialization.
         """
-        logger.info(f"[{self.node_name}] Starting process for input data of type: {type(data).__name__}")
+        # Extract and filter formatting options for json.dumps
+        format_options = context.get('formatter_options', {})
+        
+        # Define valid kwargs for json.dumps to prevent passing unexpected arguments
+        valid_json_dumps_kwargs = {
+            'skipkeys', 'ensure_ascii', 'check_circular', 'allow_nan',
+            'cls', 'indent', 'separators', 'default', 'sort_keys'
+        }
+        
+        # Filter context options to include only valid json.dumps kwargs
+        filtered_options = {k: v for k, v in format_options.items() if k in valid_json_dumps_kwargs}
+
+        obj_to_serialize = data
 
         if isinstance(data, str):
             try:
-                processed_data = json.loads(data)
-                logger.debug(f"[{self.node_name}] Successfully parsed JSON string into Python object.")
-                return processed_data
-            except json.JSONDecodeError as e:
-                logger.error(f"[{self.node_name}] Failed to parse JSON string: {e}. "
-                             f"Input data snippet: '{data[:200]}...'")
-                raise ValueError(f"Input string is not valid JSON: {e}") from e
-        elif isinstance(data, (dict, list)):
-            logger.debug(f"[{self.node_name}] Data is already a dictionary or list; returning as is.")
-            return data
-        else:
-            logger.error(f"[{self.node_name}] Unsupported data type for JSON formatting: {type(data).__name__}. "
-                         f"Expected str, dict, or list.")
-            raise TypeError(
-                f"Unsupported data type for {self.node_name}. Expected 'str', 'dict', or 'list', "
-                f"but received '{type(data).__name__}'."
-            )
+                # If the input is a string, attempt to parse it as JSON first.
+                # This allows re-formatting of an already JSON-encoded string.
+                obj_to_serialize = json.loads(data)
+                logger.debug(f"Input string successfully parsed as JSON for re-formatting.")
+            except json.JSONDecodeError:
+                # If the string is not valid JSON, we cannot apply structural formatting.
+                # Log a warning and return the original string.
+                logger.warning(
+                    f"Input string is not valid JSON and cannot be structured-formatted. "
+                    f"Returning original string. Data snippet: '{data[:200]}'"
+                )
+                return data
+            except Exception as e:
+                # Catch any other unexpected errors during string parsing
+                logger.error(
+                    f"Unexpected error while attempting to parse input string as JSON: {e}. "
+                    f"Returning original string. Data snippet: '{data[:200]}'"
+                )
+                return data
+
+        try:
+            # Serialize the (potentially parsed) object into a JSON string
+            json_string = json.dumps(obj_to_serialize, **filtered_options)
+            logger.debug(f"Data successfully formatted as JSON.")
+            return json_string
+        except TypeError as e:
+            # This error occurs if the Python object itself cannot be serialized to JSON
+            logger.error(f"Input data (or its parsed form) is not JSON serializable: {e}. "
+                         f"Data type: {type(obj_to_serialize)}. Value: {str(obj_to_serialize)[:200]}")
+            raise # Re-raise to signal a critical issue with data content
+        except Exception as e:
+            # Catch any other unexpected serialization errors
+            logger.error(f"An unexpected error occurred during JSON serialization: {e}. "
+                         f"Data type: {type(obj_to_serialize)}. Value: {str(obj_to_serialize)[:200]}")
+            raise # Re-raise to signal a critical issue
