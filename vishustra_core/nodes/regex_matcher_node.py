@@ -1,97 +1,119 @@
 import re
 import logging
-from typing import Any, Dict, Optional, Pattern, Union
+from typing import Any, Dict, List, Union
 
-# Assuming vishustra_core is a package at the project root level
-# For local testing or specific environments, one might need to adjust sys.path or
-# ensure the package is installable. In a modular framework like Vishustra,
-# this import path implies the structure.
+# Assuming BaseNode is available in this path from the project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class RegexMatcherNode(BaseNode):
     """
-    A Vishustra processing node that performs a regular expression search
-    on the input data.
-
-    This node expects the input `data` to be a string. It attempts to find
-    a match for a pre-configured regex pattern within the input.
-
-    The node returns an `re.Match` object if a match is found, otherwise `None`.
-    It initializes with the regex pattern and optional flags, compiling the
-    pattern once for efficiency.
+    A Vishustra processing node that performs regex matching on input data.
+    
+    This node can match a single string or a list of strings against a
+    specified regular expression pattern. It supports optional flags and
+    can be configured to return only the first match or all matches found.
+    
+    Context parameters:
+    - `regex_pattern` (str): The regular expression pattern to use for matching. (Required)
+    - `flags` (int, optional): Regex flags (e.g., re.IGNORECASE, re.MULTILINE). Defaults to 0.
+    - `return_first_match_only` (bool, optional): If True, only the first
+      occurrence of a match for each input string is returned. If False,
+      all non-overlapping matches are returned. Defaults to False.
     """
-
-    _compiled_pattern: Pattern[str]
-
-    def __init__(self, pattern: str, flags: int = 0):
-        """
-        Initializes the RegexMatcherNode with a regex pattern and optional flags.
-
-        Args:
-            pattern: The regular expression string to be compiled and used for matching.
-            flags: Optional regex flags (e.g., re.IGNORECASE, re.MULTILINE).
-                   Defaults to 0 (no flags).
-
-        Raises:
-            re.error: If the provided pattern is an invalid regular expression.
-        """
-        if not isinstance(pattern, str) or not pattern:
-            raise ValueError("Regex pattern must be a non-empty string.")
-
-        try:
-            self._compiled_pattern = re.compile(pattern, flags)
-            logger.debug(f"RegexMatcherNode initialized with pattern: '{pattern}' and flags: {flags}")
-        except re.error as e:
-            logger.error(f"Failed to compile regex pattern '{pattern}': {e}")
-            raise
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
-        return "RegexMatcherNode"
+        """Returns the descriptive name of the node."""
+        return "RegexMatcher"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Optional[re.Match[str]]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Union[List[str], List[List[str]]]:
         """
-        Processes the input data by attempting to find a match for the
-        configured regular expression pattern.
+        Processes the input data by applying a regex pattern and extracting matches.
 
         Args:
-            data: The input data to search within. Expected to be a string.
-            context: A dictionary containing contextual information for the node.
-                     Not directly used for the matching logic in this node,
-                     but available for potential future extensions or logging.
+            data (Any): The input data, expected to be a string or a list of strings.
+            context (Dict[str, Any]): A dictionary containing node-specific parameters.
+                Must include 'regex_pattern'. Can optionally include 'flags' (int)
+                and 'return_first_match_only' (bool).
 
         Returns:
-            An `re.Match` object if the pattern is found in the data, otherwise `None`.
-            Returns `None` and logs a warning if `data` is not a string.
+            Union[List[str], List[List[str]]]:
+                - If `data` is a string: A list of matched strings from the input.
+                  (Returns an empty list if no matches are found).
+                - If `data` is a list of strings: A list where each element is
+                  a list of matched strings corresponding to an item in the input list.
+                  Non-string items in the input list will result in an empty list
+                  at their corresponding position in the output.
+
+        Raises:
+            ValueError: If 'regex_pattern' is missing from the context, is not a valid
+                        string, or if the provided pattern is syntactically invalid.
+            TypeError: If the input 'data' is not a string or a list of strings.
         """
-        if not isinstance(data, str):
+        regex_pattern = context.get("regex_pattern")
+        if not isinstance(regex_pattern, str) or not regex_pattern:
+            logger.error("Context missing required 'regex_pattern' or it is not a valid non-empty string.")
+            raise ValueError("RegexMatcherNode requires a 'regex_pattern' string in the context.")
+
+        flags = context.get("flags", 0)
+        if not isinstance(flags, int):
             logger.warning(
-                f"[{self.node_name}] Received non-string data of type '{type(data).__name__}'. "
-                "Regex matching requires string input. Returning None."
+                f"Provided 'flags' in context is not an integer ({type(flags).__name__}). "
+                "Defaulting to 0 (no flags) for regex compilation."
             )
-            return None
+            flags = 0
+
+        return_first_match_only = context.get("return_first_match_only", False)
+        if not isinstance(return_first_match_only, bool):
+            logger.warning(
+                f"Provided 'return_first_match_only' in context is not a boolean "
+                f"({type(return_first_match_only).__name__}). Defaulting to False."
+            )
+            return_first_match_only = False
 
         try:
-            match = self._compiled_pattern.search(data)
-            if match:
-                logger.debug(
-                    f"[{self.node_name}] Match found for pattern '{self._compiled_pattern.pattern}' "
-                    f"in data snippet: '{data[:50]}...'"
-                )
-            else:
-                logger.debug(
-                    f"[{self.node_name}] No match found for pattern '{self._compiled_pattern.pattern}' "
-                    f"in data snippet: '{data[:50]}...'"
-                )
-            return match
-        except Exception as e:
-            # Catching general exceptions here to be robust against unexpected issues
-            # during the search operation, though re.search is usually stable.
+            compiled_regex = re.compile(regex_pattern, flags)
+        except re.error as e:
+            logger.error(f"Invalid regex pattern '{regex_pattern}' provided: {e}")
+            raise ValueError(f"Invalid regex pattern provided: {e}") from e
+
+        if isinstance(data, str):
+            return self._match_single_string(data, compiled_regex, return_first_match_only)
+        elif isinstance(data, list):
+            results: List[List[str]] = []
+            for item in data:
+                if isinstance(item, str):
+                    results.append(self._match_single_string(item, compiled_regex, return_first_match_only))
+                else:
+                    logger.warning(
+                        f"Skipping non-string item of type '{type(item).__name__}' "
+                        f"in input list for RegexMatcherNode. Returning an empty list for this item."
+                    )
+                    results.append([])
+            return results
+        else:
             logger.error(
-                f"[{self.node_name}] An unexpected error occurred during regex search: {e}",
-                exc_info=True
+                f"RegexMatcherNode received unsupported data type: {type(data).__name__}. "
+                "Expected string or list of strings for processing."
             )
-            return None
+            raise TypeError("Input 'data' must be a string or a list of strings.")
+
+    def _match_single_string(self, text: str, compiled_regex: 're.Pattern[str]', return_first_match_only: bool) -> List[str]:
+        """
+        Helper method to apply the compiled regex to a single string.
+
+        Args:
+            text (str): The string to apply the regex to.
+            compiled_regex (re.Pattern[str]): The pre-compiled regular expression object.
+            return_first_match_only (bool): If True, returns only the first match found.
+
+        Returns:
+            List[str]: A list of matched strings. Will be empty if no matches are found.
+        """
+        if return_first_match_only:
+            match = compiled_regex.search(text)
+            return [match.group(0)] if match else []
+        else:
+            return compiled_regex.findall(text)
