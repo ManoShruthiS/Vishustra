@@ -1,106 +1,104 @@
-import logging
-from typing import Any, Dict, List, Tuple
-
 from vishustra_core.nodes.base_node import BaseNode
+from typing import Any, Dict, List, Tuple
+import logging
 
 logger = logging.getLogger(__name__)
 
-
 class IntentClassifierNode(BaseNode):
     """
-    A Vishustra processing node that simulates intent classification from a user query.
+    A Vishustra node that classifies the intent of a given text input.
 
-    This node takes a string as input and attempts to classify its underlying intent
-    based on predefined keyword rules. In a production environment, this would
-    typically leverage a machine learning model.
+    It uses a set of predefined rules (keywords/phrases mapped to intents)
+    to determine the user's intent. Rules can be provided at instantiation
+    or dynamically through the context of the process method.
     """
 
-    def __init__(self):
-        """
-        Initializes the IntentClassifierNode.
+    _DEFAULT_INTENT_RULES: Dict[str, List[str]] = {
+        "greeting": ["hello", "hi", "hey", "good morning", "good evening"],
+        "farewell": ["bye", "goodbye", "see you", "farewell"],
+        "order_status": ["where is my order", "order status", "track my package", "delivery date"],
+        "product_info": ["tell me about", "what is", "product details", "specifications of", "info on"],
+        "account_management": ["change password", "update profile", "my account"],
+        "support_request": ["help me", "support", "i have a problem", "contact agent"],
+    }
+    _DEFAULT_FALLBACK_INTENT: str = "general_query"
 
-        In a real-world scenario, this constructor would load a trained intent
-        classification model, configuration, or external resources. For this
-        simulation, it sets up a simple dictionary of keyword-to-intent mappings.
+    def __init__(self,
+                 initial_intent_rules: Dict[str, List[str]] = None,
+                 default_fallback_intent: str = None) -> None:
         """
-        super().__init__()
-        # Simulate a small set of intent classification rules based on keywords.
-        # This acts as our "model" for demonstration purposes.
-        self._intent_rules: List[Tuple[str, str]] = [
-            ("order", "place_order"),
-            ("buy", "place_order"),
-            ("purchase", "place_order"),
-            ("status", "check_order_status"),
-            ("track", "check_order_status"),
-            ("delivery", "check_order_status"),
-            ("hello", "greet"),
-            ("hi", "greet"),
-            ("hey", "greet"),
-            ("thank you", "express_gratitude"),
-            ("thanks", "express_gratitude"),
-            ("support", "contact_support"),
-            ("help", "contact_support"),
-            ("agent", "contact_support"),
-            ("cancel", "cancel_order"),
-            ("return", "initiate_return"),
-        ]
-        logger.info(f"Initialized {self.node_name} with {len(self._intent_rules)} simulated intent rules.")
+        Initializes the IntentClassifierNode with optional intent rules.
+
+        Args:
+            initial_intent_rules: A dictionary mapping intent names to lists of keywords/phrases.
+                                  If None, default rules are used.
+            default_fallback_intent: The intent to return if no match is found.
+                                     If None, '_DEFAULT_FALLBACK_INTENT' is used.
+        """
+        self._intent_rules = initial_intent_rules if initial_intent_rules is not None else self._DEFAULT_INTENT_RULES
+        self._default_fallback_intent = default_fallback_intent if default_fallback_intent is not None else self._DEFAULT_FALLBACK_INTENT
+        logger.info(f"Initialized IntentClassifierNode with {len(self._intent_rules)} default intent rules.")
+        logger.debug(f"Default intents: {list(self._intent_rules.keys())}")
+
 
     @property
     def node_name(self) -> str:
         """Returns the name of the node."""
         return "IntentClassifier"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
+    def process(self, data: Any, context: Dict[str, Any]) -> str:
         """
-        Processes the input data (user query) to classify its intent.
+        Processes the input data (a user query string) to classify its intent.
 
-        The method expects the `data` to be a string representing a user's natural
-        language query. It then applies simple keyword matching to determine a
-        likely intent and a simulated confidence score.
+        The classification rules can be overridden or extended via the 'context' dictionary.
+        - `context['intent_rules']`: A dictionary of intent rules to use for this specific call.
+                                     If provided, it completely replaces the node's configured rules.
+        - `context['default_fallback_intent']`: The intent to return if no match is found.
+                                                 If provided, it overrides the node's configured default.
 
         Args:
-            data: The input data, expected to be a string representing the user's query.
-            context: A dictionary containing contextual information for processing.
-                     (Currently not used by this simulated node, but available for extensions).
+            data: The input text string (e.g., user query) to classify.
+            context: A dictionary containing additional runtime information or configuration,
+                     such as dynamic intent rules.
 
         Returns:
-            A dictionary containing the classified 'intent' and a 'confidence' score.
-            Example: `{'intent': 'place_order', 'confidence': 0.95}`
-            If no specific intent is matched, it defaults to `unknown` with lower confidence.
+            A string representing the classified intent. Returns the fallback intent
+            if no specific intent is detected.
 
         Raises:
-            ValueError: If the input 'data' is not a string, indicating an incorrect
-                        data type for this node's operation.
+            ValueError: If the input 'data' is not a string.
+            TypeError: If 'intent_rules' provided in context is not a dictionary.
         """
         if not isinstance(data, str):
-            error_msg = (
-                f"Invalid input data type for {self.node_name}. Expected string for query, "
-                f"but received {type(data).__name__}."
-            )
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            logger.error(f"IntentClassifierNode received non-string data: {type(data)}. Expected string.")
+            raise ValueError(f"Input data must be a string, but received {type(data).__name__}.")
 
-        query = data.lower().strip()
-        classified_intent = "unknown"
-        confidence = 0.5  # Default confidence for unknown intent or no match
+        current_intent_rules = self._intent_rules
+        fallback_intent = self._default_fallback_intent
 
-        if not query:
-            logger.warning(
-                f"Received an empty query in {self.node_name}. Classifying as 'unknown' with minimal confidence."
-            )
-            return {"intent": "unknown", "confidence": 0.1}
+        if 'intent_rules' in context:
+            if not isinstance(context['intent_rules'], dict):
+                logger.error(f"Context 'intent_rules' must be a dictionary, but received {type(context['intent_rules']).__name__}.")
+                raise TypeError("Context 'intent_rules' must be a dictionary.")
+            current_intent_rules = context['intent_rules']
+            logger.debug("Using dynamic intent rules from context.")
+        else:
+            logger.debug("Using node's configured intent rules.")
 
-        # Apply simulated keyword-based intent classification
-        for keyword, intent in self._intent_rules:
-            if keyword in query:
-                classified_intent = intent
-                confidence = 0.95  # High confidence for a direct keyword match
-                break  # Take the first matching rule
+        if 'default_fallback_intent' in context and isinstance(context['default_fallback_intent'], str):
+            fallback_intent = context['default_fallback_intent']
+            logger.debug(f"Using dynamic fallback intent '{fallback_intent}' from context.")
+        else:
+            logger.debug(f"Using node's configured fallback intent '{fallback_intent}'.")
 
-        logger.info(
-            f"Query '{data}' processed by {self.node_name}, classified as intent "
-            f"'{classified_intent}' with confidence {confidence:.2f}."
-        )
+        normalized_query = data.lower().strip()
+        logger.debug(f"Attempting to classify intent for query: '{normalized_query}'")
 
-        return {"intent": classified_intent, "confidence": confidence}
+        for intent, keywords in current_intent_rules.items():
+            for keyword in keywords:
+                if keyword.lower() in normalized_query:
+                    logger.info(f"Classified intent as '{intent}' for query: '{normalized_query}' (matched keyword: '{keyword}')")
+                    return intent
+
+        logger.info(f"No specific intent found for query: '{normalized_query}'. Falling back to '{fallback_intent}'.")
+        return fallback_intent
