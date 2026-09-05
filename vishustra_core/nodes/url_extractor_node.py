@@ -1,71 +1,86 @@
-import re
 import logging
-from typing import Any, Dict, List
-
-# Assume vishustra_core.nodes.base_node exists and contains BaseNode
+import re
+from typing import Any, Dict, List, Set
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class URLExtractorNode(BaseNode):
     """
-    A Vishustra processing node that extracts URLs from text data.
+    A Vishustra node that extracts URLs from input text data.
 
-    It uses a regular expression to find common URL patterns, including
-    http(s):// and www. prefixes, and returns a list of all unique URLs found.
+    This node can process a single string or an iterable of strings,
+    identifying and returning all unique URLs found.
     """
-
-    _URL_PATTERN = re.compile(
-        r'https?:\/\/(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&\/\/=]*)',
-        re.IGNORECASE
-    )
-    # A slightly broader pattern to also catch 'www.' without a scheme
-    _BROADER_URL_PATTERN = re.compile(
-        r'(?:https?:\/\/|www\.)(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+',
-        re.IGNORECASE
-    )
-
 
     @property
     def node_name(self) -> str:
         """Returns the name of the node."""
-        return "URLExtractor"
+        return "URL Extractor"
 
     def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
         Extracts URLs from the input data.
 
+        The input `data` can be:
+        - A single string: URLs are extracted directly from this string.
+        - An iterable of strings (e.g., list, tuple, set): URLs are extracted
+          from each string in the iterable.
+        - Any other type: An empty list is returned, and a warning is logged.
+
         Args:
-            data (Any): The input data, expected to be a string containing text.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                       for the processing. Not directly used by this node.
+            data: The input data to process, expected to be a string or iterable of strings.
+            context: A dictionary containing contextual information (not used by this node,
+                     but required by BaseNode interface).
 
         Returns:
-            List[str]: A list of unique URLs found in the data. Returns an empty
-                       list if no URLs are found or if the input data is not a string.
-
-        Raises:
-            TypeError: If the input `data` is not a string.
+            A list of unique URLs found in the input data, sorted for consistent output.
         """
-        if not isinstance(data, str):
-            error_msg = f"URLExtractorNode expects input 'data' to be a string, but received type {type(data).__name__}."
-            logger.error(error_msg, extra={"node_name": self.node_name, "input_type": type(data).__name__})
-            raise TypeError(error_msg)
+        extracted_urls: Set[str] = set()
+        
+        # Regex pattern for identifying URLs.
+        # This pattern is designed to be robust, capturing URLs starting with http(s):// or www.,
+        # and handling various common characters found in paths, queries, and fragments,
+        # while being mindful of surrounding punctuation by using word boundaries and
+        # non-space/non-bracket characters. It's a commonly used pattern for general
+        # URL extraction from unstructured text.
+        url_pattern = re.compile(
+            r'(?i)\b((?:https?://|www\d{0,3}[.]|[a-z0-9.\-]+[.][a-z]{2,4}/)(?:[^\s()<>]+|\(([^\s()<>]+|(\([^\s()<>]+\)))*\))+(?:\(([^\s()<>]+|(\([^\s()<>]+\)))*\)|[^\s`!()\[\]{};:\'".,<>?«»“”‘’]))'
+        )
+        
+        try:
+            if isinstance(data, str):
+                for match in re.finditer(url_pattern, data):
+                    extracted_urls.add(match.group(0)) # group(0) is the entire match
 
-        if not data.strip():
-            logger.debug("Input data is empty or whitespace only, no URLs to extract.", extra={"node_name": self.node_name})
+            elif isinstance(data, (list, tuple, set)):
+                for item in data:
+                    if isinstance(item, str):
+                        for match in re.finditer(url_pattern, item):
+                            extracted_urls.add(match.group(0))
+                    else:
+                        logger.warning(
+                            f"URLExtractorNode encountered non-string item of type "
+                            f"{type(item).__name__} within an iterable. Skipping item: {item!r}"
+                        )
+            else:
+                logger.warning(
+                    f"URLExtractorNode received unsupported data type: {type(data).__name__}. "
+                    "Expected str or iterable of str. Returning empty list."
+                )
+                return []
+
+            num_urls = len(extracted_urls)
+            if num_urls > 0:
+                logger.info(f"Successfully extracted {num_urls} unique URLs.")
+            else:
+                logger.debug("No URLs found in the input data.")
+
+            # Return a sorted list for consistent and predictable output.
+            return sorted(list(extracted_urls))
+
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during URL extraction: {e}", exc_info=True)
+            # In case of an unexpected error, return an empty list to allow the
+            # pipeline to continue gracefully, while logging the error for diagnosis.
             return []
-
-        # Find all matches using the robust URL pattern
-        urls_found = self._BROADER_URL_PATTERN.findall(data)
-
-        # Ensure unique URLs and clean up potential trailing characters if any regex is too greedy
-        # A set is used to easily handle uniqueness
-        unique_urls = sorted(list(set(urls_found)))
-
-        if not unique_urls:
-            logger.debug("No URLs found in the provided text.", extra={"node_name": self.node_name})
-        else:
-            logger.info(f"Successfully extracted {len(unique_urls)} unique URLs.", extra={"node_name": self.node_name, "num_urls": len(unique_urls)})
-
-        return unique_urls
