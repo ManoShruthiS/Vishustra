@@ -1,78 +1,89 @@
 import logging
 from typing import Any, Dict
 
-# Assuming this path exists in the Vishustra project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class SentimentAnalyzerNode(BaseNode):
     """
-    A Vishustra processing node that simulates sentiment analysis on input text.
-    It categorizes text into 'positive', 'negative', or 'neutral' based on simple
-    keyword detection.
-    """
+    A processing node that analyzes the sentiment of input text data.
 
-    def __init__(self):
-        """
-        Initializes the SentimentAnalyzerNode.
-        In a real-world scenario, this would load an NLP model or client.
-        """
-        logger.debug("SentimentAnalyzerNode initialized, ready for text analysis.")
+    This node simulates sentiment analysis by identifying keywords within the
+    input text and categorizing the sentiment as positive, negative, or neutral.
+    It expects a string as input and returns a dictionary containing the
+    original text, the detected sentiment, and a placeholder score.
+    """
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of this node.
-        """
+        """Returns the name of the node."""
         return "SentimentAnalyzer"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input data to determine its sentiment.
+        Analyzes the sentiment of the input text data.
+
+        Expected `data` type: `str`.
+        Expected `context` keys: None specific for this node's core logic,
+        but available for future extensions or metadata.
 
         Args:
-            data (Any): The input data, expected to be a string containing text
-                        for sentiment analysis.
+            data (Any): The input data, expected to be a string containing text.
             context (Dict[str, Any]): A dictionary containing contextual information
-                                       relevant to the current execution flow.
+                                      for the current processing flow.
 
         Returns:
-            Dict[str, Any]: A dictionary containing the original text and its
-                            determined sentiment ('positive', 'negative', 'neutral').
-
-        Raises:
-            TypeError: If the input 'data' is not a string.
+            Dict[str, Any]: A dictionary containing the analysis results, with keys:
+                            - "text": The original input text.
+                            - "sentiment": "positive", "negative", or "neutral".
+                            - "score": A placeholder float representing sentiment strength.
+                            - "error": (Optional) An error message if processing failed.
         """
         if not isinstance(data, str):
-            error_msg = (
-                f"[{self.node_name}] Invalid input data type. "
-                f"Expected 'str', but received '{type(data).__name__}'."
-            )
-            logger.error(error_msg)
-            raise TypeError(error_msg)
+            error_msg = f"SentimentAnalyzerNode received non-string data. Expected string, got {type(data).__name__}."
+            logger.warning(error_msg)
+            return {
+                "text": str(data),
+                "sentiment": "error",
+                "score": 0.0,
+                "error": error_msg
+            }
 
-        text_to_analyze = data.lower()
+        text = data.lower()
         sentiment = "neutral"
+        score = 0.0
 
-        # Simulate sentiment detection using a simple keyword-based approach
-        positive_keywords = ["good", "great", "excellent", "happy", "love", "awesome", "fantastic"]
-        negative_keywords = ["bad", "terrible", "awful", "sad", "hate", "poor", "disappointing"]
+        positive_keywords = ["great", "excellent", "good", "happy", "love", "awesome", "positive", "fine", "super"]
+        negative_keywords = ["bad", "terrible", "poor", "sad", "hate", "awful", "negative", "horrible", "ugly"]
 
-        if any(keyword in text_to_analyze for keyword in positive_keywords):
-            sentiment = "positive"
-        elif any(keyword in text_to_analyze for keyword in negative_keywords):
+        has_positive = any(keyword in text for keyword in positive_keywords)
+        has_negative = any(keyword in text for keyword in negative_keywords)
+
+        if has_negative and not has_positive:
             sentiment = "negative"
-        # If no strong positive or negative indicators, it defaults to neutral
+            score = -0.8  # Placeholder score
+        elif has_positive and not has_negative:
+            sentiment = "positive"
+            score = 0.8   # Placeholder score
+        elif has_positive and has_negative:
+            # For simplicity, if both positive and negative keywords are present,
+            # we can make a heuristic decision or mark as mixed/neutral.
+            # Here, we'll lean towards negative if present as a common simple model strategy.
+            sentiment = "negative" if has_negative else "positive"
+            score = -0.1 if has_negative else 0.1
+            if not has_positive and not has_negative:
+                sentiment = "neutral"
+                score = 0.0
+            logger.debug(f"Sentiment analysis for '{data[:50]}...' detected both positive and negative keywords, defaulting to '{sentiment}'.")
+        else:
+            sentiment = "neutral"
+            score = 0.0
 
-        result = {
-            "original_text": data,
+        logger.info(f"Analyzed sentiment for '{data[:50]}...' as '{sentiment}' with score {score:.2f}.")
+
+        return {
+            "text": data,
             "sentiment": sentiment,
-            "node_processed_by": self.node_name
+            "score": score
         }
-
-        logger.info(
-            f"[{self.node_name}] Processed text (first 50 chars): "
-            f"'{data[:50]}{'...' if len(data) > 50 else ''}' -> Sentiment: '{sentiment}'"
-        )
-        return result
