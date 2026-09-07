@@ -1,92 +1,179 @@
 import logging
-from typing import Any, Dict, Callable
+from typing import Any, Dict, Type, Union
 
-# Assuming BaseNode is available at this path as per project context
+# Assuming this path structure for the base node
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class DataValidatorNode(BaseNode):
     """
-    A Vishustra processing node responsible for validating input data.
+    A Vishustra processing node that validates input data against a defined schema
+    provided in the context. This node ensures data integrity and conformity to
+    expected structures before further processing.
 
-    This node ensures data integrity by applying a user-defined validation callable
-    to the incoming data. If the data passes validation, it is returned unchanged.
-    If it fails, a ValueError is raised, halting further processing for that data.
-    The validation callable can be highly customized to enforce various rules,
-    from schema checks to business logic constraints.
+    Expected `context` structure for validation configuration:
+    ```python
+    {
+        "validation_config": {
+            "expected_type": <Type>,  # e.g., dict, list, str, int. This is mandatory.
+            "schema": {               # Optional: For dict-like data structures.
+                                      # If expected_type is dict but schema is absent,
+                                      # only the overall type check is performed.
+                "field_name_1": {
+                    "type": <Type>,           # e.g., str, int, bool.
+                    "required": bool,         # Default: False. If True, field must exist.
+                    "min_value": Union[int, float], # For numeric types.
+                    "max_value": Union[int, float], # For numeric types.
+                    "min_length": int,        # For string/list/dict types.
+                    "max_length": int,        # For string/list/dict types.
+                    # Add more validation rules as needed (e.g., regex, choices, custom_validator_func).
+                },
+                "field_name_2": { ... },
+                # ... other fields
+            }
+        }
+    }
+    ```
+    If `validation_config` or `expected_type` is missing/invalid, a `ValueError` will be raised.
     """
-
-    def __init__(self, validation_callable: Callable[[Any, Dict[str, Any]], bool]):
-        """
-        Initializes the DataValidatorNode with a specific validation function.
-
-        The `validation_callable` will be invoked with the `data` and `context`
-        during the `process` method. It is expected to return `True` for valid
-        data and `False` for invalid data.
-
-        Args:
-            validation_callable (Callable[[Any, Dict[str, Any]], bool]):
-                A callable (function or lambda) that takes two arguments:
-                1. `data` (Any): The input data to be validated.
-                2. `context` (Dict[str, Any]): The current processing context.
-                It must return a boolean: `True` if the data is valid, `False` otherwise.
-
-        Raises:
-            TypeError: If the provided `validation_callable` is not actually callable.
-        """
-        if not callable(validation_callable):
-            logger.error("Attempted to initialize DataValidatorNode with a non-callable validation_callable.")
-            raise TypeError("`validation_callable` must be a callable function or lambda.")
-        
-        self._validation_callable = validation_callable
-        callable_name = getattr(validation_callable, '__name__', 'anonymous_callable')
-        logger.debug(f"[{self.node_name}] Initialized with validation callable: '{callable_name}'.")
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "DataValidatorNode"
+        """Returns the name of the node."""
+        return "DataValidator"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Executes the configured validation callable against the input data.
-
-        If the data passes validation (i.e., the `validation_callable` returns `True`),
-        the original data is returned. Otherwise, a `ValueError` is raised.
-        Any exceptions occurring within the `validation_callable` itself are
-        caught and re-raised as a `ValueError` for consistent error handling.
+        Validates the input data based on rules specified in the context.
 
         Args:
-            data (Any): The data payload to be validated.
-            context (Dict[str, Any]): The immutable context dictionary for the current run.
+            data: The input data to be validated.
+            context: A dictionary containing validation configuration.
+                     Must include "validation_config" with "expected_type".
+                     Optionally includes a "schema" for detailed validation of
+                     dict-like data structures.
 
         Returns:
-            Any: The original `data` if it successfully passes all validation rules.
+            The original `data`, if all validation checks pass.
 
         Raises:
-            ValueError: If the data fails validation or if an unexpected error
-                        occurs during the validation process.
+            ValueError: If validation configuration is missing or invalid,
+                        or if the input data fails any validation rule.
         """
-        node_identifier = context.get('current_node_id', self.node_name)
-        logger.info(f"[{node_identifier}] Starting data validation process.")
+        logger.debug("DataValidatorNode received data for validation.")
 
-        try:
-            is_valid = self._validation_callable(data, context)
-            
-            if is_valid:
-                logger.debug(f"[{node_identifier}] Data successfully passed validation.")
-                return data
-            else:
-                error_message = f"[{node_identifier}] Data failed validation checks. Input data deemed invalid."
-                logger.warning(error_message)
-                raise ValueError(error_message)
-                
-        except Exception as e:
-            # Catching general exceptions from the validation_callable itself
-            error_message = (
-                f"[{node_identifier}] An unexpected error occurred during "
-                f"execution of the validation callable: {e!r}"
+        validation_config = context.get("validation_config")
+        if not validation_config or not isinstance(validation_config, dict):
+            logger.error("Validation configuration is missing or malformed in the context for DataValidatorNode.")
+            raise ValueError("Missing or invalid 'validation_config' in context. Cannot validate data.")
+
+        expected_type: Type = validation_config.get("expected_type")
+        if not isinstance(expected_type, type):
+            logger.error(f"Invalid 'expected_type' in validation_config: {expected_type!r}. Must be a type object.")
+            raise ValueError(f"Invalid 'expected_type' in validation_config: {expected_type!r}. Must be a type object.")
+
+        # 1. Overall type validation
+        if not isinstance(data, expected_type):
+            logger.warning(
+                f"Data type mismatch. Expected '{expected_type.__name__}', got '{type(data).__name__}'."
             )
-            logger.error(error_message, exc_info=True)
-            raise ValueError(error_message) from e
+            raise ValueError(
+                f"Data validation failed: Expected type '{expected_type.__name__}',"
+                f" but received '{type(data).__name__}'."
+            )
+        logger.debug(f"Overall type validation passed: Data is of type '{expected_type.__name__}'.")
+
+        # 2. Schema-based validation for dict-like data
+        if expected_type is dict:
+            schema: Dict[str, Dict[str, Any]] = validation_config.get("schema", {})
+            if not schema:
+                logger.debug("No specific schema provided for dictionary data. Only overall type checked.")
+                # If no schema, and it's a dict, overall type check is sufficient.
+                logger.info("Data validated successfully (overall type check only).")
+                return data
+
+            for field_name, rules in schema.items():
+                if not isinstance(rules, dict):
+                    logger.error(f"Schema rules for field '{field_name}' are malformed. Expected a dictionary.")
+                    raise ValueError(f"Validation failed: Malformed schema rules for field '{field_name}'.")
+
+                is_required = rules.get("required", False)
+                field_type = rules.get("type")
+
+                if is_required and field_name not in data:
+                    logger.warning(f"Required field '{field_name}' is missing from data.")
+                    raise ValueError(f"Validation failed: Required field '{field_name}' is missing.")
+
+                if field_name in data:
+                    field_value = data[field_name]
+
+                    # Field type validation
+                    if field_type and not isinstance(field_value, field_type):
+                        logger.warning(
+                            f"Field '{field_name}' type mismatch. Expected '{field_type.__name__}', "
+                            f"got '{type(field_value).__name__}'. Value: {field_value!r}"
+                        )
+                        raise ValueError(
+                            f"Validation failed for field '{field_name}': Expected type '{field_type.__name__}',"
+                            f" but received '{type(field_value).__name__}'."
+                        )
+
+                    # Value constraints (numeric types)
+                    if isinstance(field_value, (int, float)):
+                        min_value = rules.get("min_value")
+                        max_value = rules.get("max_value")
+
+                        if min_value is not None and not isinstance(min_value, (int, float)):
+                            logger.warning(f"Invalid 'min_value' type for field '{field_name}'. Skipping check.")
+                        elif min_value is not None and field_value < min_value:
+                            logger.warning(
+                                f"Field '{field_name}' value '{field_value}' is below minimum '{min_value}'."
+                            )
+                            raise ValueError(
+                                f"Validation failed for field '{field_name}': Value '{field_value}'"
+                                f" is below minimum '{min_value}'."
+                            )
+
+                        if max_value is not None and not isinstance(max_value, (int, float)):
+                            logger.warning(f"Invalid 'max_value' type for field '{field_name}'. Skipping check.")
+                        elif max_value is not None and field_value > max_value:
+                            logger.warning(
+                                f"Field '{field_name}' value '{field_value}' is above maximum '{max_value}'."
+                            )
+                            raise ValueError(
+                                f"Validation failed for field '{field_name}': Value '{field_value}'"
+                                f" is above maximum '{max_value}'."
+                            )
+
+                    # Length constraints (string, list, dict)
+                    if isinstance(field_value, (str, list, dict)):
+                        min_length = rules.get("min_length")
+                        max_length = rules.get("max_length")
+
+                        if min_length is not None and not isinstance(min_length, int):
+                            logger.warning(f"Invalid 'min_length' type for field '{field_name}'. Skipping check.")
+                        elif min_length is not None and len(field_value) < min_length:
+                            logger.warning(
+                                f"Field '{field_name}' length '{len(field_value)}' is below minimum '{min_length}'."
+                            )
+                            raise ValueError(
+                                f"Validation failed for field '{field_name}': Length '{len(field_value)}'"
+                                f" is below minimum '{min_length}'."
+                            )
+
+                        if max_length is not None and not isinstance(max_length, int):
+                            logger.warning(f"Invalid 'max_length' type for field '{field_name}'. Skipping check.")
+                        elif max_length is not None and len(field_value) > max_length:
+                            logger.warning(
+                                f"Field '{field_name}' length '{len(field_value)}' is above maximum '{max_length}'."
+                            )
+                            raise ValueError(
+                                f"Validation failed for field '{field_name}': Length '{len(field_value)}'"
+                                f" is above maximum '{max_length}'."
+                            )
+            logger.info("Data validated successfully against schema.")
+
+        # If data passes all validations
+        logger.info("Data validation completed successfully.")
+        return data
