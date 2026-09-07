@@ -1,6 +1,4 @@
 import logging
-import random
-from datetime import datetime
 from typing import Any, Dict, List, Union
 
 from vishustra_core.nodes.base_node import BaseNode
@@ -9,169 +7,156 @@ logger = logging.getLogger(__name__)
 
 class FactCheckerNode(BaseNode):
     """
-    A Vishustra node that simulates fact-checking textual statements.
+    A Vishustra processing node designed to simulate fact-checking of input claims.
 
-    This node processes a string or a list of strings (statements) and
-    provides a simulated verification status and confidence score for each.
-    It's designed to illustrate the structure of a fact-checking component
-    within the orchestration framework by applying a set of predefined rules
-    and a simple internal "knowledge base".
+    This node evaluates claims against a simplified, internal knowledge base to
+    determine if they are supported, refuted, or unverified. It's intended to
+    demonstrate a basic claim verification mechanism within the orchestration
+    framework.
     """
-
-    def __init__(self):
-        """
-        Initializes the FactCheckerNode with a simulated knowledge base
-        and linguistic pattern detectors.
-        """
-        logger.debug(f"Initializing {self.node_name}.")
-        # In a production environment, this would involve loading ML models,
-        # connecting to external fact-checking APIs, or initializing a knowledge graph client.
-        self._knowledge_base = {
-            "the sky is blue": "VERIFIED",
-            "water boils at 100 degrees celsius": "VERIFIED",
-            "cats are dogs": "UNVERIFIED",
-            "birds can fly": "VERIFIED",
-            "humans have three eyes": "UNVERIFIED",
-            "the sun rises in the west": "UNVERIFIED",
-            "all cars are red": "UNVERIFIED",
-            "python is a programming language": "VERIFIED",
-            "vishustra is an llm orchestration framework": "VERIFIED",
-        }
-        self._uncertain_keywords = ["some", "many", "often", "can be", "might", "potentially"]
-        self._overstated_keywords = ["always", "never", "all", "every", "only", "must"]
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "FactCheckerNode"
+        """Returns the descriptive name of this processing node."""
+        return "FactChecker"
 
-    def _simulate_check(self, statement: str) -> Dict[str, Any]:
+    def __init__(self):
         """
-        Simulates the fact-checking process for a single statement.
-        This method applies simple rule-based logic to determine status and confidence.
+        Initializes the FactCheckerNode.
+
+        This constructor sets up a mock knowledge base for demonstration purposes.
+        In a production environment, this would involve connections to external
+        fact-checking APIs, semantic databases, or a more sophisticated internal
+        knowledge graph.
+        """
+        self._knowledge_base = {
+            "the sky is blue": {"status": "supported", "reason": "Common scientific observation regarding Rayleigh scattering."},
+            "water boils at 100 degrees celsius at sea level": {"status": "supported", "reason": "Standard physical property of water."},
+            "mars is the fourth planet from the sun": {"status": "supported", "reason": "Astronomical fact about planetary order."},
+            "earth is the third planet from the sun": {"status": "supported", "reason": "Astronomical fact about planetary order."},
+            "the sun revolves around the earth": {"status": "refuted", "reason": "The heliocentric model, where Earth revolves around the Sun, is scientifically accepted."},
+            "birds cannot fly": {"status": "refuted", "reason": "Many bird species are capable of flight, it's a defining characteristic for many."},
+            "all humans have wings": {"status": "refuted", "reason": "Humans are mammals and do not possess wings."},
+            "vishustra is an llm orchestration framework": {"status": "unverified", "reason": "This is a project-specific detail, not general public knowledge, and requires internal project context verification."}
+        }
+        logger.info(f"{self.node_name} node initialized with a mock knowledge base.")
+
+    def _check_single_claim(self, claim_text: str) -> Dict[str, Any]:
+        """
+        Internal helper method to check a single claim against the mock knowledge base.
 
         Args:
-            statement (str): The individual text statement to check.
+            claim_text: The textual claim to be checked.
 
         Returns:
-            Dict[str, Any]: A dictionary containing the original statement,
-                            its simulated verification status, confidence score,
-                            and a timestamp.
+            A dictionary containing the claim, its verification status, and simulated evidence.
         """
-        statement_lower = statement.lower().strip()
-        status = "UNVERIFIED"
-        confidence = round(random.uniform(0.1, 0.4), 2)  # Default low confidence for unknown
+        lower_claim = claim_text.lower().strip()
+        
+        # Simple exact match check
+        for fact, details in self._knowledge_base.items():
+            if lower_claim == fact:
+                logger.debug(f"Claim '{claim_text}' directly matched a known fact with status: {details['status']}.")
+                return {
+                    "claim": claim_text,
+                    "status": details["status"],
+                    "evidence": details["reason"],
+                    "node": self.node_name
+                }
+            
+            # Very basic negation check: "not X" where X is a known fact
+            if "not " in lower_claim:
+                negated_part = lower_claim.replace("not ", "", 1).strip()
+                if negated_part == fact:
+                    if details["status"] == "supported":
+                        logger.debug(f"Claim '{claim_text}' appears to refute a supported fact: '{fact}'.")
+                        return {
+                            "claim": claim_text,
+                            "status": "refuted",
+                            "evidence": f"Opposite of known supported fact: '{fact}'.",
+                            "node": self.node_name
+                        }
+                    elif details["status"] == "refuted":
+                        logger.debug(f"Claim '{claim_text}' appears to support by refuting a refuted fact: '{fact}'.")
+                        return {
+                            "claim": claim_text,
+                            "status": "supported",
+                            "evidence": f"Opposite of known refuted fact: '{fact}'.",
+                            "node": self.node_name
+                        }
 
-        # 1. Check against the simulated internal knowledge base
-        if statement_lower in self._knowledge_base:
-            status = self._knowledge_base[statement_lower]
-            confidence = round(random.uniform(0.85, 0.99), 2) if status == "VERIFIED" else round(random.uniform(0.8, 0.95), 2)
-            logger.debug(f"[{self.node_name}] KB match found for '{statement_lower}'. Status: {status}")
-
-        # 2. Apply linguistic nuance detection (overstated claims)
-        for keyword in self._overstated_keywords:
-            if keyword in statement_lower:
-                if status == "VERIFIED":
-                    # A verified fact with overstated language implies nuance is required
-                    status = "REQUIRES_NUANCE"
-                    confidence = round(random.uniform(0.6, 0.8), 2)
-                    logger.debug(f"[{self.node_name}] Overstated keyword '{keyword}' found, status adjusted to REQUIRES_NUANCE.")
-                elif status == "UNVERIFIED":
-                    # An unverified fact with overstated language is likely an overstated claim
-                    status = "OVERSTATED_CLAIM"
-                    confidence = round(random.uniform(0.7, 0.9), 2)
-                    logger.debug(f"[{self.node_name}] Overstated keyword '{keyword}' found, status adjusted to OVERSTATED_CLAIM.")
-                break # Apply the first matching keyword and exit loop
-
-        # 3. Apply linguistic nuance detection (uncertain claims)
-        # Only apply if not already marked as REQUIRES_NUANCE or OVERSTATED_CLAIM
-        if status not in ["REQUIRES_NUANCE", "OVERSTATED_CLAIM"]:
-            for keyword in self._uncertain_keywords:
-                if keyword in statement_lower:
-                    status = "PARTIALLY_VERIFIED"
-                    confidence = round(random.uniform(0.4, 0.7), 2)
-                    logger.debug(f"[{self.node_name}] Uncertain keyword '{keyword}' found, status adjusted to PARTIALLY_VERIFIED.")
-                    break
-
-        # 4. Handle very short statements or lack of information
-        if len(statement_lower.split()) < 3 and status == "UNVERIFIED":
-            status = "NOT_ENOUGH_INFO"
-            confidence = round(random.uniform(0.1, 0.3), 2)
-            logger.debug(f"[{self.node_name}] Statement too short, status adjusted to NOT_ENOUGH_INFO.")
-
-        # 5. Introduce some general randomness for less clear-cut cases
-        if status == "UNVERIFIED":
-            if random.random() < 0.15: # 15% chance to be partially verified for generic unverified
-                status = "PARTIALLY_VERIFIED"
-                confidence = round(random.uniform(0.3, 0.5), 2)
-            elif random.random() < 0.05: # 5% chance of a false positive verification
-                status = "VERIFIED"
-                confidence = round(random.uniform(0.5, 0.7), 2)
-
+        logger.info(f"Claim '{claim_text}' could not be definitively verified or refuted by the internal mock knowledge base.")
         return {
-            "original_statement": statement,
-            "verification_status": status,
-            "confidence": confidence,
-            "timestamp": datetime.now().isoformat()
+            "claim": claim_text,
+            "status": "unverified",
+            "evidence": "No direct match or clear contradiction found in the internal knowledge base. Requires external verification.",
+            "node": self.node_name
         }
 
-    def process(self, data: Any, context: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def process(self, data: Union[str, Dict[str, Any], List[Union[str, Dict[str, Any]]]], context: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Processes the input data by performing simulated fact-checking on each statement.
+        Processes the input data to perform fact-checking on one or more claims.
+
+        The `data` input is flexible and can be provided as:
+        - A `str`: A single claim string.
+        - A `Dict[str, Any]`: A dictionary expected to contain a 'claim' key whose value is a string.
+        - A `List[Union[str, Dict[str, Any]]]`: A list where each item is either a string claim
+          or a dictionary containing a 'claim' key.
+
+        The `context` parameter is a dictionary intended for passing configuration or
+        runtime information. For this node's current implementation, it is acknowledged
+        but not actively used in the fact-checking logic.
 
         Args:
-            data (Union[str, List[str]]): The text or a list of statements to fact-check.
-            context (Dict[str, Any]): A dictionary containing contextual information
-                                       for the node's operation. While not directly
-                                       used in this simulation, it's available for
-                                       configuration like API keys, knowledge base URLs, etc.
+            data: The input claims to be processed.
+            context: A dictionary for contextual information (currently not used by this node).
 
         Returns:
-            List[Dict[str, Any]]: A list of dictionaries, where each dictionary
-                                  represents a checked statement with its status,
-                                  confidence, and original statement.
+            A list of dictionaries. Each dictionary represents a processed claim and
+            includes the original claim text, its determined 'status' ('supported',
+            'refuted', 'unverified', or 'error'), and simulated 'evidence'.
 
         Raises:
-            ValueError: If the input data is not a string or a list of strings,
-                        or if any item in an input list is not a string.
-            Exception: For any unexpected errors during the simulated processing.
+            ValueError: If the input `data` is not a recognized type (string, dictionary
+                        with 'claim', or a list containing these types).
         """
-        logger.info(f"[{self.node_name}] Starting fact-checking process for incoming data.")
-        results: List[Dict[str, Any]] = []
-        statements_to_check: List[str] = []
+        processed_results: List[Dict[str, Any]] = []
+        claims_to_process: List[str] = []
 
-        # Acknowledge context, even if not used, to demonstrate awareness
-        if context:
-            logger.debug(f"[{self.node_name}] Context received: {list(context.keys())}. (Not directly used in this simulation).")
+        if isinstance(data, str):
+            claims_to_process.append(data)
+        elif isinstance(data, dict) and 'claim' in data and isinstance(data['claim'], str):
+            claims_to_process.append(data['claim'])
+        elif isinstance(data, list):
+            for item in data:
+                if isinstance(item, str):
+                    claims_to_process.append(item)
+                elif isinstance(item, dict) and 'claim' in item and isinstance(item['claim'], str):
+                    claims_to_process.append(item['claim'])
+                else:
+                    logger.warning(f"Skipping malformed item in input list; expected string or dict with 'claim' key. Item: {item}")
+        else:
+            logger.error(f"Invalid input data type encountered: {type(data)}. Expected str, dict with 'claim', or list of these.")
+            raise ValueError(f"FactCheckerNode received unsupported data type: {type(data)}. Data must be a string, dict with 'claim', or a list thereof.")
 
-        try:
-            if isinstance(data, str):
-                statements_to_check.append(data)
-                logger.debug(f"[{self.node_name}] Received a single statement for checking.")
-            elif isinstance(data, list):
-                if not all(isinstance(item, str) for item in data):
-                    raise ValueError("All items in the input list must be strings.")
-                statements_to_check.extend(data)
-                logger.debug(f"[{self.node_name}] Received {len(data)} statements for checking.")
-            else:
-                raise ValueError("Input data must be a string or a list of strings for fact-checking.")
+        if not claims_to_process:
+            logger.warning("No valid claims were extracted from the input data for processing.")
+            return []
 
-            if not statements_to_check:
-                logger.warning(f"[{self.node_name}] No statements were provided for fact-checking. Returning empty results.")
-                return []
+        logger.info(f"Initiating fact-checking for {len(claims_to_process)} claims using the {self.node_name} node.")
 
-            for statement in statements_to_check:
-                logger.debug(f"[{self.node_name}] Attempting to simulate check for statement: '{statement}'")
-                check_result = self._simulate_check(statement)
-                results.append(check_result)
-                logger.debug(f"[{self.node_name}] Fact-check result for '{statement}': Status={check_result['verification_status']}, Confidence={check_result['confidence']:.2f}")
-
-        except ValueError as ve:
-            logger.error(f"[{self.node_name}] Input validation error: {ve}", exc_info=True)
-            raise # Re-raise to propagate the error up the orchestration chain
-        except Exception as e:
-            logger.critical(f"[{self.node_name}] An unexpected critical error occurred during processing: {e}", exc_info=True)
-            raise # Re-raise to ensure framework handles unexpected failures
-
-        logger.info(f"[{self.node_name}] Fact-checking process completed. {len(results)} statements processed.")
-        return results
+        for claim_text in claims_to_process:
+            try:
+                result = self._check_single_claim(claim_text)
+                processed_results.append(result)
+            except Exception as e:
+                logger.error(f"An unexpected error occurred while checking claim '{claim_text}': {e}", exc_info=True)
+                processed_results.append({
+                    "claim": claim_text,
+                    "status": "error",
+                    "evidence": f"An internal error prevented fact-checking: {e}",
+                    "node": self.node_name
+                })
+        
+        logger.debug(f"Fact-checking completed for {len(processed_results)} claims.")
+        return processed_results
