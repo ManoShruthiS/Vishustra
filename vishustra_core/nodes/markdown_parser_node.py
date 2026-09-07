@@ -1,169 +1,96 @@
-
 import logging
-import re
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
-# Assuming BaseNode is available at this path within the Vishustra framework
 from vishustra_core.nodes.base_node import BaseNode
 
+# Initialize logger for this module
 logger = logging.getLogger(__name__)
+
+# Attempt to import the external 'markdown' library
+try:
+    import markdown
+except ImportError:
+    logger.critical(
+        "The 'markdown' library is not installed. "
+        "Please install it using 'pip install markdown' to use MarkdownParserNode."
+    )
+    # Set markdown to None so we can check its availability during initialization/processing
+    markdown = None
 
 class MarkdownParserNode(BaseNode):
     """
-    A Vishustra processing node designed to parse Markdown content.
+    A Vishustra processing node that parses Markdown text into HTML.
 
-    This node takes a Markdown string as input and transforms it into
-    a structured dictionary containing simulated HTML and plain text representations.
-    It demonstrates a foundational content transformation capability within the framework.
+    This node leverages the 'markdown' Python library to perform the conversion.
+    It can be configured with various Markdown extensions during initialization.
+
+    If the 'markdown' library is not installed, the node will raise a RuntimeError
+    upon instantiation.
     """
+
+    def __init__(self, extensions: Optional[List[str]] = None):
+        """
+        Initializes the MarkdownParserNode.
+
+        Args:
+            extensions: A list of Markdown extension names (e.g., ['fenced_code', 'tables']).
+                        These are passed directly to the 'markdown' library.
+                        See the 'python-markdown' documentation for available extensions.
+
+        Raises:
+            RuntimeError: If the 'markdown' library is not found.
+        """
+        if markdown is None:
+            raise RuntimeError(
+                "MarkdownParserNode cannot be initialized: "
+                "The 'markdown' library is not installed. "
+                "Please install it using 'pip install markdown'."
+            )
+        self._extensions = extensions if extensions is not None else []
+        logger.debug(f"[{self.node_name}] Initialized with extensions: {self._extensions}")
 
     @property
     def node_name(self) -> str:
         """Returns the descriptive name of the node."""
-        return "MarkdownParser"
+        return "MarkdownParserNode"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
+    def process(self, data: Any, context: Dict[str, Any]) -> str:
         """
-        Processes the input data, interpreting it as Markdown, and converts it into
-        simulated HTML and a stripped plain text format.
-
-        This implementation provides a basic, rule-based simulation of Markdown parsing
-        to illustrate data transformation. It handles headers, lists, bold/italic text,
-        and links.
+        Parses the input Markdown string into an HTML string.
 
         Args:
             data: The input data, expected to be a string containing Markdown text.
-            context: A dictionary containing contextual information relevant to the
-                     current orchestration run. This node does not currently utilize
-                     the context, but it is provided for future extensibility.
+            context: A dictionary containing contextual information. This node does
+                     not currently use the context for processing.
 
         Returns:
-            A dictionary containing the following keys:
-            - 'html_content': A string representing the simulated HTML version of the Markdown.
-            - 'plain_text_content': A string representing a stripped plain text version.
-            - 'original_markdown': The original input Markdown string.
+            A string containing the HTML representation of the input Markdown.
 
         Raises:
-            ValueError: If the input data is not a string.
-            Exception: For any unexpected errors encountered during the parsing process.
+            TypeError: If the input 'data' is not a string.
+            Exception: Catches and re-raises any underlying exceptions from the
+                       'markdown' library during parsing, providing additional context.
         """
-        logger.debug(f"[{self.node_name}] Starting Markdown parsing for input data.")
+        logger.debug(f"[{self.node_name}] Starting process for data type: {type(data)}")
 
         if not isinstance(data, str):
-            logger.error(f"[{self.node_name}] Invalid input data type. Expected 'str', but received '{type(data).__name__}'.")
-            raise ValueError(
-                f"Input data for '{self.node_name}' must be a string containing Markdown. "
-                f"Received type: {type(data).__name__}."
+            error_msg = (
+                f"[{self.node_name}] Invalid input type for 'data'. "
+                f"Expected a string (Markdown text), but received type {type(data).__name__}."
             )
-
-        markdown_input = data
-        html_output_lines = []
-        plain_text_output_lines = []
-        
-        # State tracking for block elements (e.g., paragraphs, lists)
-        in_paragraph = False
-        in_list = False
+            logger.error(error_msg)
+            raise TypeError(error_msg)
 
         try:
-            lines = markdown_input.split('\n')
-            
-            for line_num, line in enumerate(lines):
-                stripped_line = line.strip()
-
-                if not stripped_line:
-                    # An empty line often implies a paragraph break or end of a block
-                    if in_paragraph:
-                        html_output_lines.append("</p>")
-                        in_paragraph = False
-                    if in_list: # End of list if followed by empty line
-                        html_output_lines.append("</ul>")
-                        in_list = False
-                    plain_text_output_lines.append("")
-                    continue
-
-                # --- HTML Simulation ---
-                current_html_line = stripped_line
-                current_plain_text_line = stripped_line # Start with stripped line for plain text
-
-                # 1. Headers (e.g., # H1, ## H2)
-                header_match = re.match(r"^(#+)\s*(.*)", current_html_line)
-                if header_match:
-                    if in_paragraph:
-                        html_output_lines.append("</p>")
-                        in_paragraph = False
-                    if in_list:
-                        html_output_lines.append("</ul>")
-                        in_list = False
-
-                    level = len(header_match.group(1))
-                    header_text = header_match.group(2).strip()
-                    html_output_lines.append(f"<h{level}>{header_text}</h{level}>")
-                    plain_text_output_lines.append(header_text) # For plain text, just the header text
-                    continue # This line is fully processed as a header
-
-                # 2. List Items (e.g., - Item, * Item)
-                list_item_match = re.match(r"^\s*[-*+]\s+(.*)", current_html_line)
-                if list_item_match:
-                    if in_paragraph:
-                        html_output_lines.append("</p>")
-                        in_paragraph = False
-                    
-                    if not in_list:
-                        html_output_lines.append("<ul>")
-                        in_list = True
-                    
-                    item_text = list_item_match.group(1).strip()
-                    html_output_lines.append(f"<li>{item_text}</li>")
-                    plain_text_output_lines.append(f"- {item_text}") # For plain text, keep bullet
-                    continue # This line is fully processed as a list item
-
-                # 3. Default to Paragraph if no other block element matched
-                if not in_paragraph and not in_list: # Only start new paragraph if not in a list
-                    html_output_lines.append("<p>")
-                    in_paragraph = True
-                elif in_list: # If inside a list, a non-list item line could still be content
-                    # A more sophisticated parser would handle paragraph breaks within list items.
-                    # For this simulation, we consider a non-list item line breaks the list.
-                    html_output_lines.append("</ul>")
-                    in_list = False
-                    html_output_lines.append("<p>") # Start new paragraph for the current line
-                    in_paragraph = True
-
-
-                # 4. Inline Formatting (applied to current_html_line and current_plain_text_line)
-                
-                # HTML: Bold (**text** -> <strong>text</strong>)
-                current_html_line = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', current_html_line)
-                # HTML: Italics (*text* -> <em>text</em>)
-                current_html_line = re.sub(r'\*(.*?)\*', r'<em>\1</em>', current_html_line)
-                # HTML: Links ([text](url) -> <a href="url">text</a>)
-                current_html_line = re.sub(r'\[(.*?)\]\((.*?)\)', r'<a href="\2">\1</a>', current_html_line)
-                
-                html_output_lines.append(current_html_line)
-
-                # Plain Text: Remove bold/italic markers
-                current_plain_text_line = re.sub(r'\*\*|__|\*|_', '', current_plain_text_line)
-                # Plain Text: Extract link text only (remove URL part)
-                current_plain_text_line = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', current_plain_text_line)
-                plain_text_output_lines.append(current_plain_text_line)
-            
-            # Ensure all open tags are closed at the end of the document
-            if in_paragraph:
-                html_output_lines.append("</p>")
-            if in_list:
-                html_output_lines.append("</ul>")
-
-            final_html_content = "\n".join(html_output_lines).strip()
-            final_plain_text_content = "\n".join(plain_text_output_lines).strip()
-
-            logger.info(f"[{self.node_name}] Successfully parsed Markdown content into simulated HTML and plain text.")
-            return {
-                "html_content": final_html_content,
-                "plain_text_content": final_plain_text_content,
-                "original_markdown": markdown_input
-            }
-
+            # Perform the Markdown to HTML conversion
+            html_output = markdown.markdown(data, extensions=self._extensions)
+            logger.info(f"[{self.node_name}] Successfully parsed Markdown data to HTML.")
+            return html_output
         except Exception as e:
-            logger.exception(f"[{self.node_name}] An unexpected error occurred during Markdown parsing.")
-            raise # Re-raise the exception after logging for upstream handling
-
+            error_msg = (
+                f"[{self.node_name}] An error occurred during Markdown parsing. "
+                f"Details: {e}"
+            )
+            logger.error(error_msg, exc_info=True)
+            # Re-raise the exception to propagate the error upstream
+            raise
