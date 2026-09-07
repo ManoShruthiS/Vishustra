@@ -1,105 +1,134 @@
 import logging
-import re
 from typing import Any, Dict
 
+# Assuming the BaseNode is located at this path within the project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class TextSummarizerNode(BaseNode):
     """
-    A processing node that simulates abstractive text summarization.
-    It takes a string of text and returns a condensed version, mimicking
-    the behavior of an LLM-based summarization without actual model inference.
+    A Vishustra processing node that performs abstractive text summarization.
+
+    This node is designed to take a block of text and produce a concise,
+    contextually relevant summary. In a production Vishustra deployment,
+    this node would integrate with an underlying Language Model (LLM)
+    or a dedicated summarization service to perform its task.
     """
-
-    def __init__(self, max_summary_length_words: int = 75):
-        """
-        Initializes the TextSummarizerNode with configuration for summary length.
-
-        Args:
-            max_summary_length_words (int): The maximum number of words
-                                            to aim for in the simulated summary.
-                                            Must be a positive integer.
-        Raises:
-            ValueError: If `max_summary_length_words` is not a positive integer.
-        """
-        if not isinstance(max_summary_length_words, int) or max_summary_length_words <= 0:
-            logger.error(f"Invalid max_summary_length_words: {max_summary_length_words}. Must be a positive integer.")
-            raise ValueError("max_summary_length_words must be a positive integer.")
-        self._max_summary_length_words = max_summary_length_words
-        logger.debug(f"TextSummarizerNode initialized with max_summary_length_words={self._max_summary_length_words}")
 
     @property
     def node_name(self) -> str:
         """Returns the name of the node."""
         return "TextSummarizerNode"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> str:
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data by simulating text summarization.
+        Processes the input text to generate a summary.
 
-        This method expects `data` to be a string. It performs a basic
-        sentence-level truncation to simulate a summary, aiming for
-        a specified maximum word count.
+        This method validates the input and, in a real scenario, would invoke
+        an external summarization model or LLM. For demonstration, it simulates
+        this process by returning a truncated or slightly modified version of
+        the input, while adhering to specified length constraints from the context.
 
         Args:
-            data (Any): The input text to be summarized.
+            data (Any): The input text to be summarized. Expected to be a string.
             context (Dict[str, Any]): A dictionary containing contextual information
-                                       for the processing. Not directly utilized
-                                       by this node's core logic but available
-                                       for broader orchestration.
+                                       or configuration for the summarization process.
+                                       This can include parameters like `min_summary_length`,
+                                       `max_summary_length`, or specific model configurations.
 
         Returns:
-            str: The simulated summarized text. If the original text is shorter
-                 than the target summary length, the original text is returned.
+            Any: The summarized text as a string.
 
         Raises:
             TypeError: If the input `data` is not a string.
-            ValueError: If the input `data` is an empty or whitespace-only string.
+            ValueError: If the input `data` is empty or too short for meaningful summarization.
         """
         if not isinstance(data, str):
-            logger.error(f"TextSummarizerNode received non-string data of type: {type(data).__name__}")
-            raise TypeError(f"Input data for TextSummarizerNode must be a string, but received {type(data).__name__}")
+            error_msg = (
+                f"Invalid input type for {self.node_name}. "
+                f"Expected `str`, but received `{type(data).__name__}`."
+            )
+            logger.error(error_msg)
+            raise TypeError(error_msg)
 
-        trimmed_data = data.strip()
-        if not trimmed_data:
-            logger.warning("TextSummarizerNode received an empty or whitespace-only string. Returning an empty string.")
-            return ""
+        if not data.strip():
+            error_msg = f"Input text for {self.node_name} cannot be empty or whitespace-only."
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
-        original_words = trimmed_data.split()
-        if len(original_words) <= self._max_summary_length_words:
-            logger.debug(f"Original text is shorter than or equal to max_summary_length_words ({self._max_summary_length_words}). Returning original text.")
-            return trimmed_data
+        # Retrieve summarization parameters from context with sensible defaults
+        min_length = context.get("min_summary_length", 50)
+        max_length = context.get("max_summary_length", 300)
+        
+        logger.debug(
+            f"Starting summarization process for {self.node_name}. "
+            f"Input length: {len(data)} characters. "
+            f"Target min/max summary length: {min_length}/{max_length}."
+        )
 
-        logger.info(f"Summarizing text of length {len(trimmed_data)} characters, targeting ~{self._max_summary_length_words} words.")
+        # --- Simulated Summarization Logic ---
+        # In a real Vishustra integration, this section would contain calls to
+        # an LLM API (e.g., OpenAI, Hugging Face, custom model) or a specialized
+        # summarization library, configured and authenticated via the context.
+        #
+        # For this simulation, we'll create a simple "summary" based on truncation
+        # and sentence extraction to mimic abstractive output structure.
 
-        # Simulate summarization by taking the first few sentences/words
-        # This is a rudimentary approach; actual LLM-based summarization
-        # would involve more complex understanding and generation.
-        sentences = re.split(r'(?<=[.!?])\s+', trimmed_data)
-        summary_parts = []
-        current_word_count = 0
+        sentences = [s.strip() for s in data.split('.') if s.strip()]
+        
+        # If the input is very short, a 'summary' might just be the original text or a slight truncation.
+        if len(data) < min_length * 1.5: # Heuristic: if original text is not much longer than desired min summary.
+            logger.warning(
+                f"Input text for {self.node_name} is relatively short ({len(data)} chars). "
+                f"Returning a truncated version of the original text as a simulated summary."
+            )
+            simulated_summary = data[:max_length]
+            if len(data) > max_length:
+                simulated_summary += "..."
+        else:
+            # Simulate abstractive summary by taking a portion of the original text
+            # and adding an ellipsis if truncated, ensuring it respects max_length.
+            # This is a very simplistic stand-in for complex LLM output.
+            
+            # Aim for roughly 1/3 to 1/2 of the original content in sentences, or enough to meet min_length.
+            target_sentences_count = max(
+                1, 
+                min(len(sentences) // 2, len(sentences) - 1) # Cap at half sentences or one less than total
+            )
+            
+            simulated_summary_parts = []
+            current_length = 0
+            for sentence in sentences:
+                if current_length + len(sentence) + 2 > max_length and simulated_summary_parts: # +2 for ". "
+                    break
+                simulated_summary_parts.append(sentence)
+                current_length += len(sentence) + 2 # Account for ". "
 
-        for sentence in sentences:
-            sentence_words = sentence.split()
-            if current_word_count + len(sentence_words) <= self._max_summary_length_words:
-                summary_parts.append(sentence)
-                current_word_count += len(sentence_words)
+            if not simulated_summary_parts: # Fallback if initial loop didn't add anything
+                simulated_summary = data[:max_length]
+                if len(data) > max_length:
+                    simulated_summary += "..."
             else:
-                # If adding the whole sentence exceeds the limit, and we haven't added anything yet,
-                # take a truncated portion of this sentence to meet the minimum summary.
-                if not summary_parts:
-                    truncated_words = sentence_words[:self._max_summary_length_words]
-                    summary_parts.append(" ".join(truncated_words))
-                    current_word_count = len(truncated_words)
-                break # Stop processing further sentences
+                simulated_summary = ". ".join(simulated_summary_parts)
+                if len(simulated_summary) < len(data) and len(simulated_summary) < max_length:
+                     simulated_summary += "." # Add final period if it was removed by join and not truncated.
+                
+                # Ensure it adheres to max_length and min_length as much as possible for simulation
+                if len(simulated_summary) > max_length:
+                    simulated_summary = simulated_summary[:max_length - 3].strip() + "..."
+                elif len(simulated_summary) < min_length and len(data) > min_length:
+                    # If the simulated summary is too short, try to grab a bit more, or acknowledge.
+                    logger.warning(
+                        f"Simulated summary for {self.node_name} is shorter than "
+                        f"min_summary_length ({min_length} chars), despite longer input. "
+                        f"This often indicates a highly concise original text or a very aggressive summarization parameter."
+                    )
+                    # For a robust simulation, we might try to extend it here if possible.
+                    # For simplicity, we just log and return what we have.
 
-        simulated_summary = " ".join(summary_parts).strip()
-
-        # Add ellipsis if the summary truly truncated the original text and doesn't end naturally
-        if len(simulated_summary.split()) < len(original_words) and simulated_summary and not re.search(r'[.!?]$', simulated_summary):
-             simulated_summary += "..."
-
-        logger.debug(f"Successfully simulated summary. Original word count: {len(original_words)}, Summary word count: {len(simulated_summary.split())}")
+        logger.debug(
+            f"Successfully simulated summarization for {self.node_name}. "
+            f"Final summary length: {len(simulated_summary)} characters."
+        )
         return simulated_summary
