@@ -1,114 +1,128 @@
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-# Assuming the BaseNode is located here as per project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
-class ToneConverter(BaseNode):
-    """
-    A Vishustra processing node that simulates the conversion of text data
-    to a specified tone. In a production environment, this would interface
-    with a large language model or a specialized API.
-    """
 
-    def __init__(self):
-        """
-        Initializes the ToneConverter node.
-        No specific configuration is required at instantiation for this simulation.
-        """
-        super().__init__()
-        logger.debug("ToneConverter node initialized.")
+class ToneConverterNode(BaseNode):
+    """
+    A processing node designed to convert the tone of text data based on a specified
+    target tone provided in the execution context. This node simulates various tone
+    transformations, ensuring flexibility in LLM output presentation.
+    """
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the unique name of this processing node.
-        """
+        """Returns the descriptive name of the node."""
         return "ToneConverter"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data to convert its tone based on context parameters.
+        Processes the input data (expected to be a string) and converts its
+        tone based on the 'target_tone' specified in the context.
+
+        Supported tones (simulated): "formal", "informal", "professional", "concise".
+        If an unsupported tone is provided, the original data is returned with a warning.
 
         Args:
-            data (Any): The input data to be processed. Expected to be a string.
-            context (Dict[str, Any]): A dictionary containing runtime parameters.
-                                      Expected to contain 'target_tone' (str).
+            data: The input text data to be converted. Must be a string.
+            context: A dictionary containing execution context parameters.
+                     Expected to include 'target_tone' (str).
 
         Returns:
-            Any: The tone-converted string data, or original data if conversion fails
-                 gracefully, or raises an error for critical issues.
+            The text data with its tone converted, or the original data if conversion
+            is not possible or the tone is unsupported.
 
         Raises:
-            ValueError: If the input 'data' is not a string.
+            TypeError: If the input 'data' is not a string.
+            ValueError: If 'target_tone' is missing or not a string in the context.
+            RuntimeError: For unexpected errors during the tone conversion process.
         """
-        logger.debug("ToneConverter received data for processing. Context: %s", context)
-
         if not isinstance(data, str):
             logger.error(
-                "ToneConverter expects string data for tone conversion, but received type: %s. "
-                "Failing early to ensure data integrity.", type(data)
+                "ToneConverterNode received non-string data. Expected 'str', got '%s'.",
+                type(data).__name__
             )
-            raise ValueError("Input 'data' must be a string for ToneConverter.")
+            raise TypeError(
+                f"ToneConverterNode expects string data, but received {type(data).__name__}"
+            )
 
-        target_tone: Optional[str] = context.get("target_tone")
-
+        target_tone = context.get("target_tone")
         if not target_tone or not isinstance(target_tone, str):
-            logger.warning(
-                "No valid 'target_tone' found in context or it's not a string. "
-                "Defaulting to 'neutral' tone. Context: %s", context
+            logger.error(
+                "ToneConverterNode requires 'target_tone' (string) in the context "
+                "to perform tone conversion."
             )
-            target_tone = "neutral"
-        else:
-            target_tone = target_tone.lower().strip() # Normalize tone string
+            raise ValueError(
+                "Missing or invalid 'target_tone' in context for ToneConverterNode. "
+                "Please provide a string value for 'target_tone'."
+            )
+
+        original_text = data
+        transformed_text = original_text  # Initialize with original text
+
+        logger.debug(
+            "Attempting to convert text tone to '%s' using ToneConverterNode.",
+            target_tone
+        )
 
         try:
-            converted_data: str = self._simulate_tone_conversion(data, target_tone)
-            logger.info("Successfully converted text to '%s' tone.", target_tone)
-            logger.debug(
-                "Original text (first 50 chars): '%s', Converted text (first 50 chars): '%s'",
-                data[:50] + "..." if len(data) > 50 else data,
-                converted_data[:50] + "..." if len(converted_data) > 50 else converted_data
-            )
-            return converted_data
+            lower_target_tone = target_tone.lower().strip()
+
+            if lower_target_tone == "formal":
+                # Simulate formal tone: capitalize sentences, replace contractions, ensure punctuation
+                transformed_text = original_text.replace("don't", "do not").replace("it's", "it is")
+                if not transformed_text.strip().endswith(('.', '!', '?')):
+                    transformed_text += '.'
+                transformed_text = transformed_text.strip()
+                # Basic sentence capitalization. More robust solutions would use NLP.
+                if transformed_text:
+                    transformed_text = transformed_text[0].upper() + transformed_text[1:]
+                logger.debug("Text converted to formal tone.")
+
+            elif lower_target_tone == "informal":
+                # Simulate informal tone: lowercase, replace punctuation with exclamation/ellipsis
+                transformed_text = original_text.lower().replace('.', '').replace('?', '')
+                if not transformed_text.strip().endswith('!'):
+                    transformed_text += '!'
+                logger.debug("Text converted to informal tone.")
+
+            elif lower_target_tone == "professional":
+                # Simulate professional tone: clear, concise, avoid slang
+                transformed_text = original_text.replace("gonna", "going to").replace("wanna", "want to")
+                if not transformed_text.strip().endswith(('.', '!', '?')):
+                    transformed_text += '.'
+                transformed_text = transformed_text.strip()
+                if transformed_text:
+                    transformed_text = transformed_text[0].upper() + transformed_text[1:]
+                logger.debug("Text converted to professional tone.")
+
+            elif lower_target_tone == "concise":
+                # Simulate concise tone: very basic truncation
+                words = original_text.split()
+                if len(words) > 8:
+                    transformed_text = ' '.join(words[:8]) + '...'
+                else:
+                    transformed_text = original_text
+                logger.debug("Text converted to concise tone.")
+
+            else:
+                logger.warning(
+                    "Unsupported target_tone '%s' provided for ToneConverterNode. "
+                    "Returning original data without transformation.",
+                    target_tone
+                )
+                # If the tone is not recognized, return the original data.
+
         except Exception as e:
-            logger.exception(
-                "An unexpected error occurred during tone conversion for target_tone '%s'. "
-                "Returning original data to prevent pipeline failure.", target_tone
+            logger.error(
+                "An unexpected error occurred during tone conversion with target_tone '%s': %s",
+                target_tone, e, exc_info=True
             )
-            return data # Gracefully return original data on unexpected conversion errors
+            raise RuntimeError(
+                f"Failed to convert tone due to an internal processing error: {e}"
+            ) from e
 
-    def _simulate_tone_conversion(self, text: str, tone: str) -> str:
-        """
-        Simulates the tone conversion of the given text based on the specified tone.
-        This method is a placeholder for actual LLM interactions.
-
-        Args:
-            text (str): The input text to convert.
-            tone (str): The target tone (e.g., "formal", "casual", "professional").
-
-        Returns:
-            str: The text with the simulated tone applied.
-        """
-        # In a real-world Vishustra deployment, this would invoke an LLM API
-        # with a carefully crafted prompt for tone transformation.
-        
-        if tone == "formal":
-            return f"In a formal manner: {text}"
-        elif tone == "casual":
-            return f"Just casually saying: {text}"
-        elif tone == "professional":
-            return f"From a professional standpoint: {text}"
-        elif tone == "humorous":
-            return f"Here's a giggle for ya: {text} (chuckle, chuckle!)"
-        elif tone == "serious":
-            return f"On a serious note: {text}"
-        elif tone == "neutral":
-            return text  # No change for neutral tone
-        else:
-            logger.warning(
-                "Unsupported target tone '%s' for simulation. Returning original text.", tone
-            )
-            return text
+        return transformed_text
