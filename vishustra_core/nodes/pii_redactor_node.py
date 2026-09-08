@@ -1,112 +1,124 @@
 import logging
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict
 
-# Assuming this path as per project context
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class PIIRedactorNode(BaseNode):
     """
-    A Vishustra node designed to redact common Personally Identifiable Information (PII)
-    from text data.
+    A processing node that identifies and redacts common Personally
+    Identifiable Information (PII) patterns from text data.
 
-    This node identifies and replaces sensitive patterns such as email addresses and
-    phone numbers with a configurable placeholder (e.g., '[REDACTED_EMAIL]').
-    It supports customization of redaction patterns during initialization.
+    This node provides a configurable way to mask sensitive data, ensuring
+    privacy compliance for information flowing through the Vishustra framework.
+    It currently supports redaction of common patterns like email addresses
+    and phone numbers, and can be extended for other PII types.
     """
-
-    def __init__(self, patterns: List[Tuple[str, str]] = None):
-        """
-        Initializes the PIIRedactorNode with optional custom redaction patterns.
-
-        Args:
-            patterns: An optional list of tuples, where each tuple contains
-                      (regex_pattern_string, replacement_string).
-                      If None, a set of default patterns for emails and common phone numbers
-                      will be used. All regex patterns will be compiled for performance.
-        """
-        if patterns:
-            self._redaction_patterns = [
-                (re.compile(pattern), replacement)
-                for pattern, replacement in patterns
-            ]
-            logger.info("PIIRedactorNode initialized with custom redaction patterns.")
-        else:
-            # Default PII patterns: email and a basic North American phone number format
-            self._redaction_patterns = [
-                (re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'), '[REDACTED_EMAIL]'),
-                (re.compile(r'\b(?:\+?\d{1,3}[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]?\d{3}[-.\s]?\d{4}\b'), '[REDACTED_PHONE]'),
-                # Add more comprehensive patterns for other PII types (e.g., SSN, credit cards) here
-                # if needed for broader PII coverage.
-            ]
-            logger.info("PIIRedactorNode initialized with default PII redaction patterns.")
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of this node.
-        """
-        return "PIIRedactor"
+        """Returns the descriptive name of the node."""
+        return "PII Redactor"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data to identify and redact PII based on configured patterns.
+        Processes the input data to identify and redact common PII patterns.
 
-        If the input `data` is a string, it iterates through all compiled regex patterns
-        and replaces any matches with their corresponding replacement strings.
-        If `data` is not a string, a warning is logged, and the data is returned unchanged,
-        as PII redaction is primarily text-based.
+        The `data` is expected to be a string. If the input is not a string,
+        a TypeError will be raised. The redaction logic is applied sequentially
+        for defined PII types.
 
         Args:
-            data: The input data, typically expected to be a string that may contain PII.
-            context: A dictionary containing contextual information relevant to the
-                     orchestration. This node does not modify or directly use the context
-                     for its core redaction logic.
+            data: The input data, expected to be a string that may contain PII.
+            context: A dictionary of contextual information. This can be used
+                     in future iterations to pass configuration, such as
+                     custom PII patterns or redaction masks.
 
         Returns:
-            The processed data with PII redacted if it was a string,
-            otherwise the original data unchanged.
-        """
-        logger.debug(f"PIIRedactorNode received data for processing. Type: {type(data)}")
+            The processed data with identified PII redacted, or the original
+            data if an unrecoverable error occurs during redaction.
 
+        Raises:
+            TypeError: If the input `data` is not a string.
+        """
         if not isinstance(data, str):
-            logger.warning(
-                f"PIIRedactorNode received non-string data (type: {type(data).__name__}). "
-                "PII redaction is currently only applicable to string inputs. "
-                "Returning data unchanged."
+            logger.error(
+                "PIIRedactorNode received non-string input of type '%s'. "
+                "PII redaction can only be performed on strings.",
+                type(data).__name__
             )
-            return data
+            raise TypeError("PIIRedactorNode can only process string data.")
 
         redacted_data = data
+        redaction_summary = {}
 
-        for pattern, replacement in self._redaction_patterns:
-            try:
-                # Apply the redaction pattern
-                newly_redacted_data = pattern.sub(replacement, redacted_data)
-                if newly_redacted_data != redacted_data:
+        # Define PII patterns and their redaction replacements.
+        # These patterns are illustrative and cover common cases. For production-grade
+        # PII detection, consider integrating with specialized NLP libraries.
+        pii_configurations = {
+            "email": {
+                "pattern": r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
+                "replacement": "[REDACTED_EMAIL]"
+            },
+            "phone_number_us": {
+                "pattern": r'\b(?:\+?1[\s-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b',
+                "replacement": "[REDACTED_PHONE_NUMBER]"
+            },
+            "ip_address": {
+                "pattern": r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b',
+                "replacement": "[REDACTED_IP_ADDRESS]"
+            },
+            # Example for a more complex PII type, like credit card numbers.
+            # Real-world patterns would need to be very robust and potentially
+            # validated with checksums for accuracy.
+            # "credit_card_number": {
+            #     "pattern": r'\b(?:4\d{3}|5[1-5]\d{2}|6011|3[47]\d{2})[- ]?(?:\d{4}[- ]?){3}\d{3,4}\b',
+            #     "replacement": "[REDACTED_CREDIT_CARD]"
+            # }
+        }
+
+        try:
+            for pii_type, config in pii_configurations.items():
+                pattern = config["pattern"]
+                replacement = config["replacement"]
+                
+                # Apply the redaction using regex substitution
+                redacted_data, num_substitutions = re.subn(
+                    pattern,
+                    replacement,
+                    redacted_data
+                )
+
+                if num_substitutions > 0:
+                    redaction_summary[pii_type] = num_substitutions
                     logger.debug(
-                        f"Redacted pattern '{pattern.pattern}' with '{replacement}' "
-                        f"in data fragment: '{redacted_data[:50]}...'"
+                        "Redacted %d instances of '%s' in the data.",
+                        num_substitutions,
+                        pii_type
                     )
-                redacted_data = newly_redacted_data
-            except re.error as e:
-                logger.error(
-                    f"A regular expression error occurred with pattern '{pattern.pattern}': {e}. "
-                    "Skipping this pattern for the current data."
-                )
-            except Exception as e:
-                logger.error(
-                    f"An unexpected error occurred during PII redaction with pattern '{pattern.pattern}': {e}",
-                    exc_info=True
-                )
-                # In case of an unexpected error, it's safer to proceed with partially redacted data
-                # rather than failing the entire pipeline.
 
-        if redacted_data != data:
-            logger.info("PII redaction successfully applied to the input data.")
-        else:
-            logger.debug("No identifiable PII patterns were found or redacted in the data.")
+            if redaction_summary:
+                logger.info(
+                    "Successfully redacted PII types: %s",
+                    ", ".join(f"{k} ({v})" for k, v in redaction_summary.items())
+                )
+            else:
+                logger.debug("No PII matching defined patterns was found for redaction.")
 
-        return redacted_data
+            return redacted_data
+
+        except re.error as e:
+            logger.error(
+                "A regex pattern error occurred during PII redaction: %s. "
+                "Returning original data.",
+                e
+            )
+            return data
+        except Exception as e:
+            logger.exception(
+                "An unexpected error occurred during PII redaction. "
+                "Returning original data."
+            )
+            return data # Ensure data is returned even on unexpected errors
