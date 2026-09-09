@@ -1,117 +1,104 @@
-from vishustra_core.nodes.base_node import BaseNode
 import logging
 import re
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, Set, Union
+
+# Assuming BaseNode is located here as per project structure
+from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class ProfanityFilterNode(BaseNode):
     """
-    A Vishustra processing node that filters profanity from text data.
-    It replaces specified profane words with a configurable placeholder string.
-    This node operates on string inputs and ensures robustness against invalid data types.
+    A Vishustra processing node designed to filter out profanity from text data.
+
+    This node identifies and replaces known profane words within an input string
+    with a specified replacement string, operating in a case-insensitive manner.
+    The list of profanities can be customized during initialization or a default
+    set will be used.
     """
 
-    # A default set of profanities. This can be extended or replaced via configuration.
-    DEFAULT_PROFANITIES: Set[str] = {
-        "badword", "cursing", "damn", "ass", "bitch", "fuck", "shit", "bastard",
-        "hell", "crap", "piss", "motherfucker"
-    }
-    # The default string used to replace detected profanities.
-    REPLACEMENT_STRING: str = "****"
-
-    def __init__(self, custom_profanities: List[str] = None, replacement_string: str = None):
+    def __init__(self, profanity_list: Union[Set[str], None] = None, replacement_string: str = "***"):
         """
-        Initializes the ProfanityFilterNode with optional custom profanities
-        and a custom replacement string.
+        Initializes the ProfanityFilterNode.
 
         Args:
-            custom_profanities: An optional list of strings representing profane words.
-                                If provided, these words will be used instead of the
-                                default set. Words will be converted to lowercase internally.
-            replacement_string: An optional string to use as the placeholder for
-                                detected profanities. Defaults to "****" if None.
-        
-        Raises:
-            TypeError: If `custom_profanities` is not a list or `replacement_string` is not a string.
+            profanity_list: An optional set of profane words (strings) to filter.
+                            If None, a curated default list is used.
+                            Words should be provided in lowercase for consistent matching,
+                            though the filter itself operates case-insensitively.
+            replacement_string: The string to use as a replacement for detected profanities.
+                                Defaults to "***".
         """
-        if custom_profanities is not None:
-            if not isinstance(custom_profanities, list):
-                logger.error(
-                    "Initialization error for ProfanityFilterNode: 'custom_profanities' "
-                    f"must be a list of strings, but received {type(custom_profanities).__name__}."
-                )
-                raise TypeError("Expected 'custom_profanities' to be a list of strings.")
-            # Convert to a set for efficient lookup and store as lowercase
-            self._profanities: Set[str] = {word.lower() for word in custom_profanities if isinstance(word, str)}
-            if len(self._profanities) != len(custom_profanities):
-                logger.warning("Some non-string items were found and ignored in custom_profanities list.")
-            logger.debug(f"ProfanityFilterNode initialized with custom profanities: {sorted(list(self._profanities))}")
-        else:
-            self._profanities = self.DEFAULT_PROFANITIES
-            logger.debug("ProfanityFilterNode initialized with default profanities.")
+        self._node_name = "ProfanityFilterNode"
+        self._replacement_string = replacement_string
+        # Ensure profanity_list is a set for efficient lookup
+        self._profanity_list = profanity_list if profanity_list is not None else self._get_default_profanity_list()
+        logger.debug(f"{self.node_name} initialized with {len(self._profanity_list)} profanities "
+                     f"and replacement string '{self._replacement_string}'.")
 
-        self._replacement_string: str = replacement_string if replacement_string is not None else self.REPLACEMENT_STRING
-        if not isinstance(self._replacement_string, str):
-            logger.error(
-                "Initialization error for ProfanityFilterNode: 'replacement_string' "
-                f"must be a string, but received {type(self._replacement_string).__name__}."
-            )
-            raise TypeError("Expected 'replacement_string' to be a string.")
-        
-        # Pre-compile regex patterns for each profanity for efficiency and case-insensitivity
-        # using \b for word boundaries to avoid partial matches (e.g., 'ass' in 'passage')
-        self._profanity_patterns: List[re.Pattern] = [
-            re.compile(r'\b' + re.escape(word) + r'\b', re.IGNORECASE)
-            for word in self._profanities
-        ]
-        logger.debug(f"ProfanityFilterNode using replacement string: '{self._replacement_string}'")
+    def _get_default_profanity_list(self) -> Set[str]:
+        """
+        Returns a default set of common profanities (lowercase) for filtering.
+        In a production environment, this list would likely be loaded from a
+        configuration file, external service, or a dedicated vocabulary management system.
+        """
+        return {
+            "anal", "arse", "ass", "asshole", "bastard", "bitch", "bollocks", "bugger",
+            "clit", "cock", "cunt", "damn", "dick", "fag", "fuck", "goddamn", "hell",
+            "motherfucker", "nigga", "nigger", "piss", "pussy", "shit", "slut", "son of a bitch",
+            "tit", "turd", "wank", "whore"
+        }
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of this node."""
-        return "ProfanityFilterNode"
+        """
+        Returns the descriptive name of this node.
+        """
+        return self._node_name
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data by filtering out profanity.
+        Processes the input data to filter out detected profanities.
 
-        The method expects `data` to be a string. It iterates through the
-        configured profanity list and replaces each instance (case-insensitive)
-        with the specified replacement string.
+        This method expects the 'data' parameter to be a string. If a non-string
+        type is provided, a warning is logged, and the original data is returned
+        without modification. Profanities are replaced using the configured
+        replacement string, respecting word boundaries and ignoring case.
 
         Args:
             data: The input data to be processed. Expected to be a string.
-            context: A dictionary containing contextual information for the node.
-                     This node does not directly utilize context for its filtering logic,
-                     but it's available for logging or future extensions.
+            context: A dictionary containing contextual information relevant to
+                     the current processing pipeline. (Currently unused by this node,
+                     but available for future extensions like dynamic profanity lists
+                     or specific filtering rules).
 
         Returns:
-            A string with all detected profanities replaced by the replacement string.
-
-        Raises:
-            TypeError: If the input `data` is not a string.
+            The input string with all identified profanities replaced by the
+            `replacement_string`, or the original `data` if it was not a string
+            or an error occurred during processing.
         """
         if not isinstance(data, str):
+            logger.warning(
+                f"{self.node_name}: Input data type mismatch. Expected 'str', "
+                f"but received '{type(data).__name__}'. Returning original data."
+            )
+            return data
+
+        processed_text = data
+        try:
+            for profane_word in self._profanity_list:
+                # Construct a regex pattern for whole-word matching, escaping special characters
+                # and ensuring case-insensitivity.
+                pattern = r'\b' + re.escape(profane_word) + r'\b'
+                processed_text = re.sub(pattern, self._replacement_string, processed_text, flags=re.IGNORECASE)
+
+            logger.debug(f"{self.node_name}: Successfully filtered profanities from input.")
+            return processed_text
+        except Exception as e:
             logger.error(
-                f"ProfanityFilterNode received invalid input type. "
-                f"Expected 'str', but got '{type(data).__name__}'. Data: {data!r}"
+                f"{self.node_name}: An unexpected error occurred during profanity filtering: {e}",
+                exc_info=True  # Logs the full traceback for debugging
             )
-            raise TypeError(f"ProfanityFilterNode can only process string data, received {type(data).__name__}.")
-
-        sanitized_data = data
-        for pattern in self._profanity_patterns:
-            sanitized_data = pattern.sub(self._replacement_string, sanitized_data)
-        
-        if sanitized_data != data:
-            logger.info(
-                f"ProfanityFilterNode successfully filtered text. "
-                f"Original length: {len(data)}, Sanitized length: {len(sanitized_data)}."
-            )
-        else:
-            logger.debug("ProfanityFilterNode processed text, no profanity found or filtered.")
-
-        if context:
-            logger.debug(f"ProfanityFilterNode received context with keys: {list(context.keys())}.")
-
-        return sanitized_data
+            # In case of an error, it's often safer to return the original data
+            # rather than failing the entire pipeline.
+            return data
