@@ -1,82 +1,74 @@
-
-import re
 import logging
-from typing import Any, Dict, List, Union, Set
+import re
+from typing import Any, Dict, List
 
-# Assuming vishustra_core is available in the project structure
-# In a real setup, this would be relative to the project root.
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class URLExtractorNode(BaseNode):
     """
-    A Vishustra processing node that extracts URLs from text input.
+    A Vishustra node designed to extract URLs from text content.
 
-    This node can process either a single string or a list of strings,
-    identifying and returning all unique URLs found.
+    This node leverages regular expressions to identify common URL patterns
+    (e.g., those starting with `http(s)://` or `www.`) within the provided
+    input data. It's robust against various text formats and ensures
+    that only unique URLs are returned.
     """
-
-    # A comprehensive regex pattern for identifying URLs, including http/https and www prefixes.
-    # It aims to capture common URL formats, handling various characters allowed in URLs.
-    _URL_PATTERN = re.compile(
-        r'(?:https?://|www\.)'  # Scheme (http/https) or www. prefix
-        r'(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+' # Domain/Path characters
-        r'(?:[/?#]\S*)?' # Optional path, query, fragment
-        , re.IGNORECASE
-    )
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
-        return "URLExtractorNode"
+        """Returns the descriptive name of the node."""
+        return "URL_Extractor"
 
-    def process(self, data: Union[str, List[str]], context: Dict[str, Any]) -> List[str]:
+    def process(self, data: Any, context: Dict[str, Any]) -> List[str]:
         """
-        Extracts all unique URLs from the input data.
+        Processes the input data to identify and extract URLs.
 
-        The input `data` can be a single string or a list of strings.
-        The `context` dictionary is available for potential future extensions
-        but is not used for core logic in this version.
+        Expects the input `data` to be a string. If a non-string type is
+        encountered, a warning is logged, and an empty list is returned,
+        preventing potential downstream errors.
 
         Args:
-            data: The input text (string or list of strings) to scan for URLs.
-            context: A dictionary containing contextual information for the node.
+            data: The input content, typically a string from which URLs
+                  are to be extracted.
+            context: A dictionary holding contextual information relevant
+                     to the current processing pipeline. This node does
+                     not directly use the context but adheres to the
+                     BaseNode interface.
 
         Returns:
-            A list of unique URLs found in the input data.
-
-        Raises:
-            TypeError: If the input `data` is neither a string nor a list of strings.
+            A list of unique URLs found within the `data`. The order of
+            URLs in the list corresponds to their first appearance in the
+            input text. Returns an empty list if no URLs are found or
+            if the input `data` is not a string.
         """
-        logger.debug(f"[{self.node_name}] Processing data for URL extraction. Context: {context.keys()}")
-
-        found_urls: Set[str] = set()
-
-        if isinstance(data, str):
-            logger.debug(f"[{self.node_name}] Input data is a single string.")
-            urls_in_text = self._URL_PATTERN.findall(data)
-            found_urls.update(urls_in_text)
-
-        elif isinstance(data, list):
-            logger.debug(f"[{self.node_name}] Input data is a list of strings.")
-            for i, item in enumerate(data):
-                if isinstance(item, str):
-                    urls_in_item = self._URL_PATTERN.findall(item)
-                    found_urls.update(urls_in_item)
-                else:
-                    logger.warning(
-                        f"[{self.node_name}] List item at index {i} is not a string "
-                        f"(type: {type(item).__name__}). Skipping for URL extraction."
-                    )
-        else:
-            error_msg = (
-                f"[{self.node_name}] Invalid input data type: expected 'str' or 'List[str]', "
-                f"got '{type(data).__name__}'."
+        if not isinstance(data, str):
+            logger.warning(
+                f"[{self.node_name}] Received non-string data "
+                f"(type: {type(data).__name__}). Expected a string for URL "
+                "extraction. Returning an empty list."
             )
-            logger.error(error_msg)
-            raise TypeError(error_msg)
+            return []
 
-        logger.info(f"[{self.node_name}] Extracted {len(found_urls)} unique URLs.")
-        return sorted(list(found_urls))
+        # A robust regex pattern to capture URLs starting with 'http://',
+        # 'https://', or 'www.'. It broadly matches characters typically
+        # found in URLs and avoids breaking on common delimiters like
+        # whitespace, angle brackets, or double quotes.
+        url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
+        
+        extracted_urls = re.findall(url_pattern, data)
+        
+        # Convert to an ordered set (using dict.fromkeys) to ensure
+        # uniqueness while preserving the original order of appearance.
+        unique_urls = list(dict.fromkeys(extracted_urls))
 
+        if unique_urls:
+            logger.debug(
+                f"[{self.node_name}] Successfully extracted "
+                f"{len(unique_urls)} unique URLs from the input data."
+            )
+        else:
+            logger.debug(f"[{self.node_name}] No URLs found in the provided data.")
+
+        return unique_urls
