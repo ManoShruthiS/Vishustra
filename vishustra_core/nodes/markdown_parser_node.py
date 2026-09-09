@@ -1,96 +1,90 @@
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 from vishustra_core.nodes.base_node import BaseNode
 
-# Initialize logger for this module
-logger = logging.getLogger(__name__)
-
-# Attempt to import the external 'markdown' library
+# Conditional import for the 'markdown' library.
+# This ensures that the node can be defined even if the library isn't present
+# at import time, but will fail gracefully when `process` is called.
 try:
     import markdown
 except ImportError:
-    logger.critical(
+    logging.getLogger(__name__).warning(
         "The 'markdown' library is not installed. "
-        "Please install it using 'pip install markdown' to use MarkdownParserNode."
+        "MarkdownParserNode will not function without it. "
+        "Please install with 'pip install markdown'."
     )
-    # Set markdown to None so we can check its availability during initialization/processing
-    markdown = None
+    markdown = None  # Set to None so we can check its presence in process()
+
+
+logger = logging.getLogger(__name__)
+
 
 class MarkdownParserNode(BaseNode):
     """
-    A Vishustra processing node that parses Markdown text into HTML.
+    A Vishustra processing node responsible for converting Markdown formatted
+    text into HTML.
 
-    This node leverages the 'markdown' Python library to perform the conversion.
-    It can be configured with various Markdown extensions during initialization.
-
-    If the 'markdown' library is not installed, the node will raise a RuntimeError
-    upon instantiation.
+    This node expects its input `data` to be a string containing Markdown.
+    It utilizes the 'markdown' library for the conversion process.
     """
-
-    def __init__(self, extensions: Optional[List[str]] = None):
-        """
-        Initializes the MarkdownParserNode.
-
-        Args:
-            extensions: A list of Markdown extension names (e.g., ['fenced_code', 'tables']).
-                        These are passed directly to the 'markdown' library.
-                        See the 'python-markdown' documentation for available extensions.
-
-        Raises:
-            RuntimeError: If the 'markdown' library is not found.
-        """
-        if markdown is None:
-            raise RuntimeError(
-                "MarkdownParserNode cannot be initialized: "
-                "The 'markdown' library is not installed. "
-                "Please install it using 'pip install markdown'."
-            )
-        self._extensions = extensions if extensions is not None else []
-        logger.debug(f"[{self.node_name}] Initialized with extensions: {self._extensions}")
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "MarkdownParserNode"
-
-    def process(self, data: Any, context: Dict[str, Any]) -> str:
         """
-        Parses the input Markdown string into an HTML string.
+        Returns the descriptive name of this processing node.
+        """
+        return "MarkdownParser"
+
+    def process(self, data: Any, context: Dict[str, Any]) -> Any:
+        """
+        Processes the input data, transforming Markdown text into HTML.
 
         Args:
-            data: The input data, expected to be a string containing Markdown text.
-            context: A dictionary containing contextual information. This node does
-                     not currently use the context for processing.
+            data: The input data, expected to be a string containing Markdown.
+            context: A dictionary providing contextual information for the node's
+                     operation. Not directly used for the parsing logic in this
+                     particular node, but available for potential future extensions
+                     or logging.
 
         Returns:
-            A string containing the HTML representation of the input Markdown.
+            A string representing the HTML output derived from the input Markdown.
 
         Raises:
-            TypeError: If the input 'data' is not a string.
-            Exception: Catches and re-raises any underlying exceptions from the
-                       'markdown' library during parsing, providing additional context.
+            TypeError: If the input `data` is not a string.
+            RuntimeError: If the 'markdown' library is not available during
+                          processing.
+            Exception: Captures and re-raises any unexpected exceptions that
+                       occur during the Markdown parsing process.
         """
-        logger.debug(f"[{self.node_name}] Starting process for data type: {type(data)}")
+        logger.debug(f"[{self.node_name}] Starting Markdown parsing for incoming data.")
+
+        if markdown is None:
+            logger.critical(
+                f"[{self.node_name}] 'markdown' library is not available. "
+                "Cannot perform Markdown parsing. Please install it."
+            )
+            raise RuntimeError(
+                f"[{self.node_name}] Required 'markdown' library is not installed."
+            )
 
         if not isinstance(data, str):
-            error_msg = (
-                f"[{self.node_name}] Invalid input type for 'data'. "
-                f"Expected a string (Markdown text), but received type {type(data).__name__}."
+            logger.error(
+                f"[{self.node_name}] Invalid input data type. Expected 'str', "
+                f"but received '{type(data).__name__}'. Data: {data[:100]}..."
             )
-            logger.error(error_msg)
-            raise TypeError(error_msg)
+            raise TypeError(
+                f"[{self.node_name}] Expected 'data' to be a string for Markdown parsing, "
+                f"but received '{type(data).__name__}'."
+            )
 
         try:
-            # Perform the Markdown to HTML conversion
-            html_output = markdown.markdown(data, extensions=self._extensions)
+            html_output = markdown.markdown(data)
             logger.info(f"[{self.node_name}] Successfully parsed Markdown data to HTML.")
             return html_output
         except Exception as e:
-            error_msg = (
-                f"[{self.node_name}] An error occurred during Markdown parsing. "
-                f"Details: {e}"
+            logger.exception(
+                f"[{self.node_name}] An unexpected error occurred during Markdown parsing."
             )
-            logger.error(error_msg, exc_info=True)
-            # Re-raise the exception to propagate the error upstream
-            raise
+            raise RuntimeError(f"[{self.node_name}] Failed to parse Markdown: {e}") from e
+
