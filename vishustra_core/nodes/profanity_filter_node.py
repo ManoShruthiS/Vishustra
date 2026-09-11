@@ -1,124 +1,65 @@
 import logging
-from typing import Any, Dict, List, Union
 import re
+from typing import Any, Dict
 
-# Assuming vishustra_core.nodes.base_node exists in the project root or sys.path
+# Assuming vishustra_core.nodes.base_node exists and contains BaseNode
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class ProfanityFilterNode(BaseNode):
     """
-    A Vishustra processing node that filters out common profanity from text data.
-    It replaces detected profanity with asterisks, maintaining the original length
-    of the offensive word for consistency.
+    A Vishustra processing node designed to filter out common profane words from text data.
+    It replaces identified profanities with a sequence of asterisks ('***') to sanitize content.
     """
 
-    # A default set of profanity words (case-insensitive for filtering).
-    # This list can be extended or overridden via context.
-    _DEFAULT_PROFANITY_LIST = {
-        "anal", "arse", "ass", "bastard", "bitch", "bollocks", "bugger", "clit",
-        "cock", "cunt", "damn", "dick", "dyke", "fag", "fuck", "goddamn", "hell",
-        "jizz", "kike", "motherfucker", "nigger", "piss", "prick", "pussy",
-        "shit", "slut", "snatch", "tits", "twat", "wank", "whore",
-    }
-    _DEFAULT_REPLACEMENT_CHAR = "*"
+    # A curated list of profane words. In a production system, this list would
+    # typically be dynamically loaded from a configuration, external service,
+    # or a more sophisticated lexicon for maintainability and customization.
+    _PROFANE_WORDS = [
+        "fuck", "shit", "bitch", "asshole", "cunt", "motherfucker",
+        "damn", "piss", "cock", "dick", "faggot", "whore", "bastard"
+    ]
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
+        """Returns the descriptive name of this node."""
         return "ProfanityFilterNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data, filtering out profanity.
+        Processes the input data, identifying and replacing profane words.
 
-        This node attempts to identify and replace profanity within string data.
-        It supports filtering a single string or a list of strings. Profanity
-        is replaced with asterisks, matching the length of the original word.
-
-        The `context` dictionary can be used to customize behavior:
-        - `profanity_list`: A `set` of strings containing words to filter.
-          If provided, it overrides the default list.
-        - `replacement_char`: A single-character string used for replacement.
-          Defaults to '*'.
+        This method expects `data` to be a string containing the text to be filtered.
+        If `data` is not a string, a warning is logged, and the original data
+        is returned without modification to avoid interrupting the pipeline.
 
         Args:
-            data: The input data. Expected to be a `str` or `List[str]`.
-                  Other types will be returned unchanged with a warning.
-            context: A dictionary containing operational context, including
-                     optional 'profanity_list' and 'replacement_char'.
+            data: The input data, ideally a string, which will be scanned for profanities.
+            context: A dictionary containing contextual information relevant to the
+                     current processing flow, which can be utilized by the node.
 
         Returns:
-            The processed data with profanity filtered, or the original data
-            if the input type is not supported or an error occurs.
+            The processed data with all identified profane words replaced by '***'.
+            If the input `data` was not a string, the original `data` is returned.
         """
-        current_profanity_list = self._DEFAULT_PROFANITY_LIST
-        current_replacement_char = self._DEFAULT_REPLACEMENT_CHAR
-
-        # Validate and apply profanity_list from context
-        context_profanity_list = context.get('profanity_list')
-        if isinstance(context_profanity_list, set) and all(isinstance(p, str) for p in context_profanity_list):
-            current_profanity_list = context_profanity_list
-            logger.debug("Using profanity list from context.")
-        elif context_profanity_list is not None:
+        if not isinstance(data, str):
             logger.warning(
-                "Invalid 'profanity_list' provided in context. Must be a set of strings. "
-                "Using default profanity list."
+                f"[{self.node_name}] Received non-string data for profanity filtering. "
+                f"Expected str, got {type(data).__name__}. Returning data unchanged."
             )
-
-        # Validate and apply replacement_char from context
-        context_replacement_char = context.get('replacement_char')
-        if isinstance(context_replacement_char, str) and len(context_replacement_char) == 1:
-            current_replacement_char = context_replacement_char
-            logger.debug(f"Using replacement character '{current_replacement_char}' from context.")
-        elif context_replacement_char is not None:
-            logger.warning(
-                "Invalid 'replacement_char' provided in context. Must be a single character string. "
-                "Using default replacement character."
-            )
-
-        # Compile a regex pattern for efficient, case-insensitive profanity detection.
-        # This handles words boundary and common punctuation.
-        profanity_pattern = re.compile(
-            r'\b(?:' + '|'.join(re.escape(word) for word in current_profanity_list) + r')\b',
-            re.IGNORECASE
-        )
-
-        def _filter_single_text(text: str) -> str:
-            """Helper to filter profanity in a single string."""
-            if not isinstance(text, str):
-                logger.debug(f"Encountered non-string item for filtering: {type(text)}. Returning as-is.")
-                return text
-
-            def replacer(match):
-                original_word = match.group(0)
-                # Replace with asterisks, preserving original length
-                return current_replacement_char * len(original_word)
-
-            filtered_text = profanity_pattern.sub(replacer, text)
-            if filtered_text != text:
-                logger.debug(f"Filtered profanity in text (original start: '{text[:20]}...')")
-            return filtered_text
-
-        try:
-            if isinstance(data, str):
-                return _filter_single_text(data)
-            elif isinstance(data, list):
-                # Apply filtering to each string in the list
-                return [_filter_single_text(item) for item in data]
-            else:
-                logger.warning(
-                    f"ProfanityFilterNode received unsupported data type: {type(data)}. "
-                    "Expected str or List[str]. Returning data unchanged."
-                )
-                return data
-        except Exception as e:
-            logger.error(
-                f"An unexpected error occurred during profanity filtering: {e}",
-                exc_info=True # Log full traceback for debugging
-            )
-            # In case of an error, it's often safer to return the original data
-            # to allow downstream nodes to potentially handle or log further,
-            # rather than stopping the pipeline.
             return data
+
+        processed_text = data
+
+        for word in self._PROFANE_WORDS:
+            # Construct a regex pattern for case-insensitive, whole-word matching.
+            # `re.escape` handles any special regex characters within `word`.
+            # `\b` ensures we match whole words only (e.g., "fuck" but not "fuchsia").
+            pattern = r'\b' + re.escape(word) + r'\b'
+            
+            # Perform the replacement globally and case-insensitively.
+            processed_text = re.sub(pattern, '***', processed_text, flags=re.IGNORECASE)
+
+        logger.debug(f"[{self.node_name}] Successfully processed and sanitized text data.")
+        return processed_text
