@@ -1,122 +1,126 @@
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, MutableMapping
 
-# Assuming vishustra_core.nodes.base_node exists and contains BaseNode
+# Assuming BaseNode is available in the specified path
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class CacheManagerNode(BaseNode):
     """
-    A Vishustra processing node designed to manage data caching operations.
+    A Vishustra node designed to manage caching operations within a pipeline.
 
-    This node offers capabilities to get, set, and invalidate items within a
-    shared cache store, which is expected to be provided via the execution context.
+    This node provides functionality to interact with a cache instance
+    passed via the processing context. It supports operations such as
+    retrieving data from the cache ('get'), storing data into the cache ('set'),
+    and invalidating existing cache entries ('invalidate').
 
-    Supported actions for initialization:
-    - "get": Retrieves a value from the cache. The 'data' input to `process`
-             should be the cache key. Returns the cached value or None if not found.
-    - "set": Stores a key-value pair in the cache. The 'data' input to `process`
-             must be a dictionary with 'key' and 'value' fields. Returns True on success.
-    - "invalidate": Removes a key from the cache. The 'data' input to `process`
-                    should be the cache key. Returns True if the key was removed,
-                    False otherwise (e.g., key not present).
-
-    The cache store itself is expected to be a mutable dictionary-like object,
-    accessible in the `context` dictionary under the key 'cache_store'.
+    The node acts as a transparent pass-through for the primary data payload,
+    returning either the cached value (on a 'get' hit) or the original input
+    data (on 'set', 'invalidate', 'get' miss, or error conditions).
     """
-
-    def __init__(self, action: str):
-        """
-        Initializes the CacheManagerNode with a specific caching action.
-
-        Args:
-            action (str): The cache operation to perform. Must be one of
-                          "get", "set", or "invalidate".
-
-        Raises:
-            ValueError: If an unsupported `action` is provided during initialization.
-        """
-        if action not in ["get", "set", "invalidate"]:
-            raise ValueError(f"Invalid cache action: '{action}'. Must be 'get', 'set', or 'invalidate'.")
-        self._action = action
-        logger.debug(f"CacheManagerNode initialized with action: '{self._action}'")
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node, including its configured action."""
-        return f"CacheManager[{self._action.capitalize()}]"
+        """Returns the descriptive name of the node."""
+        return "CacheManager"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Executes the configured cache operation based on the initialized action.
+        Processes the input data by performing a specified cache operation.
+
+        The `context` dictionary is crucial for controlling this node's behavior
+        and is expected to contain:
+        - 'cache_instance': A mutable mapping (e.g., a dict or a custom cache object)
+                            that supports dict-like operations (`__getitem__`,
+                            `__setitem__`, `__delitem__`, `get`, `__contains__`).
+                            If not provided or not a mutable mapping, the node
+                            will default to a 'noop' operation.
+        - 'cache_operation': A string ('get', 'set', 'invalidate', 'noop')
+                             indicating the desired cache interaction.
+                             Defaults to 'noop' if not specified.
+        - 'cache_key': The key (any hashable type) to be used for the cache operation.
+                       Required for 'get', 'set', and 'invalidate' operations.
 
         Args:
-            data (Any): The input data for the cache operation. Its expected format
-                        depends on the `action` configured for this node instance:
-                        - For "get" action: The cache key (Any type).
-                        - For "set" action: A dictionary `{"key": Any, "value": Any}`.
-                        - For "invalidate" action: The cache key (Any type).
-            context (Dict[str, Any]): The execution context, which must contain
-                                     'cache_store' as a dictionary-like object.
+            data: The primary data payload flowing through the pipeline.
+                  For 'set' operations, this data is stored in the cache.
+                  For 'get' operations, this data is returned on a cache miss.
+            context: A dictionary containing operational parameters for the node,
+                     including the cache instance, operation type, and key.
 
         Returns:
-            Any: The result of the cache operation:
-                 - For "get": The cached value (Any) or None if the key is not found.
-                 - For "set": True if the value was successfully set in the cache.
-                 - For "invalidate": True if the key was removed, False if not found.
-
-        Raises:
-            RuntimeError: If 'cache_store' is missing from the context or is not a dict.
-            ValueError: If the `data` format is incorrect for the specified action.
+            The result of the cache operation:
+            - Cached value if 'get' operation is a hit.
+            - Original `data` if 'set' or 'invalidate' operation.
+            - Original `data` if 'get' operation is a miss.
+            - Original `data` if no valid cache operation is performed or an error occurs.
         """
-        # Ensure 'cache_store' is present and a dictionary-like object in context
-        if 'cache_store' not in context or not isinstance(context['cache_store'], dict):
-            logger.error("Context is missing 'cache_store' or it's not a dictionary-like object for node '%s'.", self.node_name)
-            raise RuntimeError(
-                f"CacheManagerNode '{self.node_name}' requires a 'cache_store' (dict-like) in the context."
+        cache_instance_raw: Any = context.get('cache_instance')
+        operation: str = context.get('cache_operation', 'noop').lower()
+        key: Any = context.get('cache_key')
+
+        # Validate cache_instance: it must be a mutable mapping
+        if not isinstance(cache_instance_raw, MutableMapping):
+            logger.warning(
+                "No valid 'cache_instance' (expected MutableMapping) found in context for "
+                "CacheManagerNode. Performing no-op and passing data through."
             )
+            return data
 
-        cache_store = context['cache_store']
-        result: Optional[Any] = None
+        cache_instance: MutableMapping[Any, Any] = cache_instance_raw
 
-        if self._action == "get":
-            key = data
-            if key in cache_store:
-                result = cache_store[key]
-                logger.debug("Cache HIT for key '%s' in node '%s'.", key, self.node_name)
+        if operation not in ['get', 'set', 'invalidate', 'noop']:
+            logger.error(
+                f"Invalid cache operation '{operation}' specified in context for "
+                "CacheManagerNode. Performing no-op and passing data through."
+            )
+            return data
+
+        if operation != 'noop' and key is None:
+            logger.error(
+                f"Missing 'cache_key' in context for operation '{operation}' in "
+                "CacheManagerNode. Performing no-op and passing data through."
+            )
+            return data
+
+        try:
+            if operation == 'get':
+                if key in cache_instance:
+                    cached_value = cache_instance[key]
+                    logger.debug(f"Cache hit for key '{key}'. Returning cached value.")
+                    return cached_value
+                else:
+                    logger.debug(f"Cache miss for key '{key}'. Returning original data.")
+                    return data
+            elif operation == 'set':
+                cache_instance[key] = data
+                logger.debug(f"Data set in cache for key '{key}'.")
+                return data
+            elif operation == 'invalidate':
+                if key in cache_instance:
+                    del cache_instance[key]
+                    logger.debug(f"Cache entry for key '{key}' invalidated.")
+                else:
+                    logger.debug(f"Attempted to invalidate non-existent key '{key}'.")
+                return data
+            elif operation == 'noop':
+                logger.debug("CacheManagerNode performing no-op as specified.")
+                return data
+            # This 'else' branch should theoretically not be reached due to prior validation
             else:
-                logger.debug("Cache MISS for key '%s' in node '%s'.", key, self.node_name)
-            return result
-        elif self._action == "set":
-            if not isinstance(data, dict) or "key" not in data or "value" not in data:
-                logger.error(
-                    "Invalid data format for 'set' action in node '%s': %s. Expected {'key': ..., 'value': ...}.",
-                    self.node_name, data
-                )
-                raise ValueError(
-                    f"For 'set' action, 'data' must be a dictionary with 'key' and 'value' fields."
-                )
-            
-            key_to_set = data["key"]
-            value_to_set = data["value"]
-            cache_store[key_to_set] = value_to_set
-            logger.info("Cache SET: key '%s' updated in node '%s'.", key_to_set, self.node_name)
-            return True
-        elif self._action == "invalidate":
-            key_to_invalidate = data
-            if key_to_invalidate in cache_store:
-                del cache_store[key_to_invalidate]
-                logger.info("Cache INVALIDATED: key '%s' removed in node '%s'.", key_to_invalidate, self.node_name)
-                return True
-            else:
-                logger.debug("Cache INVALIDATE: key '%s' not found, no action taken in node '%s'.", key_to_invalidate, self.node_name)
-                return False
-        
-        # This branch should ideally be unreachable due to `__init__` validation,
-        # but included for defensive programming.
-        logger.critical(
-            "Unhandled action '%s' reached in process method for node '%s'. This indicates a logic error.",
-            self._action, self.node_name
-        )
-        raise RuntimeError(f"Unknown cache action encountered during processing: {self._action}")
+                logger.warning(f"Unhandled cache operation '{operation}'. Returning original data.")
+                return data
+        except TypeError as te: # e.g., unhashable key
+            logger.error(
+                f"TypeError during cache operation '{operation}' with key '{key}' in "
+                f"CacheManagerNode: {te}. Returning original data."
+            )
+            return data
+        except Exception as e:
+            # Catch any other unexpected errors during cache interaction
+            logger.exception(
+                f"An unexpected error occurred during cache operation '{operation}' for key '{key}' "
+                f"in CacheManagerNode: {e}. Returning original data."
+            )
+            return data
