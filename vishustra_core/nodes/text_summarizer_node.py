@@ -6,81 +6,97 @@ logger = logging.getLogger(__name__)
 
 class TextSummarizerNode(BaseNode):
     """
-    A Vishustra processing node that performs text summarization.
+    A processing node designed to generate a summary of input text.
 
-    This node takes a string as input and produces a shortened version of it,
-    simulating a summary. The desired summary length can be configured via the
-    context dictionary. It attempts to cut summaries at word boundaries for readability.
+    This node accepts a string as input and produces a concise summary.
+    The summarization logic is currently simulated based on a configurable
+    length reduction ratio, serving as a placeholder for integration with
+    advanced summarization models (e.g., abstractive or extractive LLM-based
+    summarizers).
     """
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "TextSummarizer"
-
-    def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input text to generate a simulated summary.
+        Returns the descriptive name of this processing node.
+        """
+        return "TextSummarizerNode"
+
+    def process(self, data: Any, context: Dict[str, Any]) -> str:
+        """
+        Processes the input data to produce a text summary.
+
+        The `data` is expected to be a string containing the text to be summarized.
+        The `context` dictionary can optionally specify `summary_length_ratio`
+        to control the output summary's length relative to the original text.
 
         Args:
-            data (Any): The input data, expected to be a string representing the text to summarize.
-            context (Dict[str, Any]): A dictionary containing contextual information.
-                                      Expected to optionally contain 'target_summary_length' (int)
-                                      for configuring the approximate summary length. Defaults to 200
-                                      characters if not provided or invalid.
+            data (Any): The input text intended for summarization. Must be a string.
+            context (Dict[str, Any]): A dictionary of operational parameters.
+                - `summary_length_ratio` (float, optional): A value between 0.1 and 0.9
+                  indicating the desired proportion of the original text's word count
+                  for the summary. Defaults to 0.3 if not provided or invalid.
 
         Returns:
-            Any: A string representing the simulated summary of the input text.
+            str: The generated summary of the input text.
 
         Raises:
-            ValueError: If the input 'data' is not a string.
-            Exception: For any other unexpected errors during the summarization process.
+            TypeError: If `data` is not a string.
+            ValueError: If `data` is an empty string or contains only whitespace.
         """
-        logger.debug(f"[{self.node_name}] Initiating text summarization process.")
-
         if not isinstance(data, str):
-            error_msg = (
-                f"[{self.node_name}] Invalid input data type for summarization. "
-                f"Expected 'str', but received '{type(data).__name__}'."
+            logger.error("TextSummarizerNode received non-string data of type: %s", type(data).__name__)
+            raise TypeError(
+                f"TextSummarizerNode expects string input for summarization, "
+                f"but received type {type(data).__name__}."
             )
-            logger.error(error_msg)
-            raise ValueError(error_msg)
 
-        original_text: str = data
-        # Retrieve target_summary_length from context, defaulting to 200
-        target_length = context.get("target_summary_length", 200)
+        if not data.strip():
+            logger.warning("TextSummarizerNode received an empty or whitespace-only string for summarization.")
+            raise ValueError("Input text for summarization cannot be empty.")
 
-        if not isinstance(target_length, int) or target_length <= 0:
+        # Retrieve and validate summary_length_ratio from context
+        summary_length_ratio = context.get("summary_length_ratio", 0.3)
+        if not isinstance(summary_length_ratio, (int, float)) or not (0.1 <= summary_length_ratio <= 0.9):
             logger.warning(
-                f"[{self.node_name}] Invalid 'target_summary_length' specified in context: {target_length}. "
-                "Using default length of 200 characters."
+                "Invalid 'summary_length_ratio' value '%s' in context. Expected float between 0.1 and 0.9. "
+                "Defaulting to 0.3.",
+                summary_length_ratio
             )
-            target_length = 200
+            summary_length_ratio = 0.3
 
-        try:
-            if len(original_text) <= target_length:
-                summary = original_text
-                logger.info(
-                    f"[{self.node_name}] Original text length ({len(original_text)}) "
-                    f"is within or equal to target length ({target_length}). No truncation performed."
-                )
-            else:
-                # Attempt to cut at a word boundary before target_length
-                cut_point = original_text.rfind(' ', 0, target_length)
-                if cut_point != -1:
-                    summary = original_text[:cut_point]
-                else:
-                    # If no space found (e.g., a very long first word), just hard cut
-                    summary = original_text[:target_length]
-                summary += "..."
-                logger.info(
-                    f"[{self.node_name}] Text summarized from {len(original_text)} "
-                    f"to approximately {len(summary)} characters."
-                )
+        original_words = data.split()
+        original_word_count = len(original_words)
 
-            logger.debug(f"[{self.node_name}] Text summarization successfully completed.")
-            return summary
-        except Exception as e:
-            error_msg = f"[{self.node_name}] An unexpected error occurred during the summarization process: {e}"
-            logger.exception(error_msg) # Logs the full traceback
-            raise # Re-raise the exception after logging for upstream handling
+        # Handle very short texts by returning them as-is
+        if original_word_count <= 10: # Heuristic: if text is 10 words or less, return full text
+            logger.info(
+                "Input text is very short (%d words). Returning full text as summary.",
+                original_word_count
+            )
+            return data.strip()
+
+        # Calculate target summary length, ensuring a minimum and not exceeding original length
+        target_word_count = max(int(original_word_count * summary_length_ratio), 5) # Minimum 5 words
+        target_word_count = min(target_word_count, original_word_count)
+
+        if target_word_count == original_word_count:
+            logger.debug(
+                "Calculated target summary word count (%d) equals original (%d). Returning full text.",
+                target_word_count, original_word_count
+            )
+            return data.strip()
+
+        # Simulate summarization by truncating the text
+        summary_words = original_words[:target_word_count]
+        summary_text = " ".join(summary_words)
+
+        # Append an ellipsis to indicate truncation, if applicable
+        if len(summary_words) < original_word_count:
+            summary_text += "..."
+
+        logger.info(
+            "Summarized text from %d words to approximately %d words (ratio: %.2f).",
+            original_word_count, len(summary_words), summary_length_ratio
+        )
+        return summary_text.strip()
