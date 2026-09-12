@@ -1,152 +1,122 @@
 import logging
-from typing import Any, Dict, Optional, Callable
+from typing import Any, Dict, Optional
+
+# Assuming vishustra_core.nodes.base_node exists and contains BaseNode
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class CacheManagerNode(BaseNode):
     """
-    Manages caching operations within the Vishustra pipeline.
+    A Vishustra processing node designed to manage data caching operations.
 
-    This node checks if a computed result for the given input data
-    is available in the shared cache. If a cached value is found,
-    it returns the cached value and signals a cache hit. If not,
-    it passes the original data through, signaling a cache miss for
-    downstream nodes to process and potentially store the result.
+    This node offers capabilities to get, set, and invalidate items within a
+    shared cache store, which is expected to be provided via the execution context.
 
-    Configuration Parameters for initialization:
-    - `cache_store_key`: The key under which the shared cache dictionary
-      is expected in the 'context'. Defaults to 'cache_store'.
-    - `cache_hit_context_key`: The key to set in 'context' to indicate
-      a cache hit (True) or miss (False). Defaults to 'cache_hit'.
-    - `cache_key_generator`: An optional callable that takes the input
-      'data' and returns a string or hashable object to be used as
-      the cache key. If `None`, the input 'data' itself must be hashable
-      and will be used as the key.
-    - `return_on_cache_hit`: If `True`, the node returns the cached value
-      directly on a hit, replacing the original `data`. If `False`,
-      it always returns the original input `data`, but still sets
-      `cache_hit_context_key` in the context. Defaults to `True`.
+    Supported actions for initialization:
+    - "get": Retrieves a value from the cache. The 'data' input to `process`
+             should be the cache key. Returns the cached value or None if not found.
+    - "set": Stores a key-value pair in the cache. The 'data' input to `process`
+             must be a dictionary with 'key' and 'value' fields. Returns True on success.
+    - "invalidate": Removes a key from the cache. The 'data' input to `process`
+                    should be the cache key. Returns True if the key was removed,
+                    False otherwise (e.g., key not present).
+
+    The cache store itself is expected to be a mutable dictionary-like object,
+    accessible in the `context` dictionary under the key 'cache_store'.
     """
 
-    def __init__(
-        self,
-        cache_store_key: str = 'cache_store',
-        cache_hit_context_key: str = 'cache_hit',
-        cache_key_generator: Optional[Callable[[Any], Any]] = None,
-        return_on_cache_hit: bool = True
-    ):
-        if not isinstance(cache_store_key, str) or not cache_store_key:
-            raise ValueError("`cache_store_key` must be a non-empty string.")
-        if not isinstance(cache_hit_context_key, str) or not cache_hit_context_key:
-            raise ValueError("`cache_hit_context_key` must be a non-empty string.")
-        if cache_key_generator is not None and not callable(cache_key_generator):
-            raise TypeError("`cache_key_generator` must be a callable or None.")
+    def __init__(self, action: str):
+        """
+        Initializes the CacheManagerNode with a specific caching action.
 
-        self._cache_store_key = cache_store_key
-        self._cache_hit_context_key = cache_hit_context_key
-        self._cache_key_generator = cache_key_generator
-        self._return_on_cache_hit = return_on_cache_hit
-        logger.debug(
-            f"CacheManagerNode initialized with cache_store_key='{self._cache_store_key}', "
-            f"cache_hit_context_key='{self._cache_hit_context_key}', "
-            f"return_on_cache_hit={self._return_on_cache_hit}"
-        )
+        Args:
+            action (str): The cache operation to perform. Must be one of
+                          "get", "set", or "invalidate".
+
+        Raises:
+            ValueError: If an unsupported `action` is provided during initialization.
+        """
+        if action not in ["get", "set", "invalidate"]:
+            raise ValueError(f"Invalid cache action: '{action}'. Must be 'get', 'set', or 'invalidate'.")
+        self._action = action
+        logger.debug(f"CacheManagerNode initialized with action: '{self._action}'")
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of the node."""
-        return "CacheManager"
-
-    def _generate_cache_key(self, data: Any) -> Any:
-        """
-        Helper method to generate the cache key from the input data.
-        Uses a custom generator if provided, otherwise attempts to use data directly.
-        """
-        if self._cache_key_generator:
-            try:
-                key = self._cache_key_generator(data)
-                # Ensure the generated key is hashable for dictionary lookup
-                hash(key)
-                return key
-            except TypeError as e:
-                logger.error(
-                    f"Custom cache_key_generator produced a non-hashable key for data type {type(data)}. Error: {e}",
-                    exc_info=True
-                )
-                raise TypeError(f"Custom cache key generator failed to produce a hashable key: {e}")
-            except Exception as e:
-                logger.error(f"Error executing custom cache_key_generator: {e}", exc_info=True)
-                raise ValueError(f"Failed to generate cache key: {e}")
-        else:
-            try:
-                hash(data)  # Test if data is hashable
-                return data
-            except TypeError:
-                logger.error(
-                    f"Input data of type {type(data)} is not hashable and no custom cache_key_generator "
-                    "was provided. Cannot use data directly as cache key."
-                )
-                raise TypeError(
-                    "Input data not hashable and no cache_key_generator provided. "
-                    "Consider providing a `cache_key_generator` callable."
-                )
+        """Returns the name of the node, including its configured action."""
+        return f"CacheManager[{self._action.capitalize()}]"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data to check and manage cache state.
+        Executes the configured cache operation based on the initialized action.
 
         Args:
-            data: The input data, which will be used (or from which a key will be derived)
-                  to look up items in the cache.
-            context: A dictionary containing shared pipeline state, expected to include
-                     the cache store.
+            data (Any): The input data for the cache operation. Its expected format
+                        depends on the `action` configured for this node instance:
+                        - For "get" action: The cache key (Any type).
+                        - For "set" action: A dictionary `{"key": Any, "value": Any}`.
+                        - For "invalidate" action: The cache key (Any type).
+            context (Dict[str, Any]): The execution context, which must contain
+                                     'cache_store' as a dictionary-like object.
 
         Returns:
-            The cached value if a hit and `return_on_cache_hit` is True.
-            Otherwise, the original input `data` is returned.
+            Any: The result of the cache operation:
+                 - For "get": The cached value (Any) or None if the key is not found.
+                 - For "set": True if the value was successfully set in the cache.
+                 - For "invalidate": True if the key was removed, False if not found.
 
         Raises:
-            KeyError: If the configured `cache_store_key` is not found in the context.
-            TypeError: If the cache store is not a dictionary or the generated cache key is not hashable.
-            ValueError: If a custom cache key generator fails.
+            RuntimeError: If 'cache_store' is missing from the context or is not a dict.
+            ValueError: If the `data` format is incorrect for the specified action.
         """
-        cache_store = context.get(self._cache_store_key)
-        if cache_store is None:
-            error_msg = (
-                f"Cache store key '{self._cache_store_key}' not found in the processing context. "
-                "Ensure a cache dictionary or object is provided in the context."
+        # Ensure 'cache_store' is present and a dictionary-like object in context
+        if 'cache_store' not in context or not isinstance(context['cache_store'], dict):
+            logger.error("Context is missing 'cache_store' or it's not a dictionary-like object for node '%s'.", self.node_name)
+            raise RuntimeError(
+                f"CacheManagerNode '{self.node_name}' requires a 'cache_store' (dict-like) in the context."
             )
-            logger.error(error_msg)
-            raise KeyError(error_msg)
 
-        if not isinstance(cache_store, Dict): # Can be extended to support custom cache interfaces
-            error_msg = (
-                f"Expected '{self._cache_store_key}' in context to be a dictionary-like object, "
-                f"but received type {type(cache_store)}. "
-                "Current implementation requires a Dict for the cache store."
-            )
-            logger.error(error_msg)
-            raise TypeError(error_msg)
+        cache_store = context['cache_store']
+        result: Optional[Any] = None
 
-        try:
-            cache_key = self._generate_cache_key(data)
-        except (TypeError, ValueError) as e:
-            logger.error(
-                f"Failed to generate cache key for input data of type {type(data)}. "
-                f"Processing halted for CacheManagerNode. Error: {e}", exc_info=True
-            )
-            raise # Re-raise to propagate the error up the pipeline
-
-        if cache_key in cache_store:
-            cached_value = cache_store[cache_key]
-            context[self._cache_hit_context_key] = True
-            logger.info(f"Cache HIT for key: {cache_key}. Node '{self.node_name}' detected cached value.")
-            if self._return_on_cache_hit:
-                return cached_value
+        if self._action == "get":
+            key = data
+            if key in cache_store:
+                result = cache_store[key]
+                logger.debug("Cache HIT for key '%s' in node '%s'.", key, self.node_name)
             else:
-                return data # Still return original data, useful for observability or specialized flows
-        else:
-            context[self._cache_hit_context_key] = False
-            logger.info(f"Cache MISS for key: {cache_key}. Node '{self.node_name}' passing original data through.")
-            return data
+                logger.debug("Cache MISS for key '%s' in node '%s'.", key, self.node_name)
+            return result
+        elif self._action == "set":
+            if not isinstance(data, dict) or "key" not in data or "value" not in data:
+                logger.error(
+                    "Invalid data format for 'set' action in node '%s': %s. Expected {'key': ..., 'value': ...}.",
+                    self.node_name, data
+                )
+                raise ValueError(
+                    f"For 'set' action, 'data' must be a dictionary with 'key' and 'value' fields."
+                )
+            
+            key_to_set = data["key"]
+            value_to_set = data["value"]
+            cache_store[key_to_set] = value_to_set
+            logger.info("Cache SET: key '%s' updated in node '%s'.", key_to_set, self.node_name)
+            return True
+        elif self._action == "invalidate":
+            key_to_invalidate = data
+            if key_to_invalidate in cache_store:
+                del cache_store[key_to_invalidate]
+                logger.info("Cache INVALIDATED: key '%s' removed in node '%s'.", key_to_invalidate, self.node_name)
+                return True
+            else:
+                logger.debug("Cache INVALIDATE: key '%s' not found, no action taken in node '%s'.", key_to_invalidate, self.node_name)
+                return False
+        
+        # This branch should ideally be unreachable due to `__init__` validation,
+        # but included for defensive programming.
+        logger.critical(
+            "Unhandled action '%s' reached in process method for node '%s'. This indicates a logic error.",
+            self._action, self.node_name
+        )
+        raise RuntimeError(f"Unknown cache action encountered during processing: {self._action}")
