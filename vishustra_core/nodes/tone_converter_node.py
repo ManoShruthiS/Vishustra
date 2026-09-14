@@ -1,18 +1,46 @@
-
 import logging
 from typing import Any, Dict
 
-# Assuming BaseNode is correctly exposed at this path within the Vishustra project structure
+# Assuming this path exists in the Vishustra project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class ToneConverterNode(BaseNode):
     """
-    A Vishustra node designed to simulate the conversion of input text to a specified tone.
-    This node processes a string and, based on the 'target_tone' provided in the context,
-    returns a modified string that aims to reflect that tone.
+    A processing node that simulates converting the tone of input text.
+
+    This node is designed to transform textual data by adjusting its
+    perceived tone (e.g., from informal to formal, or neutral to humorous).
+    The actual tone conversion logic is simulated; in a production system,
+    this would typically integrate with an LLM or a sophisticated NLP service.
+
+    The target tone can be specified during initialization or overridden
+    via the 'target_tone' key in the context dictionary during processing.
     """
+
+    def __init__(self, default_target_tone: str = "neutral"):
+        """
+        Initializes the ToneConverterNode with a default tone.
+
+        Args:
+            default_target_tone: The default tone to convert to if no
+                                 'target_tone' is provided in the process context.
+                                 Examples include "formal", "casual", "humorous", "serious".
+        Raises:
+            ValueError: If the `default_target_tone` is not a valid non-empty string.
+        """
+        if not isinstance(default_target_tone, str) or not default_target_tone.strip():
+            logger.error(
+                f"[{self.__class__.__name__}] Invalid default_target_tone provided: '{default_target_tone}'. "
+                "Must be a non-empty string."
+            )
+            raise ValueError("Default target tone must be a non-empty string.")
+        self._default_target_tone = default_target_tone.lower().strip()
+        logger.info(
+            f"[{self.node_name}] Initialized with default target tone: "
+            f"'{self._default_target_tone}'."
+        )
 
     @property
     def node_name(self) -> str:
@@ -21,122 +49,71 @@ class ToneConverterNode(BaseNode):
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Processes the input data (expected to be a string) and attempts to convert its tone
-        based on the 'target_tone' specified in the context.
+        Processes the input text data, simulating a tone conversion.
+
+        The input `data` is expected to be a string. The node attempts to
+        determine the desired target tone from the `context` dictionary
+        (using the key 'target_tone'). If not found, it falls back to the
+        `default_target_tone` set during initialization.
 
         Args:
-            data: The input text string to be converted.
-            context: A dictionary containing runtime information, including
-                     'target_tone' (e.g., 'professional', 'casual', 'sarcastic', 'formal').
+            data: The input text (str) to be converted.
+            context: A dictionary containing additional runtime information.
+                     A 'target_tone' (str) key can be used here to dynamically
+                     override the default target tone for this specific call.
 
         Returns:
-            The tone-converted string. If conversion fails or tone is unsupported,
-            the original data might be returned.
+            The simulated tone-converted text (str). This simulation
+            prepends a tone indicator to the original text.
 
         Raises:
-            TypeError: If the input data is not a string.
+            ValueError: If the input `data` is not a string, or if the
+                        determined target tone (from context or default) is
+                        not a valid non-empty string.
         """
+        logger.debug(f"[{self.node_name}] Initiating processing. Context keys: {list(context.keys())}")
+
         if not isinstance(data, str):
             logger.error(
-                f"ToneConverterNode received invalid input data type. "
-                f"Expected string, got {type(data).__name__}."
+                f"[{self.node_name}] Invalid input data type. Expected 'str', "
+                f"received '{type(data).__name__}'."
             )
-            raise TypeError(
-                f"ToneConverterNode expects string data, but received {type(data).__name__}."
+            raise ValueError(
+                f"[{self.node_name}] Input 'data' must be a string for tone conversion."
             )
 
-        target_tone = context.get("target_tone")
-        if not isinstance(target_tone, str) or not target_tone.strip():
+        if not data.strip():
             logger.warning(
-                "No valid 'target_tone' specified in context. "
-                "Defaulting to 'neutral' and applying minimal transformation."
+                f"[{self.node_name}] Received empty or whitespace-only input data. "
+                "Returning data as is."
             )
-            target_tone = "neutral"
-        
-        target_tone = target_tone.strip().lower()
+            return data
 
-        logger.info(f"ToneConverterNode initiated processing for target tone: '{target_tone}'.")
+        # Determine the target tone, preferring context over default
+        target_tone = context.get('target_tone', self._default_target_tone)
 
-        converted_text = data
-
-        try:
-            if target_tone == "professional":
-                converted_text = self._transform_to_professional(data)
-            elif target_tone == "casual":
-                converted_text = self._transform_to_casual(data)
-            elif target_tone == "sarcastic":
-                converted_text = self._transform_to_sarcastic(data)
-            elif target_tone == "formal":
-                converted_text = self._transform_to_formal(data)
-            elif target_tone == "neutral":
-                # For neutral, we might just clean up whitespace or apply no significant change
-                converted_text = data.strip()
-                logger.debug("Target tone is 'neutral', no specific stylistic transformation applied.")
-            else:
-                logger.warning(
-                    f"Unsupported target tone '{target_tone}'. "
-                    "No specific tone transformation applied. Returning original data."
-                )
-                converted_text = data # Fallback to original data if tone is unsupported
-
-        except Exception as e:
+        if not isinstance(target_tone, str) or not target_tone.strip():
             logger.error(
-                f"An unexpected error occurred during tone conversion for tone '{target_tone}': {e}",
-                exc_info=True
+                f"[{self.node_name}] Invalid target tone determined. "
+                f"From context: '{context.get('target_tone')}', "
+                f"Default: '{self._default_target_tone}'. "
+                "Target tone must be a non-empty string."
             )
-            # In case of an internal error during simulation, return original data
-            converted_text = data 
-            logger.info("Returning original data due to an error during tone conversion attempt.")
+            raise ValueError(
+                f"[{self.node_name}] Target tone must be a non-empty string."
+            )
+        target_tone = target_tone.lower().strip()
 
-        logger.info(
-            f"ToneConverterNode completed processing. "
-            f"Output text length: {len(converted_text)} characters."
+        logger.info(f"[{self.node_name}] Attempting to convert text to '{target_tone}' tone.")
+
+        # Simulate the tone conversion.
+        # In a real scenario, this would involve a complex NLP model or
+        # an LLM API call, possibly rephrasing the entire text.
+        # For this simulation, we prepend a clear indicator.
+        converted_text = f"[[Tone: {target_tone.capitalize()}]] {data}"
+
+        logger.debug(
+            f"[{self.node_name}] Successfully simulated text conversion to "
+            f"'{target_tone}' tone."
         )
         return converted_text
-
-    def _transform_to_professional(self, text: str) -> str:
-        """Simulates transforming text to a professional tone."""
-        logger.debug("Applying professional tone transformation.")
-        text = text.replace("hey", "Dear Team,")
-        text = text.replace("wanna", "would like to")
-        text = text.replace("lol", "")
-        text = text.replace("dude", "colleague")
-        text = text.replace("!", ".") # Convert exclamations to periods
-        if not text.strip().endswith('.'):
-            text += '.'
-        return f"Regarding your inquiry: {text.strip().capitalize()}"
-
-    def _transform_to_casual(self, text: str) -> str:
-        """Simulates transforming text to a casual tone."""
-        logger.debug("Applying casual tone transformation.")
-        text = text.replace("regarding your inquiry", "so, about that")
-        text = text.replace("would like to", "wanna")
-        text = text.replace(".", "!") # Convert periods to exclamations
-        text = text.replace("colleague", "buddy")
-        text = text.replace("Dear Team,", "Hey there,")
-        return f"Hey there, {text.strip().lower()}"
-
-    def _transform_to_sarcastic(self, text: str) -> str:
-        """Simulates transforming text to a sarcastic tone."""
-        logger.debug("Applying sarcastic tone transformation.")
-        text = text.replace("good", "*super*")
-        text = text.replace("great", "*marvelous*")
-        text = text.replace("problem", "minor inconvenience")
-        text = text.replace("solution", "*brilliant* idea")
-        text = text.replace("!", "!") # Maintain exclamations or add one
-        if not text.strip().endswith('?'):
-            text += '!' # Add a touch of sarcasm with exclamation
-        return f"Oh, how absolutely *thrilling*: {text.strip()}."
-
-    def _transform_to_formal(self, text: str) -> str:
-        """Simulates transforming text to a formal tone."""
-        logger.debug("Applying formal tone transformation.")
-        text = text.replace("hey", "Greetings,")
-        text = text.replace("wanna", "desire to")
-        text = text.replace("lol", "[chuckle politely]")
-        text = text.replace("dude", "esteemed individual")
-        text = text.replace("!", ".") # Convert exclamations to periods
-        if not text.strip().endswith('.'):
-            text += '.'
-        return f"It is my distinct pleasure to inform you that: {text.strip().capitalize()}"
-
