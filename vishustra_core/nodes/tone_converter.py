@@ -1,133 +1,92 @@
+
 import logging
 from typing import Any, Dict
 
+# Assuming vishustra_core.nodes.base_node exists in the project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class ToneConverter(BaseNode):
     """
-    A Vishustra processing node that converts the tone of a given text.
-    It simulates tone conversion based on the 'target_tone' specified in the context.
-    """
+    A processing node designed to simulate converting the tone of input text.
 
-    _supported_tones = {"formal", "casual", "sarcastic", "neutral"}
+    This node expects the input 'data' to be a string. The 'context' dictionary
+    must contain a 'target_tone' key specifying the desired output tone
+    (e.g., "formal", "informal", "professional", "friendly", "sarcastic").
+
+    If the 'target_tone' is not recognized, the original data is returned
+    with a logged warning.
+    """
 
     @property
     def node_name(self) -> str:
-        """Returns the name of the node."""
+        """Returns the descriptive name of the node."""
         return "ToneConverter"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Converts the tone of the input text based on the 'target_tone'
-        provided in the context. This method simulates the conversion.
+        Processes the input data by attempting to simulate a tone conversion.
 
         Args:
-            data (Any): The input text to be converted. Expected to be a string.
-            context (Dict[str, Any]): A dictionary containing node-specific configuration.
-                                       Must include 'target_tone' (str), e.g., {'target_tone': 'formal'}.
+            data: The input text, expected to be a string.
+            context: A dictionary containing node-specific configuration.
+                     Must contain a 'target_tone' key (str) specifying the
+                     desired tone for conversion.
 
         Returns:
-            Any: The tone-converted text (string).
+            The text with its simulated tone adjusted as per the 'target_tone',
+            or the original data if the conversion cannot be performed (e.g.,
+            unrecognized tone or invalid input type).
 
         Raises:
-            ValueError: If 'data' is not a string, or 'target_tone' is missing
-                        or invalid in the context.
+            TypeError: If the input 'data' is not a string.
+            ValueError: If 'target_tone' is missing from the context or is not a string.
         """
         if not isinstance(data, str):
-            logger.error(f"ToneConverter received invalid data type. Expected str, got {type(data)}")
-            raise ValueError("Input data for ToneConverter must be a string.")
+            error_msg = (
+                f"Input data for '{self.node_name}' must be a string. "
+                f"Received type: {type(data).__name__}."
+            )
+            logger.error(error_msg)
+            raise TypeError(error_msg)
 
-        target_tone = context.get("target_tone")
-        if not isinstance(target_tone, str) or not target_tone.strip():
-            logger.error("ToneConverter context missing or invalid 'target_tone'. "
-                         "Expected a non-empty string for 'target_tone'.")
-            raise ValueError("Context must provide a 'target_tone' (string).")
+        if "target_tone" not in context or not isinstance(context["target_tone"], str):
+            error_msg = (
+                f"Context for '{self.node_name}' requires a string value for the 'target_tone' key. "
+                f"Current context keys: {list(context.keys()) if context else 'None'}."
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
-        normalized_target_tone = target_tone.strip().lower()
+        target_tone = context["target_tone"].lower()
+        processed_data = data
 
-        if normalized_target_tone not in self._supported_tones:
-            logger.warning(f"Unsupported target tone '{target_tone}' requested for ToneConverter. "
-                           f"Supported tones are: {', '.join(self._supported_tones)}. "
-                           "Returning original data without conversion.")
-            return data
+        # A dictionary mapping target tones to simple text transformation templates.
+        # In a production system, this would typically involve an LLM call
+        # or a sophisticated NLP library for actual tone conversion.
+        tone_templates = {
+            "formal": "Regarding the matter at hand, we must state: {text}. Please note this communication.",
+            "informal": "Hey there! Just wanted to quickly share: {text}. Hope that helps!",
+            "professional": "This serves to professionally communicate that: {text}. Further action will be taken as required.",
+            "friendly": "Hi! Hope you're doing great. Just a friendly heads-up: {text} :)",
+            "sarcastic": "Oh, how utterly fascinating! It's truly astonishing that: {text}. Simply brilliant.",
+        }
 
-        logger.info(f"Attempting to convert text to '{normalized_target_tone}' tone.")
-        converted_text = data
+        if target_tone in tone_templates:
+            template = tone_templates[target_tone]
+            try:
+                processed_data = template.format(text=data)
+                logger.info(f"Successfully simulated tone conversion to '{target_tone}' for data snippet: '{data[:75]}...'")
+            except Exception as e:
+                logger.error(
+                    f"Failed to apply tone template for '{target_tone}' on data '{data[:75]}...'. "
+                    f"Error: {e}. Returning original data."
+                )
+        else:
+            logger.warning(
+                f"Unrecognized target tone '{target_tone}' for '{self.node_name}'. "
+                "Returning original data without modification."
+            )
 
-        # --- SIMULATED TONE CONVERSION LOGIC ---
-        if normalized_target_tone == "formal":
-            sentences = data.split('.')
-            converted_sentences = []
-            for sentence_part in sentences:
-                sentence_part = sentence_part.strip()
-                if not sentence_part:
-                    continue
-
-                # Ensure sentence starts with capital
-                if sentence_part and sentence_part[0].islower():
-                    sentence_part = sentence_part[0].upper() + sentence_part[1:]
-
-                # Replace common contractions
-                sentence_part = (sentence_part.replace("don't", "do not")
-                                              .replace("can't", "cannot")
-                                              .replace("it's", "it is")
-                                              .replace("i'm", "I am")
-                                              .replace("we're", "we are"))
-
-                # Add a formal prefix/suffix if appropriate
-                if "please" in sentence_part.lower() and not sentence_part.lower().startswith("kindly"):
-                    sentence_part = sentence_part.replace("please", "kindly", 1)
-
-                converted_sentences.append(sentence_part)
-
-            converted_text = ". ".join(converted_sentences)
-            if converted_text and not converted_text.endswith(('.', '!', '?')):
-                converted_text += '.'
-
-        elif normalized_target_tone == "casual":
-            converted_text = data.lower()
-            # Use common contractions
-            converted_text = (converted_text.replace("do not", "don't")
-                                          .replace("cannot", "can't")
-                                          .replace("it is", "it's")
-                                          .replace("i am", "i'm")
-                                          .replace("we are", "we're"))
-            # Replace formal greetings/closings
-            converted_text = converted_text.replace("hello", "hey")
-            converted_text = converted_text.replace("thank you", "thanks")
-            # Add a casual closing
-            if not converted_text.endswith(('.', '!', '?')) and len(converted_text.split()) > 3:
-                converted_text += "!"
-            converted_text = converted_text.strip().replace("  ", " ") # Clean up spaces
-
-        elif normalized_target_tone == "sarcastic":
-            # Simulate "Spongebob case" by alternating case
-            converted_chars = []
-            upper_case_next = True
-            for char in data:
-                if char.isalpha():
-                    if upper_case_next:
-                        converted_chars.append(char.upper())
-                    else:
-                        converted_chars.append(char.lower())
-                    upper_case_next = not upper_case_next
-                else:
-                    converted_chars.append(char)
-            converted_text = "".join(converted_chars)
-            # Add a sarcastic phrase if suitable
-            if len(converted_text.split()) > 3 and not any(p in converted_text for p in ["?", "!"]):
-                converted_text += " (Oh, how original!)"
-
-        elif normalized_target_tone == "neutral":
-            # Strip emotive words, ensure consistent casing and punctuation
-            converted_text = data.replace("really good", "good").replace("absolutely fantastic", "good").replace("terrible", "bad")
-            sentences = [s.strip().capitalize() for s in converted_text.split('.') if s.strip()]
-            converted_text = ". ".join(sentences)
-            converted_text = converted_text.strip().replace("  ", " ") # Clean up spaces
-            if converted_text and not converted_text.endswith(('.', '!', '?')):
-                converted_text += '.'
-
-        logger.debug(f"Original text: '{data}' -> Converted to '{normalized_target_tone}' tone: '{converted_text}'")
-        return converted_text
+        return processed_data
