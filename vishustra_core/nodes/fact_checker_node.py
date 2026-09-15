@@ -1,124 +1,92 @@
 import logging
-from typing import Any, Dict, List, Union
+from typing import Any, Dict
 
-# Assuming BaseNode is located here as per project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class FactCheckerNode(BaseNode):
     """
-    A processing node designed to simulate fact-checking a given statement
-    against a set of known truths and falsehoods provided within the context.
+    A processing node that simulates fact-checking an input statement against
+    a predefined knowledge base.
 
-    This node aims to determine if a statement is factual, false, or unverified
-    based on the available knowledge base.
+    This node expects the input `data` to be a dictionary containing a 'statement' key.
+    It returns a dictionary with the original statement, fact-checking status, and
+    supporting evidence (or lack thereof).
     """
+
+    def __init__(self):
+        """
+        Initializes the FactCheckerNode with a mock knowledge base.
+        In a real-world scenario, this would interact with external fact-checking
+        APIs, databases, or sophisticated NLP models.
+        """
+        self._knowledge_base = {
+            "The capital of France is Paris.": {"status": "VERIFIED", "evidence": "Paris is the official capital city of France."},
+            "Water boils at 100 degrees Celsius at sea level.": {"status": "VERIFIED", "evidence": "This is a standard scientific fact under normal atmospheric pressure."},
+            "Humans can fly naturally.": {"status": "REFUTED", "evidence": "Humans lack the biological adaptations for natural flight, requiring technology to fly."},
+            "The moon is made of cheese.": {"status": "REFUTED", "evidence": "The moon is composed primarily of silicate rocks and metals, not cheese."},
+            "The Earth is flat.": {"status": "REFUTED", "evidence": "Scientific evidence overwhelmingly supports the Earth being an oblate spheroid."}
+        }
+        logger.info("FactCheckerNode initialized with mock knowledge base.")
 
     @property
     def node_name(self) -> str:
-        """Returns the descriptive name of this processing node."""
-        return "FactChecker"
+        """Returns the descriptive name of the node."""
+        return "FactCheckerNode"
 
-    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Union[str, bool, float, None]]:
+    def process(self, data: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Processes the input data to fact-check a statement.
+        Processes the input data to perform a simulated fact-check.
 
-        Expected `data` format:
-        A dictionary containing at least a "statement" key with a string value.
-        Example:
-        ```python
-        {"statement": "The capital of France is Paris."}
-        ```
+        Args:
+            data (Any): The input data, expected to be a dictionary with a 'statement' key.
+                        Example: `{'statement': 'The capital of France is Paris.'}`
+            context (Dict[str, Any]): A dictionary containing contextual information
+                                       for the current processing flow.
 
-        Expected `context` format:
-        A dictionary that may contain:
-        - "known_facts": A list of strings representing statements considered true.
-        - "known_falsehoods": A list of strings representing statements considered false.
-        Example:
-        ```python
-        {
-            "known_facts": ["The capital of France is Paris.", "Water boils at 100 degrees Celsius at sea level."],
-            "known_falsehoods": ["Elephants can fly.", "The Earth is flat."]
-        }
-        ```
-
-        Returns a dictionary containing the fact-checking outcome:
-        - "original_statement": The statement that was checked.
-        - "is_factual": `True` if verified as factual, `False` if verified as false,
-                        `None` if the statement could not be definitively verified or disproven.
-        - "fact_check_details": A string providing more information on the outcome.
-        - "confidence": A float (0.0 to 1.0) indicating the confidence in the result.
-
+        Returns:
+            Dict[str, Any]: A dictionary containing the fact-checking result:
+                            - 'original_statement': The statement that was checked.
+                            - 'is_fact_checked': True if the node attempted a check, False on error.
+                            - 'status': 'VERIFIED', 'REFUTED', 'UNVERIFIED', or 'ERROR'.
+                            - 'evidence': A string explaining the status or an error message.
         Raises:
-            ValueError: If `data` is not a dictionary or does not contain a valid 'statement'.
+            ValueError: If the input data does not conform to the expected format.
         """
-        if not isinstance(data, dict):
-            logger.error("FactCheckerNode received invalid data: expected a dictionary.")
-            raise ValueError("Input data must be a dictionary.")
+        if not isinstance(data, dict) or 'statement' not in data:
+            logger.error(
+                f"FactCheckerNode received invalid data format. "
+                f"Expected dict with 'statement' key, got: {type(data).__name__}"
+            )
+            raise ValueError(
+                "FactCheckerNode requires input `data` to be a dictionary "
+                "containing a 'statement' key."
+            )
 
-        statement = data.get("statement")
-        if not isinstance(statement, str) or not statement.strip():
-            logger.error(f"FactCheckerNode received data without a valid 'statement' string. Data: {data}")
-            raise ValueError("Input data must contain a non-empty 'statement' string.")
+        statement_to_check = data['statement']
+        logger.debug(f"Attempting to fact-check statement: '{statement_to_check}'")
 
-        # Initialize result with a neutral/unverified state
-        result: Dict[str, Union[str, bool, float, None]] = {
-            "original_statement": statement,
-            "is_factual": None,
-            "fact_check_details": "Statement could not be explicitly verified or disproven against available knowledge.",
-            "confidence": 0.5
-        }
+        try:
+            result = self._knowledge_base.get(
+                statement_to_check,
+                {"status": "UNVERIFIED", "evidence": "Could not find a direct match in the knowledge base."}
+            )
 
-        # Normalize the statement for case-insensitive comparison
-        normalized_statement = statement.strip().lower()
-
-        # Retrieve known facts from context
-        known_facts: List[str] = context.get("known_facts", [])
-        if not isinstance(known_facts, list):
-            logger.warning("Context 'known_facts' is not a list. Skipping fact-checking against external knowledge.")
-            known_facts = []
-
-        # Retrieve known falsehoods from context
-        known_falsehoods: List[str] = context.get("known_falsehoods", [])
-        if not isinstance(known_falsehoods, list):
-            logger.warning("Context 'known_falsehoods' is not a list. Skipping checking against known falsehoods.")
-            known_falsehoods = []
-
-        is_true = False
-        is_false = False
-
-        # Check against known facts
-        for fact in known_facts:
-            if not isinstance(fact, str):
-                logger.debug(f"Skipping non-string item in 'known_facts': {fact}")
-                continue
-            if normalized_statement == fact.strip().lower():
-                is_true = True
-                break
-
-        # Check against known falsehoods if not already found true
-        if not is_true:
-            for falsehood in known_falsehoods:
-                if not isinstance(falsehood, str):
-                    logger.debug(f"Skipping non-string item in 'known_falsehoods': {falsehood}")
-                    continue
-                if normalized_statement == falsehood.strip().lower():
-                    is_false = True
-                    break
-
-        if is_true:
-            result["is_factual"] = True
-            result["fact_check_details"] = "Statement aligns with known facts."
-            result["confidence"] = 1.0
-            logger.info(f"Statement '{statement}' was verified as factual.")
-        elif is_false:
-            result["is_factual"] = False
-            result["fact_check_details"] = "Statement contradicts known facts/is a known falsehood."
-            result["confidence"] = 1.0
-            logger.info(f"Statement '{statement}' was verified as false.")
-        else:
-            # If neither true nor false, it remains unverified with default details
-            logger.info(f"Statement '{statement}' could not be definitively verified or disproven against available knowledge.")
-            
-        return result
+            return {
+                "original_statement": statement_to_check,
+                "is_fact_checked": True,
+                "status": result['status'],
+                "evidence": result['evidence']
+            }
+        except Exception as e:
+            logger.exception(
+                f"An unexpected error occurred during fact-checking for statement "
+                f"'{statement_to_check}': {e}"
+            )
+            return {
+                "original_statement": statement_to_check,
+                "is_fact_checked": False,
+                "status": "ERROR",
+                "evidence": f"An internal error prevented full fact verification: {e}"
+            }
