@@ -1,102 +1,90 @@
 import logging
 from typing import Any, Dict
+
+# Assuming vishustra_core is installed or available in sys.path
+# In a real project, this would be relative or part of the package structure.
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
+
 class TextSummarizerNode(BaseNode):
     """
-    A processing node designed to generate a summary of input text.
+    A processing node that simulates text summarization.
 
-    This node accepts a string as input and produces a concise summary.
-    The summarization logic is currently simulated based on a configurable
-    length reduction ratio, serving as a placeholder for integration with
-    advanced summarization models (e.g., abstractive or extractive LLM-based
-    summarizers).
+    It takes a string as input and returns a truncated version of the text,
+    acting as a placeholder for a more sophisticated summarization engine.
+    The summary length can be configured via the context.
     """
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of this processing node.
-        """
+        """Returns the name of the node."""
         return "TextSummarizerNode"
 
     def process(self, data: Any, context: Dict[str, Any]) -> str:
         """
-        Processes the input data to produce a text summary.
+        Simulates summarization of the input text.
 
-        The `data` is expected to be a string containing the text to be summarized.
-        The `context` dictionary can optionally specify `summary_length_ratio`
-        to control the output summary's length relative to the original text.
+        The `data` input is expected to be a string.
+        The `context` can optionally contain a 'summary_length' (int)
+        parameter to control the target word count of the summary.
+        Defaults to 50 words if not specified or invalid.
 
         Args:
-            data (Any): The input text intended for summarization. Must be a string.
-            context (Dict[str, Any]): A dictionary of operational parameters.
-                - `summary_length_ratio` (float, optional): A value between 0.1 and 0.9
-                  indicating the desired proportion of the original text's word count
-                  for the summary. Defaults to 0.3 if not provided or invalid.
+            data: The text content (string) to be summarized.
+            context: A dictionary potentially containing processing parameters,
+                     e.g., {"summary_length": 100}.
 
         Returns:
-            str: The generated summary of the input text.
+            A string representing the simulated summary of the input text.
 
         Raises:
-            TypeError: If `data` is not a string.
-            ValueError: If `data` is an empty string or contains only whitespace.
+            TypeError: If the input `data` is not a string.
         """
         if not isinstance(data, str):
-            logger.error("TextSummarizerNode received non-string data of type: %s", type(data).__name__)
+            logger.error(
+                f"Invalid input type for {self.node_name}. Expected 'str', "
+                f"but received '{type(data).__name__}'."
+            )
             raise TypeError(
-                f"TextSummarizerNode expects string input for summarization, "
-                f"but received type {type(data).__name__}."
+                f"{self.node_name} expects string data for summarization. "
+                f"Got {type(data).__name__}."
             )
 
         if not data.strip():
-            logger.warning("TextSummarizerNode received an empty or whitespace-only string for summarization.")
-            raise ValueError("Input text for summarization cannot be empty.")
-
-        # Retrieve and validate summary_length_ratio from context
-        summary_length_ratio = context.get("summary_length_ratio", 0.3)
-        if not isinstance(summary_length_ratio, (int, float)) or not (0.1 <= summary_length_ratio <= 0.9):
             logger.warning(
-                "Invalid 'summary_length_ratio' value '%s' in context. Expected float between 0.1 and 0.9. "
-                "Defaulting to 0.3.",
-                summary_length_ratio
+                f"{self.node_name} received an empty or whitespace-only string for summarization. "
+                "Returning an empty string."
             )
-            summary_length_ratio = 0.3
+            return ""
 
-        original_words = data.split()
-        original_word_count = len(original_words)
+        logger.info(f"[{self.node_name}] Initiating summarization for text of length {len(data)} characters.")
 
-        # Handle very short texts by returning them as-is
-        if original_word_count <= 10: # Heuristic: if text is 10 words or less, return full text
-            logger.info(
-                "Input text is very short (%d words). Returning full text as summary.",
-                original_word_count
+        # Determine target word count for the summary
+        target_word_count = context.get("summary_length", 50)
+        if not isinstance(target_word_count, int) or target_word_count <= 0:
+            logger.warning(
+                f"[{self.node_name}] Invalid or missing 'summary_length' in context "
+                f"(received: {target_word_count}). Defaulting to 50 words."
             )
-            return data.strip()
+            target_word_count = 50
 
-        # Calculate target summary length, ensuring a minimum and not exceeding original length
-        target_word_count = max(int(original_word_count * summary_length_ratio), 5) # Minimum 5 words
-        target_word_count = min(target_word_count, original_word_count)
+        words = data.split()
+        summary: str
 
-        if target_word_count == original_word_count:
+        if len(words) <= target_word_count:
+            summary = data  # Original text is short enough, return as-is
             logger.debug(
-                "Calculated target summary word count (%d) equals original (%d). Returning full text.",
-                target_word_count, original_word_count
+                f"[{self.node_name}] Original text word count ({len(words)}) is "
+                f"less than or equal to target ({target_word_count}). Returning full text."
             )
-            return data.strip()
+        else:
+            summary_words = words[:target_word_count]
+            summary = " ".join(summary_words) + "..."
+            logger.debug(
+                f"[{self.node_name}] Summarized text to approximately {target_word_count} words."
+            )
 
-        # Simulate summarization by truncating the text
-        summary_words = original_words[:target_word_count]
-        summary_text = " ".join(summary_words)
-
-        # Append an ellipsis to indicate truncation, if applicable
-        if len(summary_words) < original_word_count:
-            summary_text += "..."
-
-        logger.info(
-            "Summarized text from %d words to approximately %d words (ratio: %.2f).",
-            original_word_count, len(summary_words), summary_length_ratio
-        )
-        return summary_text.strip()
+        logger.info(f"[{self.node_name}] Summarization complete. Output length: {len(summary)} characters.")
+        return summary
