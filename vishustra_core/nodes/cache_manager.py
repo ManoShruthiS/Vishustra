@@ -1,119 +1,109 @@
 import logging
 from typing import Any, Dict, Optional
 
-# Assuming BaseNode is available at this path within the project structure
 from vishustra_core.nodes.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
 class CacheManager(BaseNode):
     """
-    A Vishustra node designed to manage a simple in-memory key-value cache.
+    A processing node designed for managing data caching operations within the Vishustra framework.
 
-    This node facilitates common caching operations such as 'get', 'set', and
-    'invalidate' based on parameters provided in the processing context.
-    It's suitable for scenarios where transient data needs to be stored and
-    retrieved quickly within an orchestration flow.
+    This node interacts with a cache store provided via the execution context, supporting
+    'get', 'set', and 'clear_all' operations. It allows for flexible integration of
+    caching mechanisms into various parts of an LLM orchestration pipeline.
+
+    The cache store is expected to be a mutable dictionary-like object found in the
+    `context` under the key 'cache_store'. If not found, a basic in-memory dictionary
+    is initialized for the current execution.
+
+    Operations:
+    - 'get': Attempts to retrieve a value associated with 'cache_key'. Returns the
+             cached value on a hit, or `None` on a miss.
+    - 'set': Stores the incoming `data` under the specified 'cache_key'. Returns the
+             data that was just stored.
+    - 'clear_all': Empties the entire cache store. Returns `None`.
     """
-
-    def __init__(self):
-        """
-        Initializes the CacheManager node, setting up an empty dictionary
-        to serve as the in-memory cache storage.
-        """
-        self._cache: Dict[str, Any] = {}
-        logger.debug("CacheManager node initialized with an empty in-memory cache.")
 
     @property
     def node_name(self) -> str:
-        """
-        Returns the descriptive name of this node.
-        """
+        """Returns the descriptive name of this processing node."""
         return "CacheManager"
 
     def process(self, data: Any, context: Dict[str, Any]) -> Any:
         """
-        Executes a cache operation ('get', 'set', or 'invalidate') based on
-        the 'cache_operation' and 'cache_key' specified in the context.
+        Executes a cache operation based on the provided context.
 
         Args:
-            data (Any): The input data. For 'set' operations, this is the
-                        value to be cached. For 'get' and 'invalidate',
-                        it's passed through but not directly used by the cache logic.
-            context (Dict[str, Any]): A dictionary containing parameters for
-                                     the caching operation. Expected keys:
-                                     - 'cache_operation' (str): The desired action
-                                                                ('get', 'set', 'invalidate').
-                                     - 'cache_key' (str): The unique identifier
-                                                          for the cache entry.
+            data (Any): The input data. For 'set' operations, this is the value to be cached.
+                        For 'get' and 'clear_all', this input is typically ignored.
+            context (Dict[str, Any]): A dictionary containing shared execution context.
+                                      Expected keys:
+                                      - 'cache_store': The dictionary-like object to be used as the cache.
+                                                       If not present, a new in-memory dictionary is
+                                                       created and assigned to this key within the context.
+                                      - 'cache_key' (str): The specific key for 'get' or 'set' operations.
+                                                           This is a required parameter for these actions.
+                                      - 'cache_action' (str): The desired cache operation ('get', 'set',
+                                                              'clear_all'). Defaults to 'get' if not specified.
 
         Returns:
-            Any:
-                - For 'get': The value retrieved from the cache if a hit, otherwise `None`.
-                - For 'set': The `data` that was just stored in the cache.
-                - For 'invalidate': `None`.
+            Any: The cached value on a 'get' hit, the stored value on 'set', or `None` for
+                 a 'get' miss or for 'clear_all' operations.
 
         Raises:
-            ValueError: If 'cache_operation' or 'cache_key' are missing from
-                        the context or are of an invalid type, or if an
-                        unsupported 'cache_operation' is provided.
+            ValueError: If 'cache_store' in the context is not a dictionary-like object,
+                        if 'cache_key' is missing for 'get' or 'set' actions, or if an
+                        unrecognized 'cache_action' is specified.
         """
-        cache_operation: Optional[str] = context.get("cache_operation")
-        cache_key: Optional[str] = context.get("cache_key")
-
-        if not isinstance(cache_operation, str):
-            logger.error("Validation failed: 'cache_operation' missing or not a string in context.")
-            raise ValueError("Context requires a 'cache_operation' (str) to perform caching.")
-
-        if not isinstance(cache_key, str):
-            logger.error("Validation failed: 'cache_key' missing or not a string in context for operation '%s'.", cache_operation)
-            raise ValueError("Context requires a 'cache_key' (str) to perform caching.")
-
-        if cache_operation == "get":
-            return self._get_from_cache(cache_key)
-        elif cache_operation == "set":
-            return self._set_in_cache(cache_key, data)
-        elif cache_operation == "invalidate":
-            self._invalidate_cache_entry(cache_key)
-            return None  # Invalidation operations typically do not return data
-        else:
-            logger.error("Unsupported cache operation '%s' specified for key '%s'.", cache_operation, cache_key)
+        # Retrieve or initialize the cache store from the context
+        cache_store = context.get('cache_store')
+        if cache_store is None:
+            logger.info(
+                f"[{self.node_name}] No 'cache_store' found in context. Initializing a new in-memory cache for this pipeline."
+            )
+            cache_store = {}
+            context['cache_store'] = cache_store  # Store it back in context for other nodes or subsequent calls
+        elif not isinstance(cache_store, Dict):
+            logger.error(
+                f"[{self.node_name}] Invalid 'cache_store' type in context. Expected a dict-like object, got {type(cache_store).__name__}."
+            )
             raise ValueError(
-                f"Unsupported cache_operation: '{cache_operation}'. "
-                "Supported operations are 'get', 'set', 'invalidate'."
+                f"Invalid 'cache_store' type. Expected a dict-like object, got {type(cache_store).__name__}."
             )
 
-    def _get_from_cache(self, key: str) -> Optional[Any]:
-        """
-        Helper method to retrieve a value from the internal cache.
-        """
-        try:
-            value = self._cache[key]
-            logger.info("Cache HIT for key '%s'.", key)
-            return value
-        except KeyError:
-            logger.debug("Cache MISS for key '%s'.", key)
-            return None
-        except Exception as e:
-            logger.exception("An unexpected error occurred while retrieving key '%s' from cache.", key)
+        cache_action = context.get('cache_action', 'get').lower()
+        cache_key = context.get('cache_key')
+
+        if cache_action == 'get':
+            if cache_key is None:
+                logger.error(f"[{self.node_name}] 'cache_key' is a mandatory parameter for the 'get' action.")
+                raise ValueError("'cache_key' is required for 'get' action.")
+
+            cached_value: Optional[Any] = cache_store.get(cache_key)
+            if cached_value is not None:
+                logger.debug(f"[{self.node_name}] Cache hit for key: '{cache_key}'.")
+                return cached_value
+            else:
+                logger.debug(f"[{self.node_name}] Cache miss for key: '{cache_key}'.")
+                return None
+
+        elif cache_action == 'set':
+            if cache_key is None:
+                logger.error(f"[{self.node_name}] 'cache_key' is a mandatory parameter for the 'set' action.")
+                raise ValueError("'cache_key' is required for 'set' action.")
+
+            cache_store[cache_key] = data
+            logger.debug(f"[{self.node_name}] Value successfully cached for key: '{cache_key}'.")
+            return data
+
+        elif cache_action == 'clear_all':
+            cache_store.clear()
+            logger.info(f"[{self.node_name}] Cache cleared successfully.")
             return None
 
-    def _set_in_cache(self, key: str, value: Any) -> Any:
-        """
-        Helper method to store a value in the internal cache.
-        """
-        self._cache[key] = value
-        logger.info("Cache SET for key '%s'. Data type: %s.", key, type(value).__name__)
-        return value
-
-    def _invalidate_cache_entry(self, key: str) -> None:
-        """
-        Helper method to remove an entry from the internal cache.
-        """
-        try:
-            del self._cache[key]
-            logger.info("Cache INVALIDATED for key '%s'.", key)
-        except KeyError:
-            logger.warning("Attempted to invalidate non-existent cache key '%s'. No action taken.", key)
-        except Exception as e:
-            logger.exception("An unexpected error occurred while invalidating key '%s' from cache.", key)
+        else:
+            logger.error(f"[{self.node_name}] Encountered an unknown cache action: '{cache_action}'.")
+            raise ValueError(
+                f"Unknown cache action: '{cache_action}'. Expected 'get', 'set', or 'clear_all'."
+            )
