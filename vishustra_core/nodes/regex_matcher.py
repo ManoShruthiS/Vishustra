@@ -17,9 +17,9 @@ class RegexMatcherNode(BaseNode):
 
     def __init__(
         self,
-        pattern: str,
+        pattern: str = None,
         group_index: int = 0,
-        return_all_matches: bool = False,
+        return_all_matches: bool = True,
         raise_on_no_match: bool = False
     ) -> None:
         """
@@ -28,7 +28,9 @@ class RegexMatcherNode(BaseNode):
 
         Args:
             pattern (str): The regular expression pattern to compile and use.
-                           Must be a non-empty string.
+                           Must be a non-empty string. If None, a permissive
+                           default pattern matching any word is used so the node
+                           can be safely instantiated without explicit config.
             group_index (int): The index of the capture group to extract.
                                0 for the entire match, 1 for the first captured group, etc.
                                Must be a non-negative integer.
@@ -46,6 +48,8 @@ class RegexMatcherNode(BaseNode):
             ValueError: If the provided pattern is invalid or empty, or if `group_index`
                         is a negative integer.
         """
+        if pattern is None:
+            pattern = r'[A-Za-z0-9_\.\-]+'
         if not isinstance(pattern, str) or not pattern:
             logger.error("Invalid pattern provided to RegexMatcherNode: Must be a non-empty string.")
             raise ValueError("Regex pattern must be a non-empty string.")

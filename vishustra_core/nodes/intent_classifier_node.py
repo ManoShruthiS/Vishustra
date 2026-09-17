@@ -15,9 +15,19 @@ class IntentClassifierNode(BaseNode):
     for production-grade intent recognition.
     """
 
+    DEFAULT_INTENT_MAP: Dict[str, List[str]] = {
+        "greeting": ["hello", "hi", "hey", "namaste", "good morning", "good evening"],
+        "question": ["what", "how", "why", "when", "where", "which", "who"],
+        "complaint": ["complaint", "not working", "broken", "unhappy", "terrible", "worst", "issue"],
+        "praise": ["great", "excellent", "love", "amazing", "awesome", "best", "wonderful"],
+        "request": ["please", "can you", "i need", "i want", "could you", "help me"],
+        "gratitude": ["thanks", "thank you", "thankyou", "appreciate"],
+        "apology": ["sorry", "apologize", "my bad", "regret"],
+    }
+
     def __init__(
         self,
-        intent_map: Dict[str, List[str]],
+        intent_map: Dict[str, List[str]] = None,
         default_intent: str = "unknown_intent"
     ):
         """
@@ -26,7 +36,8 @@ class IntentClassifierNode(BaseNode):
         Args:
             intent_map: A dictionary where keys are intent names (str) and values
                         are lists of keywords or phrases (str) associated with that intent.
-                        The comparison is case-insensitive.
+                        The comparison is case-insensitive. If None, a sensible default
+                        map covering common conversation intents is used.
             default_intent: The intent to return if no specific intent is matched
                             by the configured keywords. Defaults to "unknown_intent".
 
@@ -35,6 +46,8 @@ class IntentClassifierNode(BaseNode):
                        (keys, values, elements within value lists) is incorrect.
             TypeError: If `default_intent` is not a string.
         """
+        if intent_map is None:
+            intent_map = {k: list(v) for k, v in self.DEFAULT_INTENT_MAP.items()}
         if not isinstance(intent_map, dict):
             raise TypeError("Configuration error: intent_map must be a dictionary.")
         

@@ -71,6 +71,9 @@ class ToneConverter(BaseNode):
             "professional": "This serves to professionally communicate that: {text}. Further action will be taken as required.",
             "friendly": "Hi! Hope you're doing great. Just a friendly heads-up: {text} :)",
             "sarcastic": "Oh, how utterly fascinating! It's truly astonishing that: {text}. Simply brilliant.",
+            "polite": "Could you kindly address this: \"{text}\". Thank you very much for your attention and understanding.",
+            "respectful": "With due respect, I would like to bring this to your attention: \"{text}\". I would be grateful for your kind consideration.",
+            "kind": "So sorry to bother you! Just gently noting that {text}. Thank you so much :)",
         }
 
         if target_tone in tone_templates:
