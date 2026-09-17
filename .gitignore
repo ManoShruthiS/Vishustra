@@ -1,16 +1,16 @@
-# Ignore Python caches
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
 
-# Ignore environment variables if used later
-.env
-
-# Bot Automation (Ayan/Kael)
-ayan.py
-kael.py
+# Vishustra runtime artifacts
+vishustra_core/kernel/runtime_skills.json
 ayan_employee.log
-ayan_state.json
-.ayan_logs.txt
-.kael_logs.txt
-fix_task.ps1
-ayan_employee.log*
+
+# Environment & IDE
+.env
+.venv/
+.idea/
+.vscode/
