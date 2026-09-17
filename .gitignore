@@ -21,6 +21,10 @@ experiments/*.db
 **/models/**/*.pt
 **/models/*.ckpt
 **/models/**/*.ckpt
+**/experiments/*.pt
+**/experiments/**/*.pt
+**/experiments/**/EXP-*/
+**/experiments/**/index.json
 reports/*.html
 notebooks/.ipynb_checkpoints/
 
