@@ -17,8 +17,10 @@ venv/
 datasets/*.json
 datasets/*.csv
 experiments/*.db
-models/*.pt
-models/*.ckpt
+**/models/*.pt
+**/models/**/*.pt
+**/models/*.ckpt
+**/models/**/*.ckpt
 reports/*.html
 notebooks/.ipynb_checkpoints/
 
