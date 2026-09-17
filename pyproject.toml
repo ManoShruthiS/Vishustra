@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vishustra"
+version = "0.1.0"
+description = "VISHUSTRA — modular text-processing framework: plain-language intents, executable skill pipelines, explainable output."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "google-genai>=2.0",
+    "GitPython>=3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+vishustra = "vishustra_core.main:main"
+vishustra-demo = "vishustra_core.kernel.demo:main"
+
+[tool.setuptools.packages.find]
+include = ["vishustra_core*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
