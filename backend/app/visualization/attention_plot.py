@@ -13,7 +13,6 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import torch
 from torch import Tensor
 
 
@@ -50,6 +49,49 @@ def plot_attention_weights(
         heading += f"  ·  head {head_index}"
     ax.set_title(heading)
 
+    fig.tight_layout()
+    if out_path is not None:
+        path = Path(out_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return Path(out_path) if out_path is not None else Path("<inline>")
+
+
+def plot_head_grid(
+    rows: list[Tensor],
+    tokens: list[str],
+    layer_index: int = -1,
+    title: str | None = None,
+    out_path: str | Path | None = None,
+) -> Path:
+    """Multi-Head Attention Studio grid (LAB 05) — one heatmap per head.
+
+    ``rows`` holds one (seq, seq) weight matrix per head, in head order.
+    """
+    seq = rows[0].shape[-1]
+    assert seq == len(tokens), "token count must match attention sequence length"
+    n_heads = len(rows)
+    cols = 2
+    fig_height = max(4.0, 4.0 * ((n_heads + cols - 1) // cols))
+    fig, axes = plt.subplots((n_heads + cols - 1) // cols, cols, figsize=(10, fig_height))
+    axes = axes.flatten()
+
+    for i, ax in enumerate(axes):
+        if i >= n_heads:
+            ax.set_visible(False)
+            continue
+        ax.imshow(rows[i].detach().cpu().numpy(), cmap="Greys", vmin=0.0, vmax=1.0)
+        ax.set_title(f"head {i}", fontsize=10)
+        ax.set_xticks(range(seq))
+        ax.set_yticks(range(seq))
+        ax.set_xticklabels(tokens, rotation=90, fontsize=8)
+        ax.set_yticklabels(tokens, fontsize=8)
+
+    fig.suptitle(
+        title or "Multi-head attention — each head attends in its own projection subspace",
+        fontsize=11,
+    )
     fig.tight_layout()
     if out_path is not None:
         path = Path(out_path)
