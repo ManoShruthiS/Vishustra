@@ -1,9 +1,8 @@
 """Unit tests — softmax (our implementation)."""
 
 import torch
-from torch import Tensor
-
 from app.transformer import log_softmax, softmax
+from torch import Tensor
 
 
 def _rows(a: Tensor) -> Tensor:

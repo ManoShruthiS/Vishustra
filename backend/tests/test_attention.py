@@ -1,13 +1,12 @@
 """Unit tests — scaled dot-product attention (paper eq. 1)."""
 
 import torch
-from torch.autograd import gradcheck
-
 from app.transformer import (
     ScaledDotProductAttention,
     create_causal_mask,
     create_padding_mask,
 )
+from torch.autograd import gradcheck
 
 
 def test_output_shape():

@@ -17,8 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import torch
-import torch.nn as nn
-from torch import Tensor
+from torch import Tensor, nn
 
 from . import tensor_ops
 from .softmax import softmax

@@ -13,9 +13,9 @@ from pathlib import Path
 
 import torch
 
+from app.core.logging import configure_logging, get_logger
 from app.transformer import ScaledDotProductAttention
 from app.visualization.attention_plot import plot_attention_weights
-from app.core.logging import configure_logging, get_logger
 
 logger = get_logger("demo.attention")
 

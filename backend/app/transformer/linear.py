@@ -11,8 +11,7 @@ can inspect and modify them directly (Transformer Surgery, plan.md §12).
 from __future__ import annotations
 
 import torch
-import torch.nn as nn
-from torch import Tensor
+from torch import Tensor, nn
 
 from . import tensor_ops
 

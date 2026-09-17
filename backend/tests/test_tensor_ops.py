@@ -1,7 +1,6 @@
 """Unit tests — tensor operations laboratory."""
 
 import torch
-
 from app.transformer import qkt, scale, transpose_last_two
 
 

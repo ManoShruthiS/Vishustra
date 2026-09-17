@@ -1,7 +1,6 @@
 """Unit tests — linear layer (our implementation)."""
 
 import torch
-
 from app.transformer import Linear
 
 
