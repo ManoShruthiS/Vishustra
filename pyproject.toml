@@ -4,13 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vishustra"
-version = "0.1.0"
-description = "VISHUSTRA — modular text-processing framework: plain-language intents, executable skill pipelines, explainable output."
+version = "0.2.0"
+description = "VISHUSTRA — Where Attention Becomes Visible. An interactive Transformer research & experimentation laboratory."
 readme = "README.md"
 requires-python = ">=3.10"
+
 dependencies = [
-    "google-genai>=2.0",
-    "GitPython>=3.1",
+    "torch>=2.0",
+    "numpy>=1.26",
+    "pandas>=2.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "pydantic>=2.6",
+    "sqlalchemy>=2.0",
+    "httpx>=0.27",
+    "plotly>=5.20",
+    "matplotlib>=3.8",
 ]
 
 [project.optional-dependencies]
@@ -20,14 +29,15 @@ dev = [
 ]
 
 [project.scripts]
-vishustra = "vishustra_core.main:main"
-vishustra-demo = "vishustra_core.kernel.demo:main"
+vishustra = "app.main:main"
 
 [tool.setuptools.packages.find]
-include = ["vishustra_core*"]
+where = ["backend"]
+include = ["app*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["backend/tests"]
+pythonpath = ["backend"]
 addopts = "-q"
 
 [tool.ruff]

@@ -2,15 +2,31 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+
+# Tool caches
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
 
-# Vishustra runtime artifacts
-vishustra_core/kernel/runtime_skills.json
-ayan_employee.log
-
-# Environment & IDE
-.env
+# Environments
 .venv/
-.idea/
-.vscode/
+venv/
+.env
+
+# Runtime data stores (plan.md §15/28/29: experiments, models, datasets, reports)
+datasets/*.json
+datasets/*.csv
+experiments/*.db
+models/*.pt
+models/*.ckpt
+reports/*.html
+notebooks/.ipynb_checkpoints/
+
+# Node/frontend
+frontend/node_modules/
+frontend/dist/
+frontend/vite.config.ts.*.local
+
+# OS
+Thumbs.db
+.DS_Store
