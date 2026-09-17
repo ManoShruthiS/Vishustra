@@ -52,9 +52,10 @@ def test_attention_concentrates_on_matching_key():
     """If one key exactly equals the query, the row concentrates on it."""
     d_k, seq = 8, 4
     attn = ScaledDotProductAttention(d_k=d_k)
-    target = torch.randn(d_k)
+    gen = torch.Generator().manual_seed(7)
+    target = torch.randn(d_k, generator=gen)
     q = target.unsqueeze(0).unsqueeze(0)
-    k = torch.stack([torch.randn(d_k) for _ in range(seq)])
+    k = torch.stack([torch.randn(d_k, generator=gen) for _ in range(seq)])
     k[1] = target
     k = k.unsqueeze(0)
     v = torch.randn(1, seq, d_k)
