@@ -13,6 +13,7 @@ build/
 .venv/
 venv/
 .env
+.work/
 
 # Runtime data stores (plan.md §15/28/29: experiments, models, datasets, reports)
 datasets/*.json

@@ -30,6 +30,20 @@ python -m uvicorn app.main:app --app-dir backend --reload
 Open [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) to explore the
 interactive API documentation.
 
+## Run the dashboard
+
+With the API server running, open a second terminal:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+The Vite development server proxies API requests to `http://127.0.0.1:8000`.
+For a separately hosted API, set `VITE_API_BASE_URL` before building the
+dashboard.
+
 ## API examples
 
 ```powershell
