@@ -13,6 +13,8 @@ then exposes the intermediate values required to inspect and visualize them.
   and visualization modules.
 - A FastAPI service that exposes paper-reference configurations and the full
   scaled dot-product attention calculation for a browser client.
+- An experiment workspace API for creating, listing, and re-running
+  reproducible experiment records.
 - Deterministic attention analysis: using the same tokens, dimension, and seed
   always produces the same matrices.
 
@@ -33,6 +35,7 @@ interactive API documentation.
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/health
 Invoke-RestMethod http://127.0.0.1:8000/api/configs
+Invoke-RestMethod http://127.0.0.1:8000/api/experiments
 ```
 
 ```powershell
@@ -48,6 +51,11 @@ Invoke-RestMethod http://127.0.0.1:8000/api/configs
 
 The attention endpoint returns the raw scores, scaled scores, softmax weights,
 and final output so a future web interface can show each stage of Equation 1.
+
+Use `POST /api/experiments` to register an experiment. The request accepts a
+name, hypothesis, seed, and partial `dataset`, `architecture`, or `training`
+overrides. `POST /api/experiments/{id}/rerun` creates a fresh experiment record
+with the same configuration, preserving the project’s reproducibility trail.
 
 ## Verify
 
