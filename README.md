@@ -44,6 +44,14 @@ The Vite development server proxies API requests to `http://127.0.0.1:8000`.
 For a separately hosted API, set `VITE_API_BASE_URL` before building the
 dashboard.
 
+## GitHub Pages
+
+Pushes to `main` automatically build the dashboard for GitHub Pages. Once
+Pages is enabled with **GitHub Actions** as its source, the interface will be
+available at [manoshruthis.github.io/Vishustra](https://manoshruthis.github.io/Vishustra/).
+The interactive API features require a publicly hosted VISHUSTRA API; set the
+repository variable `VITE_API_BASE_URL` to that API's URL before deployment.
+
 ## API examples
 
 ```powershell
