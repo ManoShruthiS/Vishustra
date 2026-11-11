@@ -56,6 +56,8 @@ Use `POST /api/experiments` to register an experiment. The request accepts a
 name, hypothesis, seed, and partial `dataset`, `architecture`, or `training`
 overrides. `POST /api/experiments/{id}/rerun` creates a fresh experiment record
 with the same configuration, preserving the project’s reproducibility trail.
+`POST /api/experiments/{id}/run` then executes the registered experiment and
+returns the completed record with its collected metrics.
 
 ## Verify
 

@@ -7,6 +7,7 @@ from app.api.experiments import (
     get_experiment,
     list_experiments,
     rerun_experiment,
+    run_experiment,
 )
 from app.experiments import ExperimentManager
 from fastapi import HTTPException
@@ -48,6 +49,37 @@ def test_unknown_experiment_returns_a_clear_not_found_response(tmp_path):
 
     assert error.value.status_code == 404
     assert error.value.detail == "unknown experiment: EXP-9999"
+
+
+def test_run_experiment_returns_the_completed_record_without_hiding_metrics(tmp_path, monkeypatch):
+    manager = ExperimentManager(tmp_path)
+    created = create_experiment(ExperimentCreateRequest(name="run this"), manager)
+
+    def complete(exp_id: str):
+        manager.registry.update(exp_id, status="completed", result={"val_acc": 0.875})
+
+    monkeypatch.setattr(manager, "run", complete)
+    completed = run_experiment(created.exp_id, manager)
+
+    assert completed.status == "completed"
+    assert completed.result == {"val_acc": 0.875}
+
+
+def test_run_experiment_returns_conflict_when_the_same_record_is_already_running(
+    tmp_path, monkeypatch
+):
+    manager = ExperimentManager(tmp_path)
+    created = create_experiment(ExperimentCreateRequest(name="busy"), manager)
+
+    def already_running(_: str):
+        raise RuntimeError("EXP-0001 is already running")
+
+    monkeypatch.setattr(manager, "run", already_running)
+    with pytest.raises(HTTPException) as error:
+        run_experiment(created.exp_id, manager)
+
+    assert error.value.status_code == 409
+    assert error.value.detail == "EXP-0001 is already running"
 
 
 def test_experiment_name_cannot_be_blank():

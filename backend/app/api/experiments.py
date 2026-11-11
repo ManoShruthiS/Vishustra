@@ -89,6 +89,24 @@ def get_experiment(exp_id: str, manager: Manager) -> ExperimentRecordResponse:
         raise HTTPException(status_code=404, detail=f"unknown experiment: {exp_id}") from exc
 
 
+@router.post("/{exp_id}/run", response_model=ExperimentRecordResponse)
+def run_experiment(exp_id: str, manager: Manager) -> ExperimentRecordResponse:
+    """Train one registered experiment and return its completed record.
+
+    Training is intentionally synchronous in this first API version: the caller
+    receives the recorded metrics only after the run has either completed or
+    failed. A future job queue can preserve this contract while moving the work
+    out of the request lifecycle.
+    """
+    try:
+        manager.run(exp_id)
+        return _to_response(manager.get(exp_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"unknown experiment: {exp_id}") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post(
     "/{exp_id}/rerun", response_model=ExperimentRecordResponse, status_code=status.HTTP_201_CREATED
 )
